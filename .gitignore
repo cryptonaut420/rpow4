@@ -6,6 +6,8 @@ build/
 .env
 .env.local
 .env.vps
+# Per-user secrets layer for the docker compose dev stack (Resend / Solana).
+docker/dev.env.local
 *.log
 .DS_Store
 .fly/
