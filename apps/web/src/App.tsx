@@ -63,6 +63,7 @@ export default function App() {
             <NavLink to="/ledger">[ about ]</NavLink>{' '}
             <NavLink to="/history">[ history ]</NavLink>{' '}
             <NavLink to="/docs">[ docs ]</NavLink>{' '}
+            <a href="https://rpowmarket.com/" target="_blank" rel="noopener noreferrer">[ predict ]</a>{' '}
             {signedIn ? (
               <>
                 <span style={{ color: 'var(--dim)' }} title={me!.pubkey}>
