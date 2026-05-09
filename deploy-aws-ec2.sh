@@ -125,13 +125,15 @@ preflight_dns() {
   api_ips="$(dns_ipv4s "$api_host")"
 
   if [[ " $web_ips " != *" $PUBLIC_IPV4 "* ]]; then
-    echo "[deploy] warning: $web_host does not currently resolve to $PUBLIC_IPV4"
+    echo "[deploy] note: $web_host does not currently resolve directly to $PUBLIC_IPV4"
     echo "[deploy]          current A records: ${web_ips:-none found}"
+    echo "[deploy]          this is expected when Cloudflare proxy is enabled"
   fi
 
   if [[ " $api_ips " != *" $PUBLIC_IPV4 "* ]]; then
-    echo "[deploy] warning: $api_host does not currently resolve to $PUBLIC_IPV4"
+    echo "[deploy] note: $api_host does not currently resolve directly to $PUBLIC_IPV4"
     echo "[deploy]          current A records: ${api_ips:-none found}"
+    echo "[deploy]          this is expected when Cloudflare proxy is enabled"
   fi
 }
 
@@ -146,6 +148,7 @@ sync_existing_env() {
   append_env_if_missing NODE_ENV production
   append_env_if_missing PORT 8080
   append_env_if_missing WEB_ORIGIN "https://$(env_get WEB_HOST "$WEB_HOST")"
+  append_env_if_missing TRUST_PROXY true
 
   append_env_if_missing DATABASE_POOL_MAX 30
   append_env_if_missing DATABASE_STATEMENT_TIMEOUT_MS 5000
@@ -284,6 +287,7 @@ LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL
 NODE_ENV=production
 PORT=8080
 WEB_ORIGIN=https://$WEB_HOST
+TRUST_PROXY=true
 
 DATABASE_POOL_MAX=30
 DATABASE_STATEMENT_TIMEOUT_MS=5000

@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useMining } from '../mining/MiningProvider.js';
 import { useWallet } from '../wallet/WalletProvider.js';
@@ -34,6 +34,7 @@ export function MiningBar() {
   const mining = useMining();
   const location = useLocation();
   const [expanded, setExpanded] = useState(false);
+  const barRef = useRef<HTMLDivElement>(null);
 
   // Drive a 250 ms repaint while mining so the live ref-backed counters
   // (hashrate, elapsed time, total hashes) actually visibly update. When
@@ -48,15 +49,41 @@ export function MiningBar() {
     };
   }, [mining.status]);
 
+  // Publish the bar's actual rendered height as a CSS variable so the
+  // app-shell's padding-bottom is always exact — across mobile vs desktop,
+  // collapsed vs expanded, hidden vs visible. Using a magic number here was
+  // bound to be wrong somewhere (e.g. when the strip wraps onto a second
+  // row on a 320px-wide phone) and either let content slip behind the bar
+  // or leave a permanent ugly gap above it.
+  const signedIn = wallet.status === 'unlocked' && !!mining.me;
+  const visible = signedIn && location.pathname !== '/login';
+  useEffect(() => {
+    const root = document.documentElement;
+    const el = barRef.current;
+    if (!visible || !el) {
+      root.style.removeProperty('--mining-bar-h');
+      return;
+    }
+    const update = () => {
+      root.style.setProperty('--mining-bar-h', `${el.offsetHeight}px`);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.style.removeProperty('--mining-bar-h');
+    };
+  }, [visible]);
+
   // We deliberately do NOT auto-collapse on navigation. Mining is meant to
   // be sticky; if the user expanded the bar to read details, slamming it
   // shut behind their back when they click a link would be jarring.
 
   // Hide on /login (the bar would just be noise on the auth screen) and
-  // when the user isn't ready to mine.
-  const signedIn = wallet.status === 'unlocked' && !!mining.me;
-  if (!signedIn) return null;
-  if (location.pathname === '/login') return null;
+  // when the user isn't ready to mine. `visible` is computed above so the
+  // height-publishing effect can react to the same condition.
+  if (!visible) return null;
 
   const me = mining.me!;
   const running = mining.status === 'mining';
@@ -91,7 +118,7 @@ export function MiningBar() {
       : '';
 
   return (
-    <div className="mining-bar" data-expanded={expanded ? 'true' : 'false'}>
+    <div className="mining-bar" data-expanded={expanded ? 'true' : 'false'} ref={barRef}>
       <div className="mining-bar-inner">
         {/* ── Expanded details — scrollable, only mounted when expanded.
               Sits above the always-visible strip + visualizer so the user

@@ -33,10 +33,16 @@ any newly introduced default env vars that are missing, then rebuilds and
 restarts the stack. Edit `prod.env` directly only if you want to change domains,
 email, difficulty settings, or other production values.
 
-On EC2, the script also tries to detect the instance public IPv4 and warns if
-`rpow4.com` or `api.rpow4.com` do not point at it yet. DNS or security group
-mistakes will not corrupt the deploy, but Let's Encrypt cannot issue certs until
-ports `80` and `443` are publicly reachable.
+On EC2, the script also tries to detect the instance public IPv4 and compares it
+to DNS. If Cloudflare proxying is enabled, DNS will show Cloudflare IPs instead
+of the EC2 origin; that is expected. DNS or security group mistakes will not
+corrupt the deploy, but Let's Encrypt cannot issue certs until ports `80` and
+`443` are publicly reachable through Cloudflare to the origin.
+
+For Cloudflare, use **Full** or **Full (strict)** SSL/TLS mode after the origin
+certificate is issued. If first-time Let's Encrypt issuance stalls, temporarily
+disable "Always Use HTTPS" or proxying for the host, rerun `./deploy-aws-ec2.sh`,
+then re-enable the proxy after certs exist.
 
 ## Daily Commands
 

@@ -51,6 +51,7 @@ export interface AppConfig {
   signingPublicKeyHex: string;
   webOrigin: string;
   secureCookies: boolean;
+  trustProxy: boolean | string;
 }
 
 export interface BuildAppOptions {
@@ -120,10 +121,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     logger: opts.test ? false : { level: 'info' },
     disableRequestLogging: !!opts.test,
     bodyLimit: 16 * 1024,
-    // Honor X-Forwarded-For only when the connection comes from nginx on
-    // localhost, so request logs and any IP-based decisions see the real
-    // client IP rather than 127.0.0.1.
-    trustProxy: '127.0.0.1',
+    // Dev only trusts localhost proxies. Production Docker runs behind
+    // Cloudflare -> nginx-proxy -> container hops, so compose enables broader
+    // proxy trust through TRUST_PROXY=true.
+    trustProxy: opts.config.trustProxy,
   });
 
   app.decorate('pool', opts.pool);

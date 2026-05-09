@@ -29,6 +29,7 @@ const app = await buildApp({
     signingPublicKeyHex: env.RPOW_SIGNING_PUBLIC_KEY_HEX,
     webOrigin: env.WEB_ORIGIN,
     secureCookies: env.NODE_ENV === 'production',
+    trustProxy: env.TRUST_PROXY ? true : '127.0.0.1',
   },
 });
 

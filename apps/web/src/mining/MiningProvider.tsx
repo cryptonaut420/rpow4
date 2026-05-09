@@ -146,6 +146,23 @@ export function MiningProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Single source of truth for "tear down any running mining cycle". The
+  // worker's busy SHA loop is fully synchronous, so postMessage({type:'abort'})
+  // would just sit in its incoming queue until the next solve completes —
+  // worker.terminate() is the only primitive that interrupts a CPU-bound
+  // worker promptly. Used by stop(), the wallet-lock guard, and the unmount
+  // teardown so all three paths behave identically.
+  const tearDownMining = useCallback(() => {
+    stopRequestedRef.current = true;
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = null;
+    }
+    sessionStoppedAtRef.current = performance.now();
+    vizHandlesRef.current?.setActive(false);
+    setStatus('idle');
+  }, []);
+
   // Hard stop on unmount (e.g. tab closed, app HMR). The worker holds a
   // network connection-ish thing (pulls challenges + posts mints) so we
   // explicitly terminate rather than letting it leak.
@@ -159,15 +176,9 @@ export function MiningProvider({ children }: { children: ReactNode }) {
   // each coin; without an unlocked wallet the next mint would throw.
   useEffect(() => {
     if (status === 'mining' && wallet.status !== 'unlocked') {
-      stopRequestedRef.current = true;
-      workerRef.current?.postMessage({ type: 'abort' });
-      workerRef.current?.terminate();
-      workerRef.current = null;
-      sessionStoppedAtRef.current = performance.now();
-      vizHandlesRef.current?.setActive(false);
-      setStatus('idle');
+      tearDownMining();
     }
-  }, [wallet.status, status]);
+  }, [wallet.status, status, tearDownMining]);
 
   // Combined throttled balance + ledger refresh. Pass `force: true` to
   // bypass the throttle (e.g. on STOP).
@@ -197,6 +208,15 @@ export function MiningProvider({ children }: { children: ReactNode }) {
       vizHandlesRef.current?.setActive(false);
       setError(err?.message ?? 'failed to fetch challenge');
       setStatus('error');
+      return;
+    }
+    // The user can click STOP while we were awaiting the challenge fetch.
+    // Honor it before we even create the next worker — otherwise we'd
+    // spawn a new busy loop the user just asked us not to.
+    if (stopRequestedRef.current) {
+      sessionStoppedAtRef.current = performance.now();
+      vizHandlesRef.current?.setActive(false);
+      setStatus('idle');
       return;
     }
     setTarget(ch.difficulty_bits);
@@ -307,10 +327,9 @@ export function MiningProvider({ children }: { children: ReactNode }) {
   }, [wallet, me, status, startOne]);
 
   const stop = useCallback(() => {
-    stopRequestedRef.current = true;
-    workerRef.current?.postMessage({ type: 'abort' });
+    tearDownMining();
     refreshAccount({ force: true });
-  }, [refreshAccount]);
+  }, [tearDownMining, refreshAccount]);
 
   const value: MiningContextValue = {
     status,

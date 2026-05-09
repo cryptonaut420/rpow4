@@ -65,6 +65,7 @@ services:
     environment:
       DATABASE_URL: postgres://rpow:${POSTGRES_PASSWORD}@db:5432/rpow
       WEB_ORIGIN: https://${WEB_HOST}
+      TRUST_PROXY: "true"
       VIRTUAL_HOST: ${API_HOST}
       VIRTUAL_PORT: "8080"
       LETSENCRYPT_HOST: ${API_HOST}

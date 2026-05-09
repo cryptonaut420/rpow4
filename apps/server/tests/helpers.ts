@@ -62,6 +62,7 @@ export async function makeTestApp(opts: {
       signingPublicKeyHex: '22'.repeat(32),
       webOrigin: 'http://web.test',
       secureCookies: false,
+      trustProxy: '127.0.0.1',
     },
   });
   return {

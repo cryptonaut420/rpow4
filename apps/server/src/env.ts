@@ -84,6 +84,15 @@ const Schema = z.object({
   TROLLBOX_POST_FEE_BASE_UNITS: positiveBigInt(5_000_000_000n), // 5 RPOW
 
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
+  TRUST_PROXY: z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined || v === '') return false;
+      if (typeof v === 'boolean') return v;
+      const s = v.trim().toLowerCase();
+      return s === 'true' || s === '1' || s === 'yes';
+    }),
   TURNSTILE_SECRET: z.string().optional(),
 });
 

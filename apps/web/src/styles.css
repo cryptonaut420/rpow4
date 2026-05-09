@@ -212,10 +212,17 @@ main { margin-top: 4px; }
 /* ── Mining bar (sticky bottom widget) ────────────────────────────────────
  * The bar is fixed to the viewport so it follows the user across every
  * page. The full <MiningVisualizer> lives inside it and runs continuously,
- * giving the bar a baseline height of ~190px even when collapsed. App
- * content gets `padding-bottom` to match so nothing ever sits underneath.
+ * giving the bar a baseline height of ~190px even when collapsed.
+ *
+ * The bar publishes its actual measured height as `--mining-bar-h` via a
+ * ResizeObserver in <MiningBar>; we use it here so the page padding is
+ * always exact, including on mobile where the strip wraps to two rows
+ * and on viewports where the bar is hidden (`/login`, signed out).
+ *
+ * The `+ 16px` cushion stops the last line of page content from kissing
+ * the bar's top border.
  */
-.app-shell { padding-bottom: 220px; }
+.app-shell { padding-bottom: calc(var(--mining-bar-h, 0px) + 16px); }
 
 .mining-bar {
   position: fixed;
@@ -355,4 +362,41 @@ main { margin-top: 4px; }
 }
 .mining-bar-expanded-content::-webkit-scrollbar-thumb:active {
   background: var(--accent);
+}
+
+/* ── Mobile (≤ 600px) tweaks ─────────────────────────────────────────────
+ * On a phone the strip wraps to two rows; we tighten gaps so it doesn't
+ * eat half the screen, and bump the action buttons' touch target to a
+ * comfortable 32px+ tap height. The visualizer panel naturally scales
+ * via its monospace col-count measurement, so nothing to do there.
+ */
+@media (max-width: 600px) {
+  .mining-bar-inner {
+    padding: 6px 10px 10px;
+  }
+  .mining-bar-strip {
+    gap: 8px 10px;
+    padding: 4px 0 6px;
+    font-size: 11px;
+  }
+  .mining-bar-balance,
+  .mining-bar-stat {
+    font-size: 11px;
+  }
+  /* Bigger tap targets — mobile design guidelines call for ~44px;
+   * 32-36px is the practical minimum for our terminal aesthetic. */
+  .mining-bar-action {
+    padding: 7px 12px;
+    font-size: 12px;
+  }
+  /* The RUN stat is non-essential — hide on tiny screens to keep the
+   * strip on a single wrapped row. The user can still read run progress
+   * by expanding the panel. */
+  .mining-bar-stat {
+    display: none;
+  }
+  .mining-bar-expanded-content {
+    max-height: 60vh;
+    padding-right: 4px;
+  }
 }
