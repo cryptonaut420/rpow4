@@ -13,6 +13,11 @@ import { LedgerPage } from './pages/Ledger.js';
 import { StatsPage } from './pages/Stats.js';
 import { ExplorerPage } from './pages/Explorer.js';
 import { FaucetPage } from './pages/Faucet.js';
+import { TrollboxPage } from './pages/Trollbox.js';
+import { DocsPage } from './pages/Docs.js';
+import { HistoryPage } from './pages/History.js';
+import { ClaimPage } from './pages/Claim.js';
+import { RedeemPage } from './pages/Redeem.js';
 import { CopyButton } from './components/CopyButton.js';
 import { SupplyBar } from './components/SupplyBar.js';
 import { shortPubkey } from '@rpow/shared';
@@ -48,11 +53,15 @@ export default function App() {
             <NavLink to="/">[ wallet ]</NavLink>{' '}
             <NavLink to="/mine">[ mine ]</NavLink>{' '}
             <NavLink to="/send">[ send ]</NavLink>{' '}
+            <NavLink to="/claim">[ claim ]</NavLink>{' '}
             <NavLink to="/activity">[ activity ]</NavLink>{' '}
-            <NavLink to="/ledger">[ ledger ]</NavLink>{' '}
+            <NavLink to="/ledger">[ about ]</NavLink>{' '}
             <NavLink to="/stats">[ stats ]</NavLink>{' '}
             <NavLink to="/explorer">[ explorer ]</NavLink>{' '}
             <NavLink to="/faucet">[ faucet ]</NavLink>{' '}
+            <NavLink to="/trollbox">[ trollbox ]</NavLink>{' '}
+            <NavLink to="/history">[ history ]</NavLink>{' '}
+            <NavLink to="/docs">[ docs ]</NavLink>{' '}
             {signedIn ? (
               <>
                 <span style={{ color: 'var(--dim)' }} title={me!.pubkey}>
@@ -81,6 +90,11 @@ export default function App() {
             <Route path="/explorer/tx/:id" element={<ExplorerPage />} />
             <Route path="/explorer/account/:pubkey" element={<ExplorerPage />} />
             <Route path="/faucet" element={<FaucetPage />} />
+            <Route path="/trollbox" element={<TrollboxPage />} />
+            <Route path="/claim" element={<ClaimPage />} />
+            <Route path="/redeem/:id" element={<RedeemPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+            <Route path="/docs" element={<DocsPage />} />
           </Routes>
         </main>
       </div>

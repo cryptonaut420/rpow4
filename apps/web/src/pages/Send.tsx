@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
 import { useMe } from '../hooks/useMe.js';
@@ -30,6 +31,7 @@ function tryParseAmount(raw: string): bigint | null {
 }
 
 export function SendPage() {
+  usePageMeta('Send', 'Send RPOW4 tokens to any account by public key or display name. Preview fees before confirming.');
   const wallet = useWallet();
   const { me, refresh } = useMe();
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);

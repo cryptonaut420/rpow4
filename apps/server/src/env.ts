@@ -79,6 +79,10 @@ const Schema = z.object({
   FAUCET_CLAIM_AMOUNT_BASE_UNITS: positiveBigInt(5_000_000_000n), // 5 RPOW
   FAUCET_COOLDOWN_HOURS: z.coerce.number().int().min(1).max(720).default(24),
 
+  // Trollbox post fee, paid by the author to the treasury. Flat for now —
+  // tunable via env so we can dial it up/down without a redeploy.
+  TROLLBOX_POST_FEE_BASE_UNITS: positiveBigInt(5_000_000_000n), // 5 RPOW
+
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   TURNSTILE_SECRET: z.string().optional(),
 });

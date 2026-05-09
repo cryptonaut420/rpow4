@@ -14,7 +14,10 @@ export type CanonicalAction =
   | 'mint'
   | 'transfer'
   | 'account.set_display_name'
-  | 'account.signup';
+  | 'account.signup'
+  | 'trollbox.post'
+  | 'claim.create'
+  | 'claim.cancel';
 
 export const CANONICAL_VERSION = 'v1';
 

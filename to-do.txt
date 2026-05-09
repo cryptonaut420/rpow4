@@ -103,3 +103,11 @@ RPOW4 tokenomics + branding:
 - [x] Stripped SRPOW + founder allocation: deleted srpow-wrap design + plan docs, deleted outdated stats.html, rewrote RUNBOOK.md tokenomics section.
 - [x] Test suites updated: schedule, ledger, mint, challenge, signup, canonical for new schedule + new wire constants.
 
+History/library content page:
+- [x] Add public /history module in the same terminal-panel style.
+- [x] Keep each major section in its own src/content/history/*.md file loaded by the page shell.
+- [x] Include concise sections for RPOW, b-money, electronic cash, Hashcash, Szabo/bit gold/smart contracts, colored coins, and Bitcoin origins.
+- [ ] Include exact primary-source text for the Crypto Anarchist Manifesto, A Cypherpunk's Manifesto, the Bitcoin white paper, and the Bitcoin Declaration of Independence.
+- [x] Wire [ history ] into the main navigation.
+- [x] Type-check frontend changes.
+

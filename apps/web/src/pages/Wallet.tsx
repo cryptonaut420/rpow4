@@ -1,5 +1,6 @@
 import { useNavigate, Link } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { DisplayNameEditor } from '../components/DisplayNameEditor.js';
 import { SaveWalletPrompt } from '../components/SaveWalletPrompt.js';
@@ -10,6 +11,7 @@ import { api } from '../api.js';
 import { formatRpow } from '../lib/format.js';
 
 export function WalletPage() {
+  usePageMeta('Wallet', 'Manage your RPOW4 wallet. View your balance, public key, and account details.');
   const wallet = useWallet();
   const { me, loading, refresh } = useMe();
   const nav = useNavigate();

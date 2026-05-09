@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { MiningVisualizer, type MiningVisualizerHandles } from '../components/MiningVisualizer.js';
 import { useMe } from '../hooks/useMe.js';
@@ -30,6 +31,7 @@ const DISPLAY_TICK_MS = 250;
 const REFRESH_THROTTLE_MS = 1000;
 
 export function MinePage() {
+  usePageMeta('Mine', 'Earn RPOW4 tokens by solving proof-of-work challenges in your browser. Contribute to the network and collect mining rewards.');
   const wallet = useWallet();
   const { me, loading, refresh } = useMe();
   const nav = useNavigate();

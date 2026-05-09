@@ -4,6 +4,7 @@ import { prepareWithSegments, measureLineStats } from '@chenglou/pretext';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import type { FaucetStatusResponse, FaucetClaimError } from '@rpow/shared';
@@ -235,6 +236,7 @@ function formatCountdown(targetIso: string, now: number): string {
 // ---------------------------------------------------------------------------
 
 export function FaucetPage() {
+  usePageMeta('Faucet', 'Claim free RPOW4 tokens from the treasury faucet to get started on the network.');
   const wallet = useWallet();
   const { me, refresh } = useMe();
   const [status, setStatus] = useState<FaucetStatusResponse | null>(null);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Panel } from '../components/Panel.js';
 import { api } from '../api.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import type { LedgerResponse } from '@rpow/shared';
 import { formatRpow } from '../lib/format.js';
 
@@ -11,6 +12,7 @@ function formatNumber(value: string): string {
 }
 
 export function LedgerPage() {
+  usePageMeta('About', 'Learn about RPOW4 — a modern tribute to Hal Finney\'s original Reusable Proofs of Work system. View live supply and network stats.');
   const [d, setD] = useState<LedgerResponse | null>(null);
   useEffect(() => { api.ledger().then(setD); }, []);
   if (!d) return <Panel title="PUBLIC LEDGER"><div>loading...</div></Panel>;

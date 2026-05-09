@@ -15,6 +15,8 @@ import { ledgerRoutes } from './routes/ledger.js';
 import { statsRoutes } from './routes/stats.js';
 import { explorerRoutes } from './routes/explorer.js';
 import { faucetRoutes } from './routes/faucet.js';
+import { trollboxRoutes } from './routes/trollbox.js';
+import { claimRoutes } from './routes/claim.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -43,6 +45,8 @@ export interface AppConfig {
   faucetClaimAmountBaseUnits: bigint;
   /** Cooldown between faucet claims for the same pubkey or IP. */
   faucetCooldownHours: number;
+  /** Trollbox post fee in base units, paid to the treasury per message. */
+  trollboxPostFeeBaseUnits: bigint;
   signingPrivateKeyHex: string;
   signingPublicKeyHex: string;
   webOrigin: string;
@@ -85,6 +89,8 @@ export interface AppCaches {
   explorerAccount: TtlCache<string, unknown>;
   /** Public /faucet status (treasury balance + global config). Per-caller cache key. */
   faucetStatus: TtlCache<string, unknown>;
+  /** Public /trollbox feed pre-serialized pages, keyed by cursor|limit. */
+  trollboxFeed: TtlCache<string, CachedJsonResponse>;
 }
 
 declare module 'fastify' {
@@ -149,6 +155,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // Faucet status: treasury balance + caller-specific eligibility. Short
     // TTL because the visible "next claim at" countdown should feel live.
     faucetStatus: new TtlCache<string, unknown>({ ttlMs: 2_000, maxSize: 20_000 }),
+    // Trollbox feed: invalidated explicitly on every post; short TTL is a
+    // safety net so a missed invalidation can't pin stale messages.
+    trollboxFeed: new TtlCache<string, CachedJsonResponse>({ ttlMs: 3_000, maxSize: 256 }),
   };
   app.decorate('caches', caches);
   app.decorate('invalidateAccount', (pubkey: string) => {
@@ -171,6 +180,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // Faucet status surfaces treasury balance + global config; treasury
     // balance changes whenever the ledger advances.
     caches.faucetStatus.clear();
+    // /ledger surfaces trollbox_message_count, so a new post (which also
+    // shifts treasury) needs to drop the trollbox feed cache too.
+    caches.trollboxFeed.clear();
   });
 
   await app.register(cookie, { secret: opts.config.sessionSecret });
@@ -273,6 +285,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(statsRoutes);
   await app.register(explorerRoutes);
   await app.register(faucetRoutes);
+  await app.register(trollboxRoutes);
+  await app.register(claimRoutes);
 
   // Public-key PEM is fully determined by the signing config; precompute
   // once at startup instead of rebuilding on every request.

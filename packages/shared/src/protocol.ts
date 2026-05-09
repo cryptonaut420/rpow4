@@ -144,6 +144,7 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'api', 'app', 'www', 'auth', 'signup', 'signin', 'login', 'logout',
   'lookup', 'me', 'mine', 'send', 'wallet', 'activity', 'ledger',
   'account', 'health', 'settings', 'help', 'support', 'contact',
+  'explorer', 'faucet', 'trollbox', 'stats',
   // authority-impersonating
   'admin', 'administrator', 'root', 'system', 'sysadmin', 'official',
   'security', 'team', 'staff', 'mod', 'moderator',
@@ -323,6 +324,8 @@ export interface LedgerResponse {
 
   is_capped: boolean;
   user_count: number;
+  /** Lifetime count of trollbox messages posted. */
+  trollbox_message_count: string;
 }
 
 export type LeaderboardSort = 'balance' | 'minted';
@@ -464,3 +467,114 @@ export interface FaucetClaimError {
   cooldown_reason?: 'pubkey' | 'ip';
 }
 
+// ---- trollbox ---------------------------------------------------------------
+
+/** Hard upper bound on a trollbox post body. Enforced server-side. */
+export const TROLLBOX_BODY_MAX = 280;
+
+/**
+ * Each trollbox post burns a fixed fee that goes to the treasury. The amount
+ * is configured server-side; clients should treat it as the authoritative
+ * fee from /ledger. (Constant for now; may later track halvings like /send.)
+ */
+export interface TrollboxPostRequestBody {
+  body: string;
+  idempotency_key: string;
+  /** Ed25519 signature over canonicalMessage('trollbox.post', { body, idempotency_key }). */
+  client_signature_base58: string;
+}
+
+export interface TrollboxPostResponse {
+  ok: true;
+  message_id: string;
+  /** Underlying TRANSFER ledger event id for the fee paid to the treasury. */
+  fee_event_id: string;
+  fee_base_units: string;
+  posted_at: string;
+}
+
+export interface TrollboxMessage {
+  id: string;
+  /** Strictly increasing sequence used for cursor pagination. */
+  seq: string;
+  author_pubkey: string;
+  author_display_name?: string;
+  body: string;
+  fee_base_units: string;
+  fee_event_id: string;
+  posted_at: string;
+}
+
+export interface TrollboxFeedResponse {
+  messages: TrollboxMessage[];
+  /** Server-authoritative fee for the next post, in base units. */
+  post_fee_base_units: string;
+  /** Server-authoritative max body length. */
+  body_max: number;
+  /** Lifetime count of all messages, regardless of pagination. */
+  total_count: string;
+  /** Cursor to pass as ?cursor= for the next (older) page. */
+  next_cursor?: string;
+}
+
+// ---- claim tokens (offline bearer transfers) --------------------------------
+
+export type ClaimState = 'pending' | 'redeemed' | 'cancelled';
+
+/**
+ * POST /claim body. The client generates `claim_id` (randomUUID) so it can be
+ * included in the signed body before the server sees the request.
+ * Signs canonicalMessage('claim.create', { claim_id, amount_base_units, memo? }).
+ */
+export interface ClaimCreateRequestBody {
+  claim_id: string;                   // UUID, client-generated
+  amount_base_units: string;          // positive bigint string
+  memo?: string;                      // optional, max 64 chars
+  client_signature_base58: string;
+}
+
+export interface ClaimCreateResponse {
+  ok: true;
+  claim_id: string;
+  amount_base_units: string;
+  memo?: string;
+  created_at: string;
+}
+
+/** GET /claim/:id (public) */
+export interface ClaimStatusResponse {
+  claim_id: string;
+  amount_base_units: string;
+  memo?: string;
+  state: ClaimState;
+  created_at: string;
+  redeemed_at?: string;
+  cancelled_at?: string;
+}
+
+/** GET /claim?my=pending (session) — sender's own claims */
+export interface MyClaimsResponse {
+  claims: ClaimStatusResponse[];
+}
+
+/** POST /claim/:id/redeem (session) */
+export interface ClaimRedeemResponse {
+  ok: true;
+  amount_base_units: string;
+  transfer_id: string;
+  redeemed_at: string;
+}
+
+/**
+ * POST /claim/:id/cancel body (session + sig).
+ * Signs canonicalMessage('claim.cancel', { claim_id }).
+ */
+export interface ClaimCancelRequestBody {
+  client_signature_base58: string;
+}
+
+export interface ClaimCancelResponse {
+  ok: true;
+  amount_base_units: string;
+  cancelled_at: string;
+}

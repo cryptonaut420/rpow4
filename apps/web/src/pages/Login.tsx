@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { PasswordPair } from '../components/PasswordPair.js';
 import { useWallet } from '../wallet/WalletProvider.js';
@@ -19,6 +20,7 @@ import { expectedSecondsAt, formatDuration, formatHashrate } from '../lib/hashra
 type AdvancedTab = 'create' | 'import-mnemonic' | 'import-key' | 'unlock';
 
 export function LoginPage() {
+  usePageMeta('Login', 'Create a new RPOW4 account, import an existing wallet, or unlock your encrypted backup.');
   const wallet = useWallet();
   const { me, refresh } = useMe();
   const nav = useNavigate();

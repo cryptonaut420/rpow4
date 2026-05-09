@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
 import { useWallet } from '../wallet/WalletProvider.js';
@@ -36,6 +37,7 @@ const FILTER_LABEL: Record<Filter, string> = {
 };
 
 export function ActivityPage() {
+  usePageMeta('Activity', 'Your personal RPOW4 transaction history — minted tokens, sends, and receives.');
   const wallet = useWallet();
   const [items, setItems] = useState<ActivityEntry[]>([]);
   const [balance, setBalance] = useState<string | null>(null);

@@ -24,6 +24,7 @@ const app = await buildApp({
     faucetEnabled: env.FAUCET_ENABLED,
     faucetClaimAmountBaseUnits: env.FAUCET_CLAIM_AMOUNT_BASE_UNITS,
     faucetCooldownHours: env.FAUCET_COOLDOWN_HOURS,
+    trollboxPostFeeBaseUnits: env.TROLLBOX_POST_FEE_BASE_UNITS,
     signingPrivateKeyHex: env.RPOW_SIGNING_PRIVATE_KEY_HEX,
     signingPublicKeyHex: env.RPOW_SIGNING_PUBLIC_KEY_HEX,
     webOrigin: env.WEB_ORIGIN,

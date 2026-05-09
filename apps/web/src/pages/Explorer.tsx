@@ -3,6 +3,7 @@ import { useMatch, useNavigate, Link } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import { shortPubkey } from '@rpow/shared';
 import type {
   ExplorerEvent,
@@ -456,6 +457,7 @@ function AccountEventRow({ event: e }: { event: ExplorerAccountEvent }) {
 // ---- Main Explorer page -----------------------------------------------------
 
 export function ExplorerPage() {
+  usePageMeta('Explorer', 'Browse the RPOW4 public ledger. Search transactions by ID, look up accounts by public key, and explore the live feed.');
   const txMatch = useMatch('/explorer/tx/:id');
   const accountMatch = useMatch('/explorer/account/:pubkey');
 

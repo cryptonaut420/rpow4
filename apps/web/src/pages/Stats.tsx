@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
+import { usePageMeta } from '../hooks/usePageMeta.js';
 import type {
   LeaderboardEntry,
   LeaderboardResponse,
@@ -33,6 +34,7 @@ const SORT_LABELS: Record<LeaderboardSort, { tab: string; panel: string; primary
 };
 
 export function StatsPage() {
+  usePageMeta('Stats', 'RPOW4 network statistics, mining leaderboards, and richest accounts on the network.');
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
   // Cache both sort variants once they've been fetched so flipping the
   // toggle is instant after the first round-trip.
@@ -108,6 +110,8 @@ export function StatsPage() {
   SEND FEE            : ${currentFee} RPOW per transfer
   TOTAL FEES EARNED   : ${totalFees} RPOW
   TREASURY BALANCE    : ${treasuryBalance} RPOW
+
+  TROLLBOX MESSAGES   : ${formatNumber(ledger.trollbox_message_count)}
 `}
         </pre>
       </Panel>

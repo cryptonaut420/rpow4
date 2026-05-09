@@ -6,6 +6,12 @@ import type {
   AuthSessionRequestBody,
   AuthSessionResponse,
   ChallengeResponse,
+  ClaimCancelRequestBody,
+  ClaimCancelResponse,
+  ClaimCreateRequestBody,
+  ClaimCreateResponse,
+  ClaimRedeemResponse,
+  ClaimStatusResponse,
   ExplorerAccountResponse,
   ExplorerFeedResponse,
   ExplorerTxResponse,
@@ -19,6 +25,7 @@ import type {
   MeResponse,
   MintRequestBody,
   MintResponse,
+  MyClaimsResponse,
   SendRequestBody,
   SendResponse,
   SetDisplayNameRequestBody,
@@ -27,6 +34,9 @@ import type {
   SignupChallengeResponse,
   SignupRequestBody,
   SignupResponse,
+  TrollboxFeedResponse,
+  TrollboxPostRequestBody,
+  TrollboxPostResponse,
 } from '@rpow/shared';
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
@@ -103,6 +113,29 @@ export const api = {
   // Faucet (public)
   faucet: () => call<FaucetStatusResponse>('GET', '/faucet'),
   faucetClaim: () => call<FaucetClaimResponse>('POST', '/faucet/claim', {}),
+
+  // Trollbox (public read, signed write)
+  trollbox: (cursor?: string, limit?: number) => {
+    const qs = new URLSearchParams();
+    if (cursor) qs.set('cursor', cursor);
+    if (limit) qs.set('limit', String(limit));
+    const suffix = qs.toString();
+    return call<TrollboxFeedResponse>('GET', `/trollbox${suffix ? `?${suffix}` : ''}`);
+  },
+  trollboxPost: (b: TrollboxPostRequestBody) =>
+    call<TrollboxPostResponse>('POST', '/trollbox', b),
+
+  // Claim tokens (offline bearer transfers)
+  createClaim: (b: ClaimCreateRequestBody) =>
+    call<ClaimCreateResponse>('POST', '/claim', b),
+  getClaim: (id: string) =>
+    call<ClaimStatusResponse>('GET', `/claim/${encodeURIComponent(id)}`),
+  myClaims: () =>
+    call<MyClaimsResponse>('GET', '/claim'),
+  redeemClaim: (id: string) =>
+    call<ClaimRedeemResponse>('POST', `/claim/${encodeURIComponent(id)}/redeem`, {}),
+  cancelClaim: (id: string, b: ClaimCancelRequestBody) =>
+    call<ClaimCancelResponse>('POST', `/claim/${encodeURIComponent(id)}/cancel`, b),
 
   // Write endpoints — bodies must already include client_signature_base58
   challenge: () => call<ChallengeResponse>('POST', '/challenge'),

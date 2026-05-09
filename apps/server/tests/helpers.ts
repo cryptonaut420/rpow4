@@ -57,6 +57,7 @@ export async function makeTestApp(opts: {
       faucetEnabled: true,
       faucetClaimAmountBaseUnits: 1_000_000n,
       faucetCooldownHours: 24,
+      trollboxPostFeeBaseUnits: 0n,
       signingPrivateKeyHex: '11'.repeat(32),
       signingPublicKeyHex: '22'.repeat(32),
       webOrigin: 'http://web.test',

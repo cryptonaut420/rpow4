@@ -42,7 +42,7 @@ modernized:
 | 2 | [`02-protocol.md`](./02-protocol.md) | End-to-end flows: wallet → challenge → mine → mint → send |
 | 3 | [`03-mining-and-halving.md`](./03-mining-and-halving.md) | PoW spec, difficulty curve, halving schedule, 21M cap, base units |
 | 4 | [`04-data-model.md`](./04-data-model.md) | Postgres schema (post 011_pubkey_identity), state machines, key invariants |
-| 5 | [`06-api.md`](./06-api.md) | HTTP endpoint reference |
+| 5 | [`06-api.md`](./06-api.md) | Public REST API reference (every endpoint, errors, signing, curl + JS examples) |
 | 6 | [`07-ops-and-deploy.md`](./07-ops-and-deploy.md) | Hosting, secrets, backups, recovery (pointer-heavy) |
 
 ## One-screen mental model
