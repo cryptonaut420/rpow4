@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { makeTestApp } from './helpers.js';
+import { randomUUID } from 'node:crypto';
+import { loginAsRandomWallet, makeTestApp } from './helpers.js';
+import { findSolutionForTest } from '../src/pow.js';
 
 // Test fixture (see helpers.ts):
 //   difficultyBits=8, difficultyFloor=4, mintMaxSupply=21 (RPOW).
@@ -56,6 +58,47 @@ describe('GET /ledger', () => {
     expect(second.body).toBe('');
   });
 
+  it('invalidates cached ledger stats immediately after mint', async () => {
+    const ctx = await makeTestApp(); cleanup = ctx.cleanup;
+    const first = await ctx.app.inject({ method: 'GET', url: '/ledger' });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().total_minted_base_units).toBe('0');
+    const firstEvents = await ctx.app.inject({ method: 'GET', url: '/ledger/events' });
+    expect(firstEvents.json().events).toEqual([]);
+
+    const w = await loginAsRandomWallet(ctx.app);
+    const ch = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } })).json() as {
+      challenge_id: string;
+      nonce_prefix: string;
+      difficulty_bits: number;
+      issued_at: string;
+      expires_at: string;
+      challenge_mac: string;
+    };
+    const nonce = findSolutionForTest(Buffer.from(ch.nonce_prefix, 'hex'), ch.difficulty_bits);
+    const signed = { challenge_id: ch.challenge_id, solution_nonce: nonce.toString() };
+    const mint = await ctx.app.inject({
+      method: 'POST',
+      url: '/mint',
+      headers: { cookie: w.cookie, 'content-type': 'application/json' },
+      payload: {
+        ...ch,
+        solution_nonce: nonce.toString(),
+        client_signature_base58: w.sign('mint', signed),
+      },
+    });
+    expect(mint.statusCode).toBe(200);
+
+    const second = await ctx.app.inject({ method: 'GET', url: '/ledger' });
+    expect(second.json().total_minted_base_units).toBe('7812500');
+    const secondEvents = await ctx.app.inject({ method: 'GET', url: '/ledger/events' });
+    expect(secondEvents.json().events[0]).toMatchObject({
+      type: 'mint',
+      actor_pubkey: w.publicKeyBase58,
+      amount_base_units: '7812500',
+    });
+  });
+
   it('reports growing supply as tokens + counter are seeded', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
     // Keep maintained stats in sync with the seeded supply (server's /mint
@@ -99,5 +142,25 @@ describe('GET /ledger', () => {
     expect(body.minted_supply_counter_base_units).toBe(MAX_SUPPLY_BU.toString());
     expect(body.is_capped).toBe(true);
     expect(body.base_units_to_next_halving).toBe('0');
+  });
+
+  it('serves /ledger/events from the durable partitioned ledger when hot cache is empty', async () => {
+    const ctx = await makeTestApp(); cleanup = ctx.cleanup;
+    const eventId = randomUUID();
+    await ctx.pool.query(
+      `INSERT INTO ledger_events(id, event_type, actor_pubkey, amount)
+       VALUES($1, 'MINT', $2, $3)`,
+      [eventId, 'actor-pubkey-for-test', '123'],
+    );
+
+    const res = await ctx.app.inject({ method: 'GET', url: '/ledger/events?limit=10' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.events[0]).toMatchObject({
+      id: eventId,
+      type: 'mint',
+      actor_pubkey: 'actor-pubkey-for-test',
+      amount_base_units: '123',
+    });
   });
 });

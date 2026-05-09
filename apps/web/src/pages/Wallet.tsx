@@ -2,6 +2,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { DisplayNameEditor } from '../components/DisplayNameEditor.js';
+import { SaveWalletPrompt } from '../components/SaveWalletPrompt.js';
 import { WalletBackupPanel } from '../components/WalletBackupPanel.js';
 import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
@@ -48,6 +49,7 @@ export function WalletPage() {
 
   return (
     <>
+      <SaveWalletPrompt />
       <Panel title="WALLET">
         <pre style={{ margin: 0 }}>
 {`  > BALANCE     : ${formatRpow(me.balance_base_units)} RPOW

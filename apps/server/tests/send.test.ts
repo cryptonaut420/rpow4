@@ -65,6 +65,7 @@ describe('POST /send', () => {
       transferred_base_units: (2n * ONE_RPOW).toString(),
       recipient_pubkey: b.publicKeyBase58,
     });
+    const transferId = res.json().transfer_id;
 
     const aMe = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie: a.cookie } })).json();
     const bMe = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie: b.cookie } })).json();
@@ -73,6 +74,18 @@ describe('POST /send', () => {
 
     const ledger = (await ctx.app.inject({ method: 'GET', url: '/ledger' })).json();
     expect(ledger.total_transferred_base_units).toBe((2n * ONE_RPOW).toString());
+
+    const sidecar = await ctx.pool.query(
+      `SELECT e.event_seq, ids.event_seq AS id_event_seq, idem.event_seq AS idem_event_seq
+       FROM ledger_events e
+       JOIN ledger_event_ids ids ON ids.id = e.id
+       JOIN ledger_transfer_idempotency idem ON idem.event_id = e.id
+       WHERE e.id=$1`,
+      [transferId],
+    );
+    expect(sidecar.rowCount).toBe(1);
+    expect(sidecar.rows[0].id_event_seq).toBe(sidecar.rows[0].event_seq);
+    expect(sidecar.rows[0].idem_event_seq).toBe(sidecar.rows[0].event_seq);
   });
 
   it('lazily creates the recipient account if it does not exist', async () => {

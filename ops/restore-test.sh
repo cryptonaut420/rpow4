@@ -20,12 +20,16 @@ restic dump "$LATEST" "$DUMP_PATH" \
 
 echo "Row counts on restored scratch DB:"
 sudo -u postgres psql -d "$SCRATCH" -c "
-  SELECT 'users' AS tbl, count(*) FROM users
-  UNION ALL SELECT 'tokens',         count(*) FROM tokens
-  UNION ALL SELECT 'transfers',      count(*) FROM transfers
-  UNION ALL SELECT 'magic_links',    count(*) FROM magic_links
-  UNION ALL SELECT 'challenges',     count(*) FROM challenges
-  UNION ALL SELECT 'pending_transfers', count(*) FROM pending_transfers
+  SELECT 'accounts' AS tbl, count(*) FROM accounts
+  UNION ALL SELECT 'account_balances', count(*) FROM account_balances
+  UNION ALL SELECT 'ledger_events', count(*) FROM ledger_events
+  UNION ALL SELECT 'ledger_event_ids', count(*) FROM ledger_event_ids
+  UNION ALL SELECT 'ledger_mint_claims', count(*) FROM ledger_mint_claims
+  UNION ALL SELECT 'ledger_transfer_idempotency', count(*) FROM ledger_transfer_idempotency
+  UNION ALL SELECT 'ledger_recent_events', count(*) FROM ledger_recent_events
+  UNION ALL SELECT 'account_recent_events', count(*) FROM account_recent_events
+  UNION ALL SELECT 'ledger_stats', count(*) FROM ledger_stats
+  UNION ALL SELECT 'ledger_stat_shards', count(*) FROM ledger_stat_shards
   ORDER BY tbl;
 "
 

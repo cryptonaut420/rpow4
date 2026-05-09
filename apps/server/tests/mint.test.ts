@@ -72,9 +72,22 @@ describe('POST /mint', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().token.value_base_units).toBe(REWARD_BASE_UNITS.toString());
+    const tokenId = res.json().token.id;
     const me = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie: w.cookie } })).json();
     expect(me.balance_base_units).toBe(REWARD_BASE_UNITS.toString());
     expect(me.minted_base_units).toBe(REWARD_BASE_UNITS.toString());
+
+    const sidecar = await ctx.pool.query(
+      `SELECT e.event_seq, ids.event_seq AS id_event_seq, claims.event_seq AS claim_event_seq
+       FROM ledger_events e
+       JOIN ledger_event_ids ids ON ids.id = e.id
+       JOIN ledger_mint_claims claims ON claims.challenge_id = e.challenge_id
+       WHERE e.id=$1`,
+      [tokenId],
+    );
+    expect(sidecar.rowCount).toBe(1);
+    expect(sidecar.rows[0].id_event_seq).toBe(sidecar.rows[0].event_seq);
+    expect(sidecar.rows[0].claim_event_seq).toBe(sidecar.rows[0].event_seq);
   });
 
   it('rejects invalid solution', async () => {

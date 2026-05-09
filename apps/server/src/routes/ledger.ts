@@ -1,9 +1,23 @@
-import type { FastifyInstance } from 'fastify';
-import { createHash } from 'node:crypto';
+import type { FastifyInstance, FastifyReply } from 'fastify';
 import { scheduleInfo, BASE_UNITS_PER_RPOW } from '../schedule.js';
+import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
 
-const LEDGER_CACHE_MS = 5_000;
 const MAX_LEDGER_EVENTS_LIMIT = 100;
+
+const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
+
+interface LedgerEventDbRow {
+  event_seq: string;
+  id: string;
+  event_type: string;
+  actor_pubkey: string;
+  counterparty_pubkey: string | null;
+  amount: string;
+  challenge_id: string | null;
+  idempotency_key: string | null;
+  client_signature_base58: string | null;
+  created_at: Date;
+}
 
 function encodeCursor(eventSeq: string): string {
   return Buffer.from(JSON.stringify({ event_seq: eventSeq }), 'utf8').toString('base64url');
@@ -19,96 +33,146 @@ function decodeCursor(cursor: string): string | null {
   }
 }
 
-function etagFor(body: unknown): string {
-  return `"${createHash('sha256').update(JSON.stringify(body)).digest('base64url')}"`;
+/**
+ * Send a precomputed JSON response without re-stringifying. Honors
+ * If-None-Match using the cached ETag.
+ */
+function sendCachedJson(
+  reply: FastifyReply,
+  cached: CachedJsonResponse,
+  ifNoneMatch: string | undefined,
+  cacheControl: string,
+): FastifyReply {
+  reply.header('etag', cached.etag);
+  reply.header('cache-control', cacheControl);
+  if (ifNoneMatch === cached.etag) {
+    return reply.code(304).send();
+  }
+  reply.header('content-type', JSON_CONTENT_TYPE);
+  return reply.send(cached.json);
 }
 
 export async function ledgerRoutes(app: FastifyInstance) {
-  let cached: { ts: number; body: unknown } | null = null;
-  let inflight: Promise<unknown> | null = null;
+  async function ledgerCachedResponse(): Promise<CachedJsonResponse> {
+    return app.caches.ledger.get('singleton', async () => {
+      const { rows } = await app.pool.query<{
+        minted_supply: string;
+        circulating_supply: string;
+        user_count: string;
+        total_transferred: string;
+      }>(
+        `SELECT
+           COALESCE((SELECT value FROM app_counters WHERE name='minted_supply'), 0)::text AS minted_supply,
+           COALESCE((SELECT value FROM ledger_stats WHERE name='circulating_supply'), 0)::text AS circulating_supply,
+           COALESCE((SELECT value FROM ledger_stats WHERE name='user_count'), 0)::text AS user_count,
+           COALESCE((SELECT sum(value) FROM ledger_stat_shards WHERE name='total_transferred'), 0)::text AS total_transferred`,
+      );
 
-  async function refresh() {
-    const [
-      { rows: counter },
-      { rows: stats },
-      { rows: transferShards },
-    ] = await Promise.all([
-      app.pool.query<{ value: string }>(
-        `SELECT value::text FROM app_counters WHERE name='minted_supply'`,
-      ),
-      app.pool.query<{ name: string; value: string }>(
-        `SELECT name, value::text AS value
-         FROM ledger_stats
-         WHERE name IN ('circulating_supply','user_count')`,
-      ),
-      app.pool.query<{ value: string }>(
-        `SELECT coalesce(sum(value),0)::text AS value
-         FROM ledger_stat_shards
-         WHERE name='total_transferred'`,
-      ),
-    ]);
+      const stats = rows[0]!;
+      const counterBaseUnits = BigInt(stats.minted_supply);
+      const totalTransferredBaseUnits = BigInt(stats.total_transferred);
+      const circulatingBaseUnits = BigInt(stats.circulating_supply);
+      const userCount = Number(stats.user_count);
+      const maxSupplyBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
 
-    const counterBaseUnits = counter[0] ? BigInt(counter[0].value) : 0n;
-    const statMap = new Map(stats.map((r) => [r.name, r.value]));
-    const totalTransferredBaseUnits = BigInt(transferShards[0]?.value ?? '0');
-    const circulatingBaseUnits = BigInt(statMap.get('circulating_supply') ?? '0');
-    const userCount = Number(statMap.get('user_count') ?? '0');
-    const maxSupplyBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
+      const info = scheduleInfo(counterBaseUnits, {
+        difficultyBits: app.config.difficultyBits,
+        maxSupplyRpow: app.config.mintMaxSupply,
+      });
 
-    const info = scheduleInfo(counterBaseUnits, {
-      difficultyBits: app.config.difficultyBits,
-      maxSupplyRpow: app.config.mintMaxSupply,
+      const body = {
+        total_minted_base_units: counterBaseUnits.toString(),
+        total_transferred_base_units: totalTransferredBaseUnits.toString(),
+        circulating_supply_base_units: circulatingBaseUnits.toString(),
+        minted_supply_counter_base_units: counterBaseUnits.toString(),
+        max_supply_base_units: maxSupplyBaseUnits.toString(),
+        base_units_per_rpow: BASE_UNITS_PER_RPOW.toString(),
+        current_difficulty_bits: Math.max(app.config.difficultyFloor, info.currentDifficultyBits),
+        current_reward_base_units: info.currentRewardBaseUnits.toString(),
+        next_reward_base_units: info.nextRewardBaseUnits.toString(),
+        next_halving_at_base_units: info.nextHalvingAtBaseUnits.toString(),
+        base_units_to_next_halving: info.baseUnitsToNextHalving.toString(),
+        halving_index: info.halvingIndex,
+        is_capped: info.isCapped,
+        user_count: userCount,
+      };
+      return buildCachedJsonResponse(body);
     });
-
-    return {
-      total_minted_base_units: counterBaseUnits.toString(),
-      total_transferred_base_units: totalTransferredBaseUnits.toString(),
-      circulating_supply_base_units: circulatingBaseUnits.toString(),
-      minted_supply_counter_base_units: counterBaseUnits.toString(),
-      max_supply_base_units: maxSupplyBaseUnits.toString(),
-      base_units_per_rpow: BASE_UNITS_PER_RPOW.toString(),
-      current_difficulty_bits: Math.max(app.config.difficultyFloor, info.currentDifficultyBits),
-      current_reward_base_units: info.currentRewardBaseUnits.toString(),
-      next_reward_base_units: info.nextRewardBaseUnits.toString(),
-      next_halving_at_base_units: info.nextHalvingAtBaseUnits.toString(),
-      base_units_to_next_halving: info.baseUnitsToNextHalving.toString(),
-      halving_index: info.halvingIndex,
-      is_capped: info.isCapped,
-      user_count: userCount,
-    };
   }
 
-  async function ledgerBody() {
-    if (cached && Date.now() - cached.ts < LEDGER_CACHE_MS) return cached.body;
-    if (inflight) return inflight;
-    inflight = (async () => {
-      try {
-        const body = await refresh();
-        cached = { ts: Date.now(), body };
-        return body;
-      } finally {
-        inflight = null;
-      }
-    })();
-    return inflight;
+  async function loadLedgerEventRows(cursor: string | null, limit: number): Promise<LedgerEventDbRow[]> {
+    const recentParams: unknown[] = [];
+    let recentCursorFilter = '';
+    if (cursor) {
+      recentParams.push(cursor);
+      recentCursorFilter = `WHERE event_seq < $1::bigint`;
+    }
+    recentParams.push(limit + 1);
+    const recentLimitParam = recentParams.length;
+
+    const recent = await app.pool.query<LedgerEventDbRow>(
+      `SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+              amount::text AS amount, challenge_id, idempotency_key,
+              client_signature_base58, created_at
+       FROM ledger_recent_events
+       ${recentCursorFilter}
+       ORDER BY event_seq DESC
+       LIMIT $${recentLimitParam}`,
+      recentParams,
+    );
+    // Newest page is the hottest public path. The bounded hot table is
+    // maintained transactionally by mint/send and seeded during migration,
+    // so when it has any rows, avoid touching historical partitions.
+    if (!cursor && recent.rows.length > 0) return recent.rows;
+    if (recent.rows.length >= limit + 1) return recent.rows;
+
+    // If the hot table did not fill the page, continue from the oldest
+    // hot row (or from the requested cursor) against the partitioned
+    // historical ledger. This keeps correctness while the common case
+    // stays on the tiny hot table.
+    const oldestRecent = recent.rows[recent.rows.length - 1]?.event_seq ?? null;
+    const historicalCursor = oldestRecent ?? cursor;
+    const remaining = limit + 1 - recent.rows.length;
+    const historicalParams: unknown[] = [];
+    let historicalCursorFilter = '';
+    if (historicalCursor) {
+      historicalParams.push(historicalCursor);
+      historicalCursorFilter = `WHERE event_seq < $1::bigint`;
+    }
+    historicalParams.push(remaining);
+    const historicalLimitParam = historicalParams.length;
+
+    const historical = await app.pool.query<LedgerEventDbRow>(
+      `SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+              amount::text AS amount, challenge_id, idempotency_key,
+              client_signature_base58, created_at
+       FROM ledger_events
+       ${historicalCursorFilter}
+       ORDER BY event_seq DESC
+       LIMIT $${historicalLimitParam}`,
+      historicalParams,
+    );
+    return [...recent.rows, ...historical.rows];
   }
 
   app.get('/ledger', async (req, reply) => {
-    reply.header('cache-control', 'public, max-age=5, stale-while-revalidate=30');
-    const body = await ledgerBody();
-    const etag = etagFor(body);
-    reply.header('etag', etag);
-    if (req.headers['if-none-match'] === etag) return reply.code(304).send();
-    return body;
+    const cached = await ledgerCachedResponse();
+    return sendCachedJson(
+      reply,
+      cached,
+      req.headers['if-none-match'] as string | undefined,
+      'public, max-age=5, stale-while-revalidate=30',
+    );
   });
 
   app.get('/ledger/stats', async (req, reply) => {
-    reply.header('cache-control', 'public, max-age=5, stale-while-revalidate=30');
-    const body = await ledgerBody();
-    const etag = etagFor(body);
-    reply.header('etag', etag);
-    if (req.headers['if-none-match'] === etag) return reply.code(304).send();
-    return body;
+    const cached = await ledgerCachedResponse();
+    return sendCachedJson(
+      reply,
+      cached,
+      req.headers['if-none-match'] as string | undefined,
+      'public, max-age=5, stale-while-revalidate=30',
+    );
   });
 
   app.get<{ Querystring: { cursor?: string; limit?: string } }>('/ledger/events', async (req, reply) => {
@@ -117,59 +181,39 @@ export async function ledgerRoutes(app: FastifyInstance) {
       ? Math.min(Math.max(Math.trunc(limitRaw), 1), MAX_LEDGER_EVENTS_LIMIT)
       : 50;
 
-    let cursorFilter = '';
-    const params: unknown[] = [];
+    let cursor: string | null = null;
     if (req.query.cursor) {
-      const cursor = decodeCursor(req.query.cursor);
+      cursor = decodeCursor(req.query.cursor);
       if (!cursor) return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid cursor' });
-      params.push(cursor);
-      cursorFilter = `WHERE event_seq < $1::bigint`;
     }
-    params.push(limit + 1);
-    const limitParam = params.length;
+    const cacheKey = `${cursor ?? ''}|${limit}`;
+    const cached = await app.caches.ledgerEvents.get(cacheKey, async () => {
+      const rows = await loadLedgerEventRows(cursor, limit);
 
-    const { rows } = await app.pool.query<{
-      event_seq: string;
-      id: string;
-      event_type: string;
-      actor_pubkey: string;
-      counterparty_pubkey: string | null;
-      amount: string;
-      challenge_id: string | null;
-      idempotency_key: string | null;
-      client_signature_base58: string | null;
-      created_at: Date;
-    }>(
-      `SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-              amount::text AS amount, challenge_id, idempotency_key,
-              client_signature_base58, created_at
-       FROM ledger_events
-       ${cursorFilter}
-       ORDER BY event_seq DESC
-       LIMIT $${limitParam}`,
-      params,
+      const page = rows.slice(0, limit);
+      const last = page[page.length - 1];
+      const body = {
+        events: page.map((r) => ({
+          id: r.id,
+          type: r.event_type.toLowerCase(),
+          actor_pubkey: r.actor_pubkey,
+          counterparty_pubkey: r.counterparty_pubkey ?? undefined,
+          amount_base_units: r.amount,
+          challenge_id: r.challenge_id ?? undefined,
+          idempotency_key: r.idempotency_key ?? undefined,
+          client_signature_base58: r.client_signature_base58 ?? undefined,
+          at: r.created_at.toISOString(),
+        })),
+        next_cursor: rows.length > limit && last ? encodeCursor(last.event_seq) : undefined,
+      };
+      return buildCachedJsonResponse(body);
+    });
+
+    return sendCachedJson(
+      reply,
+      cached,
+      req.headers['if-none-match'] as string | undefined,
+      'public, max-age=2, stale-while-revalidate=10',
     );
-
-    const page = rows.slice(0, limit);
-    const last = page[page.length - 1];
-    reply.header('cache-control', 'public, max-age=5, stale-while-revalidate=30');
-    const body = {
-      events: page.map((r) => ({
-        id: r.id,
-        type: r.event_type.toLowerCase(),
-        actor_pubkey: r.actor_pubkey,
-        counterparty_pubkey: r.counterparty_pubkey ?? undefined,
-        amount_base_units: r.amount,
-        challenge_id: r.challenge_id ?? undefined,
-        idempotency_key: r.idempotency_key ?? undefined,
-        client_signature_base58: r.client_signature_base58 ?? undefined,
-        at: r.created_at.toISOString(),
-      })),
-      next_cursor: rows.length > limit && last ? encodeCursor(last.event_seq) : undefined,
-    };
-    const etag = etagFor(body);
-    reply.header('etag', etag);
-    if (req.headers['if-none-match'] === etag) return reply.code(304).send();
-    return body;
   });
 }

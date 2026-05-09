@@ -21,7 +21,7 @@ describe('POST /challenge', () => {
   let cleanup: (() => Promise<void>) | null = null;
   afterEach(async () => { if (cleanup) await cleanup(); cleanup = null; });
 
-  it('issues a challenge to a logged-in wallet', async () => {
+  it('issues a stateless challenge to a logged-in wallet (no DB row)', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
     const w = await loginAsRandomWallet(ctx.app);
     const res = await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } });
@@ -33,8 +33,10 @@ describe('POST /challenge', () => {
     expect(body.issued_at).toBeTruthy();
     expect(body.expires_at).toBeTruthy();
     expect(body.challenge_mac).toMatch(/^[0-9a-f]{64}$/);
-    const { rows } = await ctx.pool.query('SELECT count(*)::int AS n FROM challenges');
-    expect(rows[0].n).toBe(0);
+    // Statelessness check post-014: the legacy `challenges` table is
+    // gone, so the only way to confirm /challenge writes nothing is by
+    // shape (no follow-up DB lookup is possible). The MAC is the proof
+    // of authenticity instead of a DB row.
   });
 
   it('rejects unauthenticated', async () => {

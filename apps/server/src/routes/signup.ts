@@ -12,7 +12,7 @@ import {
 } from '@rpow/shared';
 import { verifySolution } from '../pow.js';
 import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '../session.js';
-import { withTx } from '../db.js';
+import { withTxRetry } from '../db.js';
 
 const SIGNUP_TTL_MS = 60 * 60 * 1000; // 1h, generous so a slow phone has time
 const DOMAIN = 'rpow2.signup';
@@ -83,7 +83,15 @@ const SignupBody = z.object({
  * gets 409 NAME_TAKEN.
  */
 export async function signupRoutes(app: FastifyInstance) {
-  app.post('/signup/challenge', async (req, reply) => {
+  app.post(
+    '/signup/challenge',
+    {
+      // /signup/challenge does a single SELECT but is otherwise free —
+      // an attacker could issue thousands of envelopes per second to
+      // probe handle availability. Cap aggressively per IP.
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    },
+    async (req, reply) => {
     const parsed = ChallengeBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
@@ -124,7 +132,15 @@ export async function signupRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post('/signup', async (req, reply) => {
+  app.post(
+    '/signup',
+    {
+      // Signup is PoW-gated, but the post-PoW commit costs a real
+      // transaction; cap how many an IP can fire even with valid
+      // solutions.
+      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    },
+    async (req, reply) => {
     const parsed = SignupBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
@@ -192,7 +208,7 @@ export async function signupRoutes(app: FastifyInstance) {
     // signed up before) and the partial unique index on
     // lower(display_name) (handle taken between challenge and submit).
     try {
-      await withTx(app.pool, async (c) => {
+      await withTxRetry(app.pool, async (c) => {
         await c.query(
           `INSERT INTO accounts(pubkey, display_name, display_name_set_at, display_name_signature_base58)
            VALUES ($1, $2, now(), $3)`,
@@ -218,6 +234,13 @@ export async function signupRoutes(app: FastifyInstance) {
       }
       throw e;
     }
+
+    // New account is now visible to /me and /lookup; the lookup cache
+    // also held a `null` (NAME_NOT_FOUND) entry from the availability
+    // check. Drop both before issuing the session.
+    app.invalidateAccount(envelope.pubkey);
+    app.invalidateLookup(envelope.handle);
+    app.invalidateLedger();
 
     const sessionToken = signSession({ pubkey: envelope.pubkey }, app.config.sessionSecret, SESSION_TTL_SECONDS);
     reply.setCookie(SESSION_COOKIE, sessionToken, {

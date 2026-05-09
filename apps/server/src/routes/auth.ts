@@ -7,8 +7,8 @@ import {
   verifyCanonical,
   type AuthChallengeEnvelope,
 } from '@rpow/shared';
-import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS, verifySession } from '../session.js';
-import { withTx } from '../db.js';
+import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '../session.js';
+import { withTxRetry } from '../db.js';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const DOMAIN = 'rpow2';
@@ -50,7 +50,15 @@ export async function authRoutes(app: FastifyInstance) {
    * the 5-minute TTL plus the freshness of the nonce: each /auth/session
    * call independently checks both.
    */
-  app.post('/auth/challenge', async (req, reply) => {
+  app.post(
+    '/auth/challenge',
+    {
+      // Issuing an envelope is just an HMAC + a few bytes of randomness —
+      // cheap, but a flood would still pump the response logger and
+      // egress. Bound at 60/min/IP.
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
+    async (req, reply) => {
     const parsed = ChallengeBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid pubkey' });
@@ -84,7 +92,15 @@ export async function authRoutes(app: FastifyInstance) {
    * just produces the same session, not a privilege escalation. After
    * exp the envelope is rejected outright.
    */
-  app.post('/auth/session', async (req, reply) => {
+  app.post(
+    '/auth/session',
+    {
+      // The work here is one INSERT/UPDATE plus a signature verify. A
+      // brute-force loop wouldn't help an attacker (they need a valid
+      // signature) but spamming this would still churn the DB.
+      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+    },
+    async (req, reply) => {
     const parsed = SessionBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
@@ -112,7 +128,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(401).send({ error: 'INVALID_SIGNATURE', message: 'signature does not verify' });
     }
 
-    await withTx(app.pool, async (c) => {
+    const created = await withTxRetry(app.pool, async (c) => {
       const inserted = await c.query<{ pubkey: string }>(
         `INSERT INTO accounts(pubkey) VALUES($1)
          ON CONFLICT (pubkey) DO NOTHING
@@ -129,10 +145,15 @@ export async function authRoutes(app: FastifyInstance) {
           `UPDATE ledger_stats SET value = value + 1, updated_at = now()
            WHERE name='user_count'`,
         );
-      } else {
-        await c.query(`UPDATE accounts SET last_login_at = now() WHERE pubkey=$1`, [envelope.pubkey]);
+        return true;
       }
+      await c.query(`UPDATE accounts SET last_login_at = now() WHERE pubkey=$1`, [envelope.pubkey]);
+      return false;
     });
+    if (created) {
+      app.invalidateAccount(envelope.pubkey);
+      app.invalidateLedger();
+    }
 
     const sessionToken = signSession({ pubkey: envelope.pubkey }, app.config.sessionSecret, SESSION_TTL_SECONDS);
     reply.setCookie(SESSION_COOKIE, sessionToken, {
@@ -149,13 +170,4 @@ export async function authRoutes(app: FastifyInstance) {
     reply.clearCookie(SESSION_COOKIE, { path: '/' });
     return { ok: true };
   });
-}
-
-export function readSession(
-  req: { cookies: Record<string, string | undefined> },
-  secret: string,
-): { pubkey: string } | null {
-  const tok = req.cookies[SESSION_COOKIE];
-  if (!tok) return null;
-  return verifySession(tok, secret);
 }

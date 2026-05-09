@@ -54,7 +54,7 @@ rpow/
 │   │   │   ├── server.ts          process entry: env → pool → migrations → app.listen
 │   │   │   ├── buildApp.ts        Fastify wiring + decorators + plugin registration
 │   │   │   ├── env.ts             zod schema for the env
-│   │   │   ├── db.ts              pg Pool factory, withTx/withClient helpers, runMigrations
+│   │   │   ├── db.ts              pg Pool factory, transaction retry helper, runMigrations
 │   │   │   ├── session.ts         HMAC-signed `pubkey|exp` cookie
 │   │   │   ├── pow.ts             trailing-zero-bits SHA-256 verifier
 │   │   │   ├── schedule.ts        halving math, BASE_UNITS_PER_RPOW, supply-aware reward

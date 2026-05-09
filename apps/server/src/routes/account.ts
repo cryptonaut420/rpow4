@@ -5,7 +5,11 @@ import {
   validateDisplayName,
   verifyCanonical,
 } from '@rpow/shared';
-import { readSession } from './auth.js';
+
+interface LookupHit {
+  pubkey: string;
+  display_name: string;
+}
 
 /**
  * Optional, per-account, case-insensitively unique display handle.
@@ -21,7 +25,7 @@ export async function accountRoutes(app: FastifyInstance) {
    * caller's keypair under the `account.set_display_name` action.
    */
   app.post('/me/display_name', async (req, reply) => {
-    const s = readSession(req as any, app.config.sessionSecret);
+    const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
 
     const Body = z.object({
@@ -49,6 +53,15 @@ export async function accountRoutes(app: FastifyInstance) {
       return reply.code(401).send({ error: 'INVALID_SIGNATURE', message: 'signature does not verify' });
     }
 
+    // The previous handle (if any) needs to be evicted from the lookup
+    // cache too, otherwise a freed name keeps resolving to the old owner
+    // for up to 30s.
+    const { rows: prevRows } = await app.pool.query<{ display_name: string | null }>(
+      `SELECT display_name FROM accounts WHERE pubkey=$1`,
+      [s.pubkey],
+    );
+    const previousName = prevRows[0]?.display_name ?? null;
+
     try {
       // Explicit ::text casts on the nullable parameters: Postgres can't
       // infer their type from the CASE expressions otherwise (and would
@@ -67,6 +80,17 @@ export async function accountRoutes(app: FastifyInstance) {
       }
       throw e;
     }
+
+    // Drop caches that depend on this account's display name. /activity
+    // joins counterparty pubkeys to their current handle; arbitrary
+    // other users could have this pubkey cached as a counterparty, so
+    // clear the whole activity cache. Display name changes are rare
+    // and the cache is in-process, so a flush is cheap.
+    app.invalidateAccount(s.pubkey);
+    app.invalidateLookup(previousName);
+    app.invalidateLookup(normalized);
+    app.caches.activity.clear();
+
     return { ok: true as const, display_name: normalized };
   });
 
@@ -74,19 +98,37 @@ export async function accountRoutes(app: FastifyInstance) {
    * Public lookup: resolve a display name to a pubkey. Case-insensitive.
    * Open to anyone (no session required) so unauthenticated UIs can show
    * "you're sending to alice" before the user has signed in.
+   *
+   * Cached for 30s per (lower-cased) name with single-flight on miss.
+   * Cached entries — including misses (null) — are explicitly evicted
+   * by /me/display_name above so a freed/taken name flips immediately.
    */
-  app.get<{ Params: { name: string } }>('/lookup/:name', async (req, reply) => {
-    const raw = req.params.name ?? '';
-    if (raw.length === 0 || raw.length > DISPLAY_NAME_MAX) {
-      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid display name' });
-    }
-    const { rows } = await app.pool.query<{ pubkey: string; display_name: string }>(
-      `SELECT pubkey, display_name FROM accounts WHERE lower(display_name) = lower($1) LIMIT 1`,
-      [raw],
-    );
-    if (rows.length === 0) {
-      return reply.code(404).send({ error: 'NAME_NOT_FOUND', message: 'no account with that display name' });
-    }
-    return { pubkey: rows[0]!.pubkey, display_name: rows[0]!.display_name };
-  });
+  app.get<{ Params: { name: string } }>(
+    '/lookup/:name',
+    {
+      // Looser per-IP limit: this is a hot endpoint hit from autocomplete,
+      // and authenticated users already pay this cost on every keystroke.
+      // Still bounded to stop someone walking the namespace.
+      config: { rateLimit: { max: 240, timeWindow: '1 minute' } },
+    },
+    async (req, reply) => {
+      const raw = req.params.name ?? '';
+      if (raw.length === 0 || raw.length > DISPLAY_NAME_MAX) {
+        return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid display name' });
+      }
+      const cacheKey = raw.toLowerCase();
+      const hit = await app.caches.lookup.get(cacheKey, async () => {
+        const { rows } = await app.pool.query<LookupHit>(
+          `SELECT pubkey, display_name FROM accounts WHERE lower(display_name) = lower($1) LIMIT 1`,
+          [raw],
+        );
+        return rows[0] ?? null;
+      });
+      reply.header('cache-control', 'public, max-age=10');
+      if (hit === null) {
+        return reply.code(404).send({ error: 'NAME_NOT_FOUND', message: 'no account with that display name' });
+      }
+      return hit;
+    },
+  );
 }

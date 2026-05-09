@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { PasswordPair } from '../components/PasswordPair.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { useMe } from '../hooks/useMe.js';
 import {
@@ -112,20 +113,21 @@ function SimpleSignup({ onDone }: { onDone: () => void }) {
     }
     setAvailability({ state: 'checking' });
     const target = handleValidation.normalized;
+    // Cancel out-of-order responses with an AbortController so a slow
+    // /lookup for an old keystroke can't overwrite a fresher result.
+    const ctrl = new AbortController();
     const t = window.setTimeout(async () => {
       try {
         await api.lookup(target);
-        // 200 = a row exists for that name → taken.
-        setAvailability((prev) => prev.state === 'checking' ? { state: 'taken' } : prev);
+        if (ctrl.signal.aborted) return;
+        setAvailability({ state: 'taken' });
       } catch (e: any) {
-        if (e?.error === 'NAME_NOT_FOUND') {
-          setAvailability((prev) => prev.state === 'checking' ? { state: 'available' } : prev);
-        } else {
-          setAvailability({ state: 'idle' });
-        }
+        if (ctrl.signal.aborted) return;
+        if (e?.error === 'NAME_NOT_FOUND') setAvailability({ state: 'available' });
+        else setAvailability({ state: 'idle' });
       }
     }, 350);
-    return () => window.clearTimeout(t);
+    return () => { window.clearTimeout(t); ctrl.abort(); };
   }, [handle, handleValidation]);
 
   const passwordsMatch = password === confirm;
@@ -263,6 +265,7 @@ function SimpleSignup({ onDone }: { onDone: () => void }) {
         <input
           value={handle}
           onChange={(e) => setHandle(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) startSignup(); }}
           style={{ width: '28ch' }}
           placeholder="3–32 chars"
           autoComplete="username"
@@ -281,6 +284,7 @@ function SimpleSignup({ onDone }: { onDone: () => void }) {
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) startSignup(); }}
           style={{ width: '28ch' }}
           autoComplete="new-password"
           disabled={step.kind !== 'idle'}
@@ -296,6 +300,7 @@ function SimpleSignup({ onDone }: { onDone: () => void }) {
             type="password"
             value={confirm}
             onChange={(e) => setConfirm(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && canSubmit) startSignup(); }}
             style={{ width: '28ch' }}
             autoComplete="new-password"
             disabled={step.kind !== 'idle'}
@@ -401,51 +406,37 @@ async function authenticate(kp: RpowKeypair): Promise<void> {
   });
 }
 
-function PasswordRow({
-  password, setPassword, confirm, setConfirm,
+/**
+ * Generic shell for the three "advanced" sign-in tabs that all follow
+ * the same shape: a tab-specific input, a password pair, a primary
+ * button. The caller supplies the input as a slot and a `buildKeypair`
+ * factory bound to whichever wallet method matches the input (mnemonic,
+ * private key, or seeded mnemonic).
+ *
+ * The shell handles password match, busy state, error surface, the
+ * /auth/challenge → /auth/session round trip, and onDone navigation —
+ * so each tab only owns its specific input + a one-line factory.
+ */
+function SignInForm({
+  body, canSubmitBody, buildKeypair, submitLabel, onDone,
 }: {
-  password: string;
-  setPassword: (s: string) => void;
-  confirm: string;
-  setConfirm: (s: string) => void;
+  body: ReactNode;
+  canSubmitBody: boolean;
+  buildKeypair: (password: string | undefined) => Promise<RpowKeypair>;
+  submitLabel: string;
+  onDone: () => void;
 }) {
-  const mismatch = !!confirm && confirm !== password;
-  return (
-    <>
-      <div>
-        PASSWORD : <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} style={{ width: '32ch' }} autoComplete="new-password" />
-      </div>
-      {!!password && (
-        <div>
-          CONFIRM&nbsp; : <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} style={{ width: '32ch' }} autoComplete="new-password" />
-          {mismatch && <span className="error" style={{ marginLeft: 8, fontSize: 12 }}>passwords don't match</span>}
-        </div>
-      )}
-      <div style={{ marginTop: 4, color: 'var(--dim)', fontSize: 12 }}>
-        encrypts your wallet on this device. leave blank to use it in
-        this tab only — closing the tab will sign you out.
-      </div>
-    </>
-  );
-}
-
-function CreateTab({ onDone }: { onDone: () => void }) {
-  const wallet = useWallet();
-  const [mnemonic, setMnemonic] = useState<string>(() => wallet.createNewMnemonic());
-  const [confirmed, setConfirmed] = useState(false);
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => { setConfirmed(false); }, [mnemonic]);
-
-  async function finish() {
+  async function submit() {
     setError('');
-    if (password !== confirm) { setError('passwords do not match'); return; }
+    if (password !== confirm) { setError("passwords don't match"); return; }
     setBusy(true);
     try {
-      const kp = await wallet.finalizeNewMnemonic(mnemonic, { password: password || undefined });
+      const kp = await buildKeypair(password || undefined);
       await authenticate(kp);
       onDone();
     } catch (e: any) {
@@ -455,9 +446,38 @@ function CreateTab({ onDone }: { onDone: () => void }) {
     }
   }
 
-  const words = mnemonic.trim().split(/\s+/);
+  const submitDisabled = busy || !canSubmitBody || (!!password && password !== confirm);
 
   return (
+    <>
+      {body}
+      <div style={{ marginTop: 8 }}>
+        <PasswordPair
+          password={password}
+          setPassword={setPassword}
+          confirm={confirm}
+          setConfirm={setConfirm}
+          onSubmit={() => { if (!submitDisabled) submit(); }}
+        />
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <button onClick={submit} disabled={submitDisabled}>[ {busy ? '...' : submitLabel} ]</button>
+      </div>
+      {error && <div className="error" style={{ marginTop: 8 }}>error: {error}</div>}
+    </>
+  );
+}
+
+function CreateTab({ onDone }: { onDone: () => void }) {
+  const wallet = useWallet();
+  const [mnemonic, setMnemonic] = useState<string>(() => wallet.createNewMnemonic());
+  const [confirmed, setConfirmed] = useState(false);
+
+  // Reset the "I wrote it down" check whenever a new mnemonic is generated.
+  useEffect(() => { setConfirmed(false); }, [mnemonic]);
+
+  const words = mnemonic.trim().split(/\s+/);
+  const seedDisplay = (
     <>
       <div style={{ marginBottom: 8, color: 'var(--dim)', fontSize: 12 }}>
         write these words down somewhere safe. they're the only way to
@@ -482,116 +502,81 @@ function CreateTab({ onDone }: { onDone: () => void }) {
         ))}
       </div>
       <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-        <button onClick={() => setMnemonic(wallet.createNewMnemonic())} disabled={busy}>[ regenerate ]</button>
+        <button onClick={() => setMnemonic(wallet.createNewMnemonic())}>[ regenerate ]</button>
         <CopyButton text={mnemonic} label="copy phrase" />
         <label style={{ marginLeft: 8 }}>
           <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
           {' '}I have written these down
         </label>
       </div>
-      <div style={{ marginTop: 16 }}>
-        <PasswordRow password={password} setPassword={setPassword} confirm={confirm} setConfirm={setConfirm} />
-      </div>
-      <div style={{ marginTop: 12 }}>
-        <button onClick={finish} disabled={!confirmed || busy}>[ {busy ? '...' : 'CREATE WALLET'} ]</button>
-      </div>
-      {error && <div className="error" style={{ marginTop: 8 }}>error: {error}</div>}
     </>
+  );
+
+  return (
+    <SignInForm
+      body={seedDisplay}
+      canSubmitBody={confirmed}
+      buildKeypair={(password) => wallet.finalizeNewMnemonic(mnemonic, { password })}
+      submitLabel="CREATE WALLET"
+      onDone={onDone}
+    />
   );
 }
 
 function ImportMnemonicTab({ onDone }: { onDone: () => void }) {
   const wallet = useWallet();
   const [mnemonic, setMnemonic] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function finish() {
-    setError('');
-    if (password !== confirm) { setError('passwords do not match'); return; }
-    setBusy(true);
-    try {
-      const kp = await wallet.importMnemonic(mnemonic, { password: password || undefined });
-      await authenticate(kp);
-      onDone();
-    } catch (e: any) {
-      setError(e?.message ?? 'failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  const body = (
+    <div>
+      PHRASE : <textarea
+        value={mnemonic}
+        onChange={(e) => setMnemonic(e.target.value)}
+        rows={3}
+        style={{ width: '60ch', display: 'block', marginTop: 4 }}
+        placeholder="paste your 12 or 24 recovery words"
+        autoCapitalize="off"
+        autoCorrect="off"
+        spellCheck={false}
+        autoFocus
+      />
+    </div>
+  );
   return (
-    <>
-      <div>
-        PHRASE : <textarea
-          value={mnemonic}
-          onChange={(e) => setMnemonic(e.target.value)}
-          rows={3}
-          style={{ width: '60ch', display: 'block', marginTop: 4 }}
-          placeholder="paste your 12 or 24 recovery words"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-        />
-      </div>
-      <div style={{ marginTop: 8 }}>
-        <PasswordRow password={password} setPassword={setPassword} confirm={confirm} setConfirm={setConfirm} />
-      </div>
-      <div style={{ marginTop: 12 }}>
-        <button onClick={finish} disabled={busy || !mnemonic.trim()}>[ {busy ? '...' : 'SIGN IN'} ]</button>
-      </div>
-      {error && <div className="error" style={{ marginTop: 8 }}>error: {error}</div>}
-    </>
+    <SignInForm
+      body={body}
+      canSubmitBody={!!mnemonic.trim()}
+      buildKeypair={(password) => wallet.importMnemonic(mnemonic, { password })}
+      submitLabel="SIGN IN"
+      onDone={onDone}
+    />
   );
 }
 
 function ImportPrivateKeyTab({ onDone }: { onDone: () => void }) {
   const wallet = useWallet();
   const [pk, setPk] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function finish() {
-    setError('');
-    if (password !== confirm) { setError('passwords do not match'); return; }
-    setBusy(true);
-    try {
-      const kp = await wallet.importPrivateKey(pk, { password: password || undefined });
-      await authenticate(kp);
-      onDone();
-    } catch (e: any) {
-      setError(e?.message ?? 'failed');
-    } finally {
-      setBusy(false);
-    }
-  }
-
+  const body = (
+    <div>
+      PRIVATE KEY : <input
+        value={pk}
+        onChange={(e) => setPk(e.target.value)}
+        style={{ width: '60ch' }}
+        placeholder="paste a base58 secret key or 32-byte hex seed"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        autoFocus
+      />
+    </div>
+  );
   return (
-    <>
-      <div>
-        PRIVATE KEY : <input
-          value={pk}
-          onChange={(e) => setPk(e.target.value)}
-          style={{ width: '60ch' }}
-          placeholder="paste a base58 secret key or 32-byte hex seed"
-          autoComplete="off"
-          autoCorrect="off"
-          spellCheck={false}
-        />
-      </div>
-      <div style={{ marginTop: 8 }}>
-        <PasswordRow password={password} setPassword={setPassword} confirm={confirm} setConfirm={setConfirm} />
-      </div>
-      <div style={{ marginTop: 12 }}>
-        <button onClick={finish} disabled={busy || !pk.trim()}>[ {busy ? '...' : 'SIGN IN'} ]</button>
-      </div>
-      {error && <div className="error" style={{ marginTop: 8 }}>error: {error}</div>}
-    </>
+    <SignInForm
+      body={body}
+      canSubmitBody={!!pk.trim()}
+      buildKeypair={(password) => wallet.importPrivateKey(pk, { password })}
+      submitLabel="SIGN IN"
+      onDone={onDone}
+    />
   );
 }
 

@@ -69,6 +69,18 @@ export interface WalletContextValue {
   unlock(password: string): Promise<RpowKeypair>;
 
   /**
+   * Take the in-memory secret (set when the wallet was first adopted
+   * this session) and write an encrypted copy to IndexedDB under the
+   * given password. Lets a session-only wallet upgrade to persistent
+   * storage without re-entering the seed phrase.
+   *
+   * Throws if there's no in-memory secret (e.g. the wallet was unlocked
+   * from an existing encrypted blob — change-password is a separate
+   * flow), or if the password is empty.
+   */
+  persistVolatileSecret(password: string): Promise<void>;
+
+  /**
    * Reveal the stored secret (mnemonic OR raw private key) by re-deriving
    * it from the encrypted blob. Requires the wallet password. Returns the
    * plaintext + kind without changing in-memory state — the caller is
@@ -209,6 +221,20 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       setKeypair(kp);
       setStatus('unlocked');
       return kp;
+    },
+
+    async persistVolatileSecret(password: string) {
+      const v = volatileSecretRef.current;
+      const kp = keypairRef.current;
+      if (!v || !kp) throw new Error('no in-memory wallet to save (try signing in again)');
+      if (!password) throw new Error('password is required');
+      await saveEncryptedSecret({
+        pubkey: kp.publicKeyBase58,
+        kind: v.kind,
+        plaintext: v.plaintext,
+        password,
+      });
+      setMeta(await loadMeta());
     },
 
     async revealSecret(password: string) {

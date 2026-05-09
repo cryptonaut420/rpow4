@@ -1,7 +1,77 @@
-RPOW scaling implementation
+RPOW scaling + robustness implementation
 
 - [x] Add balance/event/stat schema and remove bridge-only schema from active model.
 - [x] Update mint/send/me/ledger/activity to use account balances and ledger events.
 - [x] Remove SRPOW/Solana wrapping routes, types, UI fields, tests, scripts, and dependencies.
 - [x] Add focused accounting/concurrency tests.
 - [x] Run tests/lints and fix regressions.
+
+DB + caching robustness pass:
+- [x] Unified TtlCache primitive (TTL + single-flight + LRU bound).
+- [x] Per-pubkey caching on /me and /activity with cross-route invalidation.
+- [x] Per-name caching on /lookup with eviction on display-name change.
+- [x] /ledger and /ledger/events use the same primitive (replaces ad-hoc inline cache).
+- [x] /challenge supply check uses the same primitive.
+- [x] withTxRetry: auto-retry on deadlock_detected and serialization_failure with exponential backoff.
+- [x] Pool 'error' listener with structured logging via attachPoolErrorLogger.
+- [x] /health (liveness) and /health/ready (DB probe) split.
+- [x] Slow-request hook logs >250ms requests.
+- [x] @fastify/rate-limit with conservative global default + per-route overrides on hot endpoints.
+- [x] Graceful SIGTERM/SIGINT shutdown that drains the server before closing the pool.
+- [x] uncaughtException / unhandledRejection logging tied to graceful shutdown.
+- [x] Tests for TtlCache, withTxRetry, and the new readiness probe.
+
+API + DB lightning-fast pass:
+- [x] Migration 014: drop inert legacy tables (tokens, transfers, challenges).
+- [x] fillfactor + autovacuum tuning on every hot UPDATE table for HOT updates and faster bloat reclaim.
+- [x] Pre-serialized response cache: /ledger and /ledger/events skip JSON.stringify + ETag hash on every cache hit.
+- [x] @fastify/compress for brotli/gzip/deflate above a 1KB threshold.
+- [x] Static rpow-pubkey.pem precomputed at startup with immutable cache-control.
+
+Billion-row ledger pass:
+- [x] Migration 015: convert ledger_events to event_seq RANGE partitions (128 x 100M rows + default safety partition).
+- [x] Add sidecar uniqueness tables for event ids, mint challenge claims, and transfer idempotency keys.
+- [x] Add ledger_recent_events bounded hot feed for /ledger/events.
+- [x] Add account_recent_events bounded per-account activity cache for /activity.
+- [x] Mint/send write paths mirror events into hot tables in the same transaction as the durable ledger insert.
+- [x] /ledger/events hits the hot feed first and falls back to partitioned history only when needed.
+- [x] /activity hits per-account hot rows first and falls back to partitioned history only when needed.
+- [x] Ops parity/restore row-count checks updated for the active scalable schema.
+- [x] Tests cover partitioning, durable-history fallback, and hot per-account activity rows.
+
+Final hot-path optimization pass:
+- [x] Public /ledger and /ledger/events caches moved to app-level caches with explicit invalidation on mint/send/signup/new auth account.
+- [x] /ledger aggregate refresh reduced from three DB round trips to one scalar-subquery round trip.
+- [x] /ledger/events avoids partitioned-history fallback on the default newest page when hot feed has rows.
+- [x] /activity trusts account_recent_events for active accounts and only falls back to partitioned history for dormant/no-hot-row accounts.
+- [x] /send normal path removes redundant post-lock duplicate SELECT; unique idempotency insert catches races before debit work.
+- [x] Hot-feed trimming amortized: global trim every 256 events, per-account trim every 32 events instead of every write.
+- [x] Tests verify immediate public ledger/event cache invalidation after mint.
+
+Code quality / maintainability pass:
+- [x] Fixed TtlCache invalidation race: stale in-flight loaders can no longer repopulate caches after invalidate()/clear().
+- [x] TtlCache now preserves newer in-flight loaders when older invalidated loaders finish.
+- [x] Removed unused CachedJsonResponse.body field.
+- [x] Removed unused withClient helper from db.ts and updated architecture docs.
+- [x] Hardened withTx rollback so rollback failure does not hide the original transaction error.
+- [x] Simplified /activity historical fallback by removing dead cursor logic.
+- [x] Removed misleading stale comments from 014_perf_cleanup.sql.
+- [x] Added 016 migration to drop redundant hot-table indexes and reduce write amplification.
+- [x] Added cache race regression tests.
+
+Deep bug/optimization pass:
+- [x] Reserve ledger_event_ids before partitioned ledger_events inserts so global event-id uniqueness is enforced outside partition-local indexes.
+- [x] Move mint event-id reservation after duplicate-claim and supply-cap checks to avoid wasted sidecar writes on rejected mints.
+- [x] Restore /activity's latest-100 contract for accounts with sparse hot rows by filling from partitioned history after the oldest hot row.
+- [x] Add activity regression coverage for sparse hot rows + older durable history.
+- [x] Add mint/send sidecar consistency assertions so event ids, claim rows, idempotency rows, and durable event_seq stay in sync.
+
+Ultra-low-latency pass:
+- [x] Cached session HMAC verifier shared by every authenticated route — skips HMAC + base64 + JSON.parse on each authed request.
+- [x] app.readSession decoration replaces the per-route readSession(req, secret) calls.
+- [x] Mint commit folds INSERT ledger_events + UPDATE ledger_event_ids + UPDATE ledger_mint_claims into a single CTE round-trip.
+- [x] Send commit folds INSERT ledger_events + UPDATE ledger_event_ids + UPDATE ledger_transfer_idempotency into a single CTE round-trip.
+- [x] Hot-table mirror does one multi-row INSERT for sender + recipient on TRANSFER instead of two single-row INSERTs.
+- [x] /health and /health/ready use fast-json-stringify response schemas so probe responses skip generic JSON.stringify.
+- [x] Cached session verifier coverage in tests (positive, negative, exp boundary).
+
