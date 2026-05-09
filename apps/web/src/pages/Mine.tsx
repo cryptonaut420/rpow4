@@ -30,6 +30,30 @@ const DISPLAY_TICK_MS = 250;
 // to about once per second.
 const REFRESH_THROTTLE_MS = 1000;
 
+function MiningHistoryBlurb() {
+  return (
+    <Panel title="MINING ORIGINS">
+      <div style={{ color: 'var(--dim)', fontSize: 12, lineHeight: 1.6 }}>
+        Proof-of-work started as an anti-abuse idea before it became mining.
+        Cynthia Dwork and Moni Naor described CPU-pricing for junk mail in the
+        early 1990s; Adam Back's Hashcash made the pattern famous for email:
+        spend a little computation to create a stamp that is expensive to make
+        and cheap to verify. Hal Finney's RPOW made those proofs reusable, and
+        Bitcoin turned proof-of-work into a public timestamping race with rewards.
+        <br /><br />
+        RPOW4 keeps the primitive deliberately simple. Your browser receives a
+        server-signed challenge with a random <code style={{ color: 'var(--fg)' }}>nonce_prefix</code>,
+        then scans integer nonces. For each attempt it hashes{' '}
+        <code style={{ color: 'var(--fg)' }}>SHA-256(nonce_prefix || u64le(nonce))</code>.
+        A block is won when the hash has at least the current difficulty's number
+        of trailing zero bits. The worker uses <code style={{ color: 'var(--fg)' }}>hash-wasm</code>{' '}
+        for fast browser SHA-256; the server verifies the exact same byte string
+        with Node's crypto SHA-256 before crediting the reward.
+      </div>
+    </Panel>
+  );
+}
+
 export function MinePage() {
   usePageMeta('Mine', 'Earn RPOW4 tokens by solving proof-of-work challenges in your browser. Contribute to the network and collect mining rewards.');
   const wallet = useWallet();
@@ -310,8 +334,9 @@ export function MinePage() {
     : '';
 
   return (
-    <Panel title="MINE">
-      <pre style={{ margin: 0 }}>
+    <>
+      <Panel title="MINE">
+        <pre style={{ margin: 0 }}>
 {`  BALANCE          : ${formatRpow(me.balance_base_units)} RPOW
   TOTAL MINTED     : ${formatRpow(me.minted_base_units)} RPOW
 
@@ -322,23 +347,25 @@ ${rewardBlock}  TARGET           : ${target ?? '--'} trailing zero bits
   STATUS           : ${status.toUpperCase()}
   MINED THIS RUN   : ${sessionMinted}${sessionRewardLabel}${error ? `\n  ERROR            : ${error}` : ''}
 `}
-      </pre>
-      <MiningVisualizer
-        target={target ?? (ledger?.current_difficulty_bits ?? 0)}
-        handlesRef={vizHandlesRef}
-      />
-      {lastTokenId && (
-        <div style={{ marginTop: 4, color: 'var(--dim)', fontSize: 12 }}>
-          last token: <code>{lastTokenId}</code> <CopyButton text={lastTokenId} />
-        </div>
-      )}
-      <div style={{ marginTop: 8 }}>
-        {running ? (
-          <button onClick={stop}>[ STOP ]</button>
-        ) : (
-          <button onClick={start}>[ MINE ]</button>
+        </pre>
+        <MiningVisualizer
+          target={target ?? (ledger?.current_difficulty_bits ?? 0)}
+          handlesRef={vizHandlesRef}
+        />
+        {lastTokenId && (
+          <div style={{ marginTop: 4, color: 'var(--dim)', fontSize: 12 }}>
+            last token: <code>{lastTokenId}</code> <CopyButton text={lastTokenId} />
+          </div>
         )}
-      </div>
-    </Panel>
+        <div style={{ marginTop: 8 }}>
+          {running ? (
+            <button onClick={stop}>[ STOP ]</button>
+          ) : (
+            <button onClick={start}>[ MINE ]</button>
+          )}
+        </div>
+      </Panel>
+      <MiningHistoryBlurb />
+    </>
   );
 }
