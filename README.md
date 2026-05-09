@@ -25,7 +25,7 @@ Standing on the shoulders of the projects that came before:
 - **Block explorer** — browse blocks, transfers, claims, and account histories.
 - **Public API docs** — every route documented in-app, signing rules included.
 - **Improvements across every other module** the predecessors shipped — mining loop, ledger consistency, observability, deploy story (one-shot AWS EC2 script + Let's Encrypt).
-- **Much more to come** — solana bridge scaffolding is already in `packages/solana-bridge`.
+- **Much more to come.**
 - **Some fun / interesting history** in [`docs/overview/`](./docs/overview/README.md) and the Hal Finney material it points to — worth a read.
 
 ## Quickstart
