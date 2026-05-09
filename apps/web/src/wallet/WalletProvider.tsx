@@ -19,10 +19,13 @@ import {
   type RpowKeypair,
 } from '@rpow/shared';
 import {
+  clearSessionWallet,
   clearWallet,
   loadEncryptedSecret,
   loadMeta,
+  loadSessionWallet,
   saveEncryptedSecret,
+  saveSessionWallet,
   type WalletKind,
   type WalletMeta,
 } from './store.js';
@@ -129,6 +132,35 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const m = await loadMeta();
+
+        // Try to auto-restore the key from the session cache first.
+        // This covers both session-only wallets and password-protected wallets
+        // that have already been unlocked once during this browser session.
+        const session = loadSessionWallet();
+        if (session) {
+          // If there IS an encrypted wallet in IndexedDB, verify pubkeys match
+          // before trusting the cache — guards against stale/mismatched data.
+          if (!m || m.pubkey === session.pubkey) {
+            try {
+              const kp =
+                session.kind === 'mnemonic'
+                  ? mnemonicToKeypair(session.plaintext)
+                  : privateKeyToKeypair(session.plaintext);
+              if (m) setMeta(m);
+              keypairRef.current = kp;
+              volatileSecretRef.current = { plaintext: session.plaintext, kind: session.kind };
+              setStatus('unlocked');
+              return;
+            } catch {
+              // Corrupt session cache — fall through to normal flow.
+              clearSessionWallet();
+            }
+          } else {
+            // Pubkey mismatch (different account?) — discard stale cache.
+            clearSessionWallet();
+          }
+        }
+
         setMeta(m);
         setStatus(m ? 'locked' : 'empty');
       } catch {
@@ -167,6 +199,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // ONLY in-memory copy of the secret (the keypair only holds the
       // 64-byte secretKey, not the originating mnemonic).
       volatileSecretRef.current = { plaintext: opts.plaintext, kind: opts.kind };
+      // Also cache in sessionStorage so page refreshes (same tab) don't
+      // drop the user back to the login screen.
+      saveSessionWallet({ pubkey: opts.kp.publicKeyBase58, kind: opts.kind, plaintext: opts.plaintext });
       setKeypair(opts.kp);
       setStatus('unlocked');
       return opts.kp;
@@ -218,6 +253,8 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         // tampered with.
         throw new Error('decrypted wallet does not match stored pubkey');
       }
+      // Cache in sessionStorage so this tab doesn't need a password on refresh.
+      saveSessionWallet({ pubkey: kp.publicKeyBase58, kind: decrypted.kind, plaintext: decrypted.plaintext });
       setKeypair(kp);
       setStatus('unlocked');
       return kp;
@@ -254,12 +291,14 @@ export function WalletProvider({ children }: { children: ReactNode }) {
     },
 
     lock() {
+      clearSessionWallet();
       volatileSecretRef.current = null;
       setKeypair(null);
       setStatus(meta ? 'locked' : 'empty');
     },
 
     async forget() {
+      clearSessionWallet();
       volatileSecretRef.current = null;
       await clearWallet();
       setKeypair(null);

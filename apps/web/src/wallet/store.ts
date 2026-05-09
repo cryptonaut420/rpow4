@@ -109,3 +109,64 @@ export async function clearWallet(): Promise<void> {
   await tx(META_STORE, 'readwrite', (s) => s.delete(KEY));
   await tx(SECRET_STORE, 'readwrite', (s) => s.delete(KEY));
 }
+
+// ── Session-level wallet cache ────────────────────────────────────────────────
+//
+// `sessionStorage` is cleared automatically when the browser tab is closed,
+// which makes it appropriate for caching the decrypted wallet key for the
+// lifetime of a browsing session.  Unlike `localStorage` it does not persist
+// across sessions or appear in other unrelated tabs.
+//
+// We stash the plaintext secret here after every unlock / new-account event
+// so that:
+//   a) a page refresh does NOT force the user to re-enter their password or
+//      re-import their mnemonic — the key is restored automatically.
+//   b) opening a duplicate of the tab ("Duplicate tab") also inherits the
+//      cache, so the user stays signed in there too.
+//
+// Clearing the cache on lock() / forget() keeps the key's lifetime correctly
+// scoped to the user's explicit session.
+
+const SESSION_STORAGE_KEY = 'rpow4-wallet-session';
+
+export interface SessionWallet {
+  pubkey: string;
+  kind: WalletKind;
+  plaintext: string;
+}
+
+export function saveSessionWallet(w: SessionWallet): void {
+  try {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(w));
+  } catch {
+    // Silently ignore — e.g. storage quota exceeded in private browsing.
+  }
+}
+
+export function loadSessionWallet(): SessionWallet | null {
+  try {
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed &&
+      typeof (parsed as Record<string, unknown>).pubkey === 'string' &&
+      typeof (parsed as Record<string, unknown>).plaintext === 'string' &&
+      ((parsed as Record<string, unknown>).kind === 'mnemonic' ||
+        (parsed as Record<string, unknown>).kind === 'privateKey')
+    ) {
+      return parsed as SessionWallet;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearSessionWallet(): void {
+  try {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}

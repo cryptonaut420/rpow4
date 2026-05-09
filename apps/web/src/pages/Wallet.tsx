@@ -10,6 +10,27 @@ import { useWallet } from '../wallet/WalletProvider.js';
 import { api } from '../api.js';
 import { formatRpow } from '../lib/format.js';
 
+function WalletHistoryBlurb() {
+  return (
+    <Panel title="WALLET ORIGINS">
+      <div style={{ color: 'var(--dim)', fontSize: 12, lineHeight: 1.6 }}>
+        In the earliest Bitcoin releases, the wallet was not a separate app or
+        browser extension. The node, miner, and wallet were one program:
+        <code style={{ color: 'var(--fg)' }}> bitcoin-qt</code> held keys, talked
+        to peers, validated the chain, and mined blocks. Running Bitcoin meant
+        carrying the whole stack locally.
+        <br /><br />
+        Later, wallets split away from full nodes and mining rigs. Seed phrases
+        made key backup human-portable: BIP-39 standardized mnemonic words that
+        derive a wallet seed, so the important thing to preserve became a short
+        phrase instead of a raw private key file. RPOW4 follows that modern
+        pattern: your browser holds the signing keys; the public ledger only sees
+        the signatures.
+      </div>
+    </Panel>
+  );
+}
+
 export function WalletPage() {
   usePageMeta('Wallet', 'Manage your RPOW4 wallet. View your balance, public key, and account details.');
   const wallet = useWallet();
@@ -20,12 +41,15 @@ export function WalletPage() {
 
   if (wallet.status !== 'unlocked' || !me) {
     return (
-      <Panel title="WALLET">
-        <div>not signed in.</div>
-        <div style={{ marginTop: 8 }}>
-          <Link to="/login">[ {wallet.status === 'locked' ? 'unlock wallet' : 'create or import wallet'} ]</Link>
-        </div>
-      </Panel>
+      <>
+        <Panel title="WALLET">
+          <div>not signed in.</div>
+          <div style={{ marginTop: 8 }}>
+            <Link to="/login">[ {wallet.status === 'locked' ? 'unlock wallet' : 'create or import wallet'} ]</Link>
+          </div>
+        </Panel>
+        <WalletHistoryBlurb />
+      </>
     );
   }
 
@@ -77,6 +101,8 @@ export function WalletPage() {
           </button>
         </div>
       </Panel>
+
+      <WalletHistoryBlurb />
 
       <Panel title="BACKUP / RECOVERY">
         <div style={{ color: 'var(--dim)', fontSize: 12, marginBottom: 8 }}>

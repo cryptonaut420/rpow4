@@ -117,6 +117,30 @@ function SearchBar() {
 
 // ---- Network feed view ------------------------------------------------------
 
+function ExplorerHistoryBlurb() {
+  return (
+    <div
+      style={{
+        border: '1px dashed var(--dim)',
+        padding: '8px 10px',
+        marginBottom: 14,
+        color: 'var(--dim)',
+        fontSize: 12,
+        lineHeight: 1.6,
+      }}
+    >
+      <strong style={{ color: 'var(--fg)' }}>BLOCK EXPLORER ORIGINS:</strong>{' '}
+      The earliest Bitcoin explorers appeared in 2010, when the chain was still
+      small enough to feel like a strange public notebook. Sites like Block
+      Explorer and later Blockchain.info turned raw node data into something
+      humans could browse: blocks, transactions, addresses, balances, and the
+      living pulse of a permissionless ledger. That pattern became part of
+      cryptocurrency culture: if the ledger is public, the public should be able
+      to inspect it.
+    </div>
+  );
+}
+
 function FeedView() {
   const [events, setEvents] = useState<ExplorerEvent[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
@@ -478,7 +502,10 @@ export function ExplorerPage() {
       ) : accountPubkey ? (
         <AccountView pubkey={accountPubkey} />
       ) : (
-        <FeedView />
+        <>
+          <ExplorerHistoryBlurb />
+          <FeedView />
+        </>
       )}
     </Panel>
   );
