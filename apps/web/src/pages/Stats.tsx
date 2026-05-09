@@ -33,6 +33,9 @@ const SORT_LABELS: Record<LeaderboardSort, { tab: string; panel: string; primary
   minted:  { tab: 'most mined', panel: 'TOP 100 MINERS', primary: 'MINED' },
 };
 
+/** Network stats + both leaderboards refresh on this interval while the page is open. */
+const STATS_REFRESH_MS = 30_000;
+
 export function StatsPage() {
   usePageMeta('Stats', 'RPOW4 network statistics, mining leaderboards, and richest accounts on the network.');
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
@@ -45,31 +48,49 @@ export function StatsPage() {
 
   useEffect(() => {
     let cancelled = false;
-    api.ledger()
-      .then((l) => { if (!cancelled) setLedger(l); })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : 'failed to load ledger');
-      });
-    return () => { cancelled = true; };
+    const load = () => {
+      api.ledger()
+        .then((l) => { if (!cancelled) setLedger(l); })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          setError(e instanceof Error ? e.message : 'failed to load ledger');
+        });
+    };
+    load();
+    const id = window.setInterval(load, STATS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
   }, []);
 
   useEffect(() => {
-    if (boards[sort]) return;
     let cancelled = false;
-    setLoadingBoard(true);
-    api.leaderboard(sort)
-      .then((b) => {
-        if (cancelled) return;
-        setBoards((prev) => ({ ...prev, [sort]: b }));
-      })
-      .catch((e: unknown) => {
-        if (cancelled) return;
-        setError(e instanceof Error ? e.message : 'failed to load leaderboard');
-      })
-      .finally(() => { if (!cancelled) setLoadingBoard(false); });
-    return () => { cancelled = true; };
-  }, [sort, boards]);
+    const loadBoth = (isInitial: boolean) => {
+      if (isInitial) setLoadingBoard(true);
+      Promise.all([api.leaderboard('balance'), api.leaderboard('minted')])
+        .then(([balance, minted]) => {
+          if (cancelled) return;
+          setBoards({ balance, minted });
+        })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          if (isInitial) {
+            setError(e instanceof Error ? e.message : 'failed to load leaderboard');
+          }
+          /* background refresh: keep last good snapshot */
+        })
+        .finally(() => {
+          if (!cancelled && isInitial) setLoadingBoard(false);
+        });
+    };
+    loadBoth(true);
+    const id = window.setInterval(() => loadBoth(false), STATS_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, []);
 
   if (error) {
     return <Panel title="STATS"><div className="error">{error}</div></Panel>;
@@ -198,7 +219,7 @@ function LeaderboardTable({
       </div>
       <div style={{ marginTop: 12, color: 'var(--dim)', fontSize: 12 }}>
         snapshot: {generatedAt.replace('T', ' ').slice(0, 19)} UTC
-        {' · '}refreshes every 10s
+        {' · '}refreshes every 30s
       </div>
     </>
   );

@@ -22,6 +22,8 @@ import { SupplyBar } from './components/SupplyBar.js';
 import { MiningBar } from './components/MiningBar.js';
 import { MiningProvider } from './mining/MiningProvider.js';
 import { shortPubkey } from '@rpow/shared';
+import { POSTHOG_ENABLED } from './analytics/posthogClient.js';
+import { PostHogPageViews } from './analytics/PostHogPageViews.js';
 
 const HEADER = [
   '+======================================================================+',
@@ -45,6 +47,7 @@ export default function App() {
 
   return (
     <HashRouter>
+      {POSTHOG_ENABLED ? <PostHogPageViews /> : null}
       <MiningProvider>
       <div className="app-shell">
         <header>
