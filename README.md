@@ -4,6 +4,30 @@
 
 A faithful modern recreation of Hal Finney's [Reusable Proofs of Work](https://nakamotoinstitute.org/finney/rpow/) (2004), Bitcoin-flavored. BIP-39 / SLIP-0010 wallet auth (no email), hashcash mining, maintained balance rows, per-action client signatures persisted on the ledger, public statistics. **50 RPOW initial reward, halving every 210,000 blocks, hard 21,000,000 cap, no founder allocation.**
 
+## Lineage
+
+Standing on the shoulders of the projects that came before:
+
+- **[rpow2.com](https://rpow2.com)** — the original community revival of Hal Finney's RPOW concept.
+- **[rpow3.com](https://rpow3.com)** — the next iteration that kept the torch lit.
+- **[github.com/frkrueger/rpow](https://github.com/frkrueger/rpow)** — Frederik Krueger's open-source reference implementation, an invaluable starting point.
+
+### What's different / new in rpow4
+
+- **Wallet-native auth.** Username/password + BIP-39 mnemonic + classic public/private keypair, with a PoW challenge gating sign-in. No email, no magic links, no SMTP server to babysit.
+- **Bitcoin-style tokenomics.** No premine, no founder allocation, no team wallet. 50 RPOW initial reward, halving every 210,000 blocks, 21,000,000 hard cap. Difficulty steps up automatically and is capped at 50 bits so the simulation can't be wedged.
+- **Refreshed UI/UX.** Modern design system, responsive layout, in-browser miner with live visualizer, and 6 color themes (default, amber, green, ice, rose, violet).
+- **Claim tokens.** Bearer claim tokens for true off-platform / offline sends — closer in spirit to Hal Finney's original "reusable" PoW where the token itself was the artifact you handed over.
+- **Transaction fees.** Send fee that halves alongside the block reward, paid into a treasury pubkey on-ledger.
+- **Decimal sends.** 9 decimal places (10⁹ base units per RPOW), so you can send fractional amounts.
+- **Faucet** — bootstraps new wallets so new users can try sends/claims without mining first.
+- **Trollbox** — signed public chat module, because what's a coin community without one.
+- **Block explorer** — browse blocks, transfers, claims, and account histories.
+- **Public API docs** — every route documented in-app, signing rules included.
+- **Improvements across every other module** the predecessors shipped — mining loop, ledger consistency, observability, deploy story (one-shot AWS EC2 script + Let's Encrypt).
+- **Much more to come** — solana bridge scaffolding is already in `packages/solana-bridge`.
+- **Some fun / interesting history** in [`docs/overview/`](./docs/overview/README.md) and the Hal Finney material it points to — worth a read.
+
 ## Quickstart
 
 You need Docker (with the Compose plugin) and bash. That's it.
