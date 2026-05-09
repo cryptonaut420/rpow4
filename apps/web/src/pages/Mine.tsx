@@ -266,15 +266,25 @@ export function MinePage() {
 `;
   }
 
+  // Approximate session reward = current_reward × coins mined this run.
+  // It's an approximation if a halving boundary is crossed mid-run; the
+  // authoritative value still comes from /me's balance_base_units below.
+  const sessionRewardLabel = ledger && sessionMinted > 0
+    ? ` (+${formatRpow(BigInt(ledger.current_reward_base_units) * BigInt(sessionMinted))} RPOW)`
+    : '';
+
   return (
     <Panel title="MINE">
       <pre style={{ margin: 0 }}>
-{`${rewardBlock}  TARGET           : ${target ?? '--'} trailing zero bits
+{`  BALANCE          : ${formatRpow(me.balance_base_units)} RPOW
+  TOTAL MINTED     : ${formatRpow(me.minted_base_units)} RPOW
+
+${rewardBlock}  TARGET           : ${target ?? '--'} trailing zero bits
   HASHES (session) : ${Number(totalHashes).toLocaleString()}
   RATE             : ${fmtRate()}
   ELAPSED          : ${fmtElapsed()}
   STATUS           : ${status.toUpperCase()}
-  MINED THIS RUN   : ${sessionMinted}${error ? `\n  ERROR            : ${error}` : ''}
+  MINED THIS RUN   : ${sessionMinted}${sessionRewardLabel}${error ? `\n  ERROR            : ${error}` : ''}
 `}
       </pre>
       {lastTokenId && (
