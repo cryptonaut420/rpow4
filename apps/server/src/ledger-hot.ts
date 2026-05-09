@@ -1,4 +1,5 @@
 import type { PoolClient } from 'pg';
+import { TREASURY_PUBKEY } from '@rpow/shared';
 
 export interface LedgerEventRow {
   event_seq: string;
@@ -76,11 +77,14 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
     ]);
     if (shouldTrimAccount) await trimAccountRecent(c, event.actor_pubkey);
   } else {
-    // Sender + recipient mirrored in a single multi-row INSERT. Treasury
-    // fees go to the treasury account_balances balance directly; we do NOT
-    // mirror a hot activity row for the treasury (it has no activity feed).
-    const rows: AccountRecentRow[] = [
-      {
+    // Sender + recipient mirrored in a single multi-row INSERT. The
+    // treasury never gets an activity feed entry — neither for fee
+    // collection (where it's the implicit counterparty) nor for faucet
+    // sends (where it's the actor) — so we skip whichever side of the
+    // event is the treasury pubkey.
+    const rows: AccountRecentRow[] = [];
+    if (event.actor_pubkey !== TREASURY_PUBKEY) {
+      rows.push({
         id: event.id,
         pubkey: event.actor_pubkey,
         eventSeq: event.event_seq,
@@ -91,9 +95,9 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
         counterpartyPubkey: event.counterparty_pubkey,
         clientSignatureBase58: event.client_signature_base58,
         createdAt: event.created_at,
-      },
-    ];
-    if (event.counterparty_pubkey) {
+      });
+    }
+    if (event.counterparty_pubkey && event.counterparty_pubkey !== TREASURY_PUBKEY) {
       rows.push({
         id: event.id,
         pubkey: event.counterparty_pubkey,
@@ -107,10 +111,14 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
         createdAt: event.created_at,
       });
     }
-    await insertAccountRecentRows(c, rows);
+    if (rows.length > 0) await insertAccountRecentRows(c, rows);
     if (shouldTrimAccount) {
-      if (event.counterparty_pubkey) await trimAccountRecent(c, event.counterparty_pubkey);
-      await trimAccountRecent(c, event.actor_pubkey);
+      if (event.counterparty_pubkey && event.counterparty_pubkey !== TREASURY_PUBKEY) {
+        await trimAccountRecent(c, event.counterparty_pubkey);
+      }
+      if (event.actor_pubkey !== TREASURY_PUBKEY) {
+        await trimAccountRecent(c, event.actor_pubkey);
+      }
     }
   }
 

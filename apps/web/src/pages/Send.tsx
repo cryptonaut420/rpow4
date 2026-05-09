@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
@@ -33,9 +33,12 @@ export function SendPage() {
   const wallet = useWallet();
   const { me, refresh } = useMe();
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
-  const [recipient, setRecipient] = useState('');
-  const [amount, setAmount] = useState('');
-  const [memo, setMemo] = useState('');
+  // Prefill recipient/amount/memo from the URL so other pages can deep-link
+  // to a partially-filled send (e.g. the faucet's "donate to treasury" CTA).
+  const [searchParams] = useSearchParams();
+  const [recipient, setRecipient] = useState(() => searchParams.get('to') ?? '');
+  const [amount, setAmount] = useState(() => searchParams.get('amount') ?? '');
+  const [memo, setMemo] = useState(() => searchParams.get('memo') ?? '');
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [error, setError] = useState('');
   const [transferId, setTransferId] = useState('');

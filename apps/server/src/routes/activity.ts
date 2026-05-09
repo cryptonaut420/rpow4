@@ -18,6 +18,10 @@ interface ActivityRow {
 const QuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  // Optional event-type filter. Applied at the database level so pages
+  // stay full and pagination cursors stay correct when filtering. Omitting
+  // the param (or 'all') returns every event.
+  type: z.enum(['mint', 'send', 'receive', 'all']).optional().default('all'),
 });
 
 export async function activityRoutes(app: FastifyInstance) {
@@ -28,10 +32,12 @@ export async function activityRoutes(app: FastifyInstance) {
     const qp = QuerySchema.safeParse(req.query);
     if (!qp.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
 
-    const { cursor, limit } = qp.data;
-    // Cache key: first page per user is cached (cursor absent). Subsequent
-    // pages are not cached — once an event_seq is in the past it won't change.
-    const cacheKey = cursor ? null : s.pubkey;
+    const { cursor, limit, type } = qp.data;
+    // Cache key: first page per (user, type filter) is cached (cursor absent).
+    // Subsequent pages are not cached — once an event_seq is in the past it
+    // won't change. The `type` filter is part of the key so toggling filter
+    // tabs on the UI doesn't return stale cross-filter data.
+    const cacheKey = cursor ? null : `${s.pubkey}|${type}`;
     const needsCache = cacheKey !== null;
 
     const buildPage = async (): Promise<ActivityResponse> => {
@@ -50,11 +56,19 @@ export async function activityRoutes(app: FastifyInstance) {
       // previous page. We fetch events with event_seq strictly less than
       // the cursor so pages don't overlap.
       const cursorBigInt: bigint | null = cursor ? BigInt(cursor) : null;
-      const cursorFilter = cursorBigInt !== null ? `AND e.event_seq < $2::bigint` : '';
       const params: unknown[] = [s.pubkey];
-      if (cursorBigInt !== null) params.push(cursorBigInt.toString());
+      const filters: string[] = [];
+      if (cursorBigInt !== null) {
+        params.push(cursorBigInt.toString());
+        filters.push(`AND e.event_seq < $${params.length}::bigint`);
+      }
+      if (type !== 'all') {
+        params.push(type);
+        filters.push(`AND e.type = $${params.length}`);
+      }
       params.push(limit + 1); // +1 to detect if there's a next page
       const limitParam = `$${params.length}`;
+      const filterSqlHot = filters.join(' ');
 
       const recent = await app.pool.query<ActivityRow>(
         `SELECT e.id,
@@ -69,7 +83,7 @@ export async function activityRoutes(app: FastifyInstance) {
                 a.display_name AS counterparty_display_name
          FROM account_recent_events e
          LEFT JOIN accounts a ON a.pubkey = e.counterparty_pubkey
-         WHERE e.pubkey=$1 ${cursorFilter}
+         WHERE e.pubkey=$1 ${filterSqlHot}
          ORDER BY e.event_seq DESC
          LIMIT ${limitParam}`,
         params,
@@ -96,9 +110,9 @@ export async function activityRoutes(app: FastifyInstance) {
         const histLimitParam = `$${histParams.length}`;
         const filterSql = filters.join(' ');
 
-        const historicalSql = `
-        WITH events AS (
-          (SELECT NULL::uuid AS id,
+        const branches: string[] = [];
+        if (type === 'all' || type === 'mint') {
+          branches.push(`(SELECT NULL::uuid AS id,
                   'mint' AS type,
                   event_seq::text AS event_seq,
                   amount::text AS amount,
@@ -111,9 +125,10 @@ export async function activityRoutes(app: FastifyInstance) {
            FROM ledger_events
            WHERE event_type='MINT' AND actor_pubkey=$1 ${filterSql}
            ORDER BY event_seq DESC
-           LIMIT ${histLimitParam})
-          UNION ALL
-          (SELECT id,
+           LIMIT ${histLimitParam})`);
+        }
+        if (type === 'all' || type === 'send') {
+          branches.push(`(SELECT id,
                   'send' AS type,
                   event_seq::text AS event_seq,
                   amount::text AS amount,
@@ -126,9 +141,10 @@ export async function activityRoutes(app: FastifyInstance) {
            FROM ledger_events
            WHERE event_type='TRANSFER' AND actor_pubkey=$1 ${filterSql}
            ORDER BY event_seq DESC
-           LIMIT ${histLimitParam})
-          UNION ALL
-          (SELECT id,
+           LIMIT ${histLimitParam})`);
+        }
+        if (type === 'all' || type === 'receive') {
+          branches.push(`(SELECT id,
                   'receive' AS type,
                   event_seq::text AS event_seq,
                   amount::text AS amount,
@@ -141,7 +157,12 @@ export async function activityRoutes(app: FastifyInstance) {
            FROM ledger_events
            WHERE event_type='TRANSFER' AND counterparty_pubkey=$1 ${filterSql}
            ORDER BY event_seq DESC
-           LIMIT ${histLimitParam})
+           LIMIT ${histLimitParam})`);
+        }
+
+        const historicalSql = `
+        WITH events AS (
+          ${branches.join('\n          UNION ALL\n          ')}
         )
         SELECT events.id::text AS id, events.type, events.event_seq, events.amount,
                events.fee_base_units, events.memo, events.counterparty_pubkey,

@@ -12,6 +12,7 @@ import { ActivityPage } from './pages/Activity.js';
 import { LedgerPage } from './pages/Ledger.js';
 import { StatsPage } from './pages/Stats.js';
 import { ExplorerPage } from './pages/Explorer.js';
+import { FaucetPage } from './pages/Faucet.js';
 import { CopyButton } from './components/CopyButton.js';
 import { SupplyBar } from './components/SupplyBar.js';
 import { shortPubkey } from '@rpow/shared';
@@ -51,6 +52,7 @@ export default function App() {
             <NavLink to="/ledger">[ ledger ]</NavLink>{' '}
             <NavLink to="/stats">[ stats ]</NavLink>{' '}
             <NavLink to="/explorer">[ explorer ]</NavLink>{' '}
+            <NavLink to="/faucet">[ faucet ]</NavLink>{' '}
             {signedIn ? (
               <>
                 <span style={{ color: 'var(--dim)' }} title={me!.pubkey}>
@@ -78,6 +80,7 @@ export default function App() {
             <Route path="/explorer" element={<ExplorerPage />} />
             <Route path="/explorer/tx/:id" element={<ExplorerPage />} />
             <Route path="/explorer/account/:pubkey" element={<ExplorerPage />} />
+            <Route path="/faucet" element={<FaucetPage />} />
           </Routes>
         </main>
       </div>

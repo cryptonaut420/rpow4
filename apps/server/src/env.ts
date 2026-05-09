@@ -64,6 +64,21 @@ const Schema = z.object({
       return BigInt(s);
     }),
 
+  // Public faucet. Grants free tokens from the treasury once per
+  // FAUCET_COOLDOWN_HOURS window per (pubkey, IP). Set FAUCET_ENABLED=false
+  // to take the route offline without a redeploy.
+  FAUCET_ENABLED: z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined || v === '') return true;
+      if (typeof v === 'boolean') return v;
+      const s = v.trim().toLowerCase();
+      return s !== 'false' && s !== '0' && s !== 'no';
+    }),
+  FAUCET_CLAIM_AMOUNT_BASE_UNITS: positiveBigInt(5_000_000_000n), // 5 RPOW
+  FAUCET_COOLDOWN_HOURS: z.coerce.number().int().min(1).max(720).default(24),
+
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   TURNSTILE_SECRET: z.string().optional(),
 });

@@ -9,6 +9,8 @@ import type {
   ExplorerAccountResponse,
   ExplorerFeedResponse,
   ExplorerTxResponse,
+  FaucetClaimResponse,
+  FaucetStatusResponse,
   LeaderboardResponse,
   LeaderboardSort,
   LedgerEventsResponse,
@@ -60,10 +62,11 @@ export const api = {
 
   // Read endpoints
   me: () => call<MeResponse>('GET', '/me'),
-  activity: (cursor?: string, limit?: number) => {
+  activity: (cursor?: string, limit?: number, type?: 'mint' | 'send' | 'receive') => {
     const qs = new URLSearchParams();
     if (cursor) qs.set('cursor', cursor);
     if (limit) qs.set('limit', String(limit));
+    if (type) qs.set('type', type);
     const suffix = qs.toString();
     return call<ActivityResponse>('GET', `/activity${suffix ? `?${suffix}` : ''}`);
   },
@@ -96,6 +99,10 @@ export const api = {
     const suffix = qs.toString();
     return call<ExplorerAccountResponse>('GET', `/explorer/account/${encodeURIComponent(pubkey)}${suffix ? `?${suffix}` : ''}`);
   },
+
+  // Faucet (public)
+  faucet: () => call<FaucetStatusResponse>('GET', '/faucet'),
+  faucetClaim: () => call<FaucetClaimResponse>('POST', '/faucet/claim', {}),
 
   // Write endpoints — bodies must already include client_signature_base58
   challenge: () => call<ChallengeResponse>('POST', '/challenge'),

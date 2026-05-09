@@ -26,6 +26,15 @@ function formatTs(iso: string): string {
 
 const PAGE_SIZE = 50;
 
+type Filter = 'all' | 'mint' | 'send' | 'receive';
+
+const FILTER_LABEL: Record<Filter, string> = {
+  all: 'all',
+  mint: 'mints',
+  send: 'sends',
+  receive: 'receives',
+};
+
 export function ActivityPage() {
   const wallet = useWallet();
   const [items, setItems] = useState<ActivityEntry[]>([]);
@@ -35,13 +44,15 @@ export function ActivityPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
   const loadedOnce = useRef(false);
 
   const loadFirst = useCallback(() => {
     if (wallet.status !== 'unlocked') { setLoading(false); return; }
     setLoading(true);
     setError('');
-    api.activity(undefined, PAGE_SIZE)
+    const apiFilter = filter === 'all' ? undefined : filter;
+    api.activity(undefined, PAGE_SIZE, apiFilter)
       .then((r: ActivityResponse) => {
         setItems(r.items);
         setBalance(r.balance_base_units);
@@ -51,14 +62,15 @@ export function ActivityPage() {
       })
       .catch((e: any) => setError(e?.message ?? 'failed to load activity'))
       .finally(() => setLoading(false));
-  }, [wallet.status]);
+  }, [wallet.status, filter]);
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
   const loadMore = () => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
-    api.activity(nextCursor, PAGE_SIZE)
+    const apiFilter = filter === 'all' ? undefined : filter;
+    api.activity(nextCursor, PAGE_SIZE, apiFilter)
       .then((r: ActivityResponse) => {
         setItems((prev) => [...prev, ...r.items]);
         setNextCursor(r.next_cursor);
@@ -80,9 +92,6 @@ export function ActivityPage() {
     );
   }
 
-  if (loading) return <Panel title="ACTIVITY"><div>loading...</div></Panel>;
-  if (error) return <Panel title="ACTIVITY"><div className="error">{error}</div></Panel>;
-
   return (
     <Panel title="ACTIVITY">
       {/* Balance + count header */}
@@ -100,8 +109,28 @@ export function ActivityPage() {
         </div>
       )}
 
-      {items.length === 0 ? (
-        <div style={{ color: 'var(--dim)' }}>(no activity yet — try mining or sending)</div>
+      {/* Filter tabs */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+        {(['all', 'mint', 'send', 'receive'] as Filter[]).map((f) => (
+          <FilterTab
+            key={f}
+            active={filter === f}
+            onClick={() => setFilter(f)}
+            label={FILTER_LABEL[f]}
+          />
+        ))}
+      </div>
+
+      {error ? (
+        <div className="error">{error}</div>
+      ) : loading ? (
+        <div>loading...</div>
+      ) : items.length === 0 ? (
+        <div style={{ color: 'var(--dim)' }}>
+          {filter === 'all'
+            ? '(no activity yet — try mining or sending)'
+            : `(no ${FILTER_LABEL[filter]} yet)`}
+        </div>
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -120,6 +149,20 @@ export function ActivityPage() {
         </>
       )}
     </Panel>
+  );
+}
+
+function FilterTab({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        color: active ? 'var(--fg)' : 'var(--dim)',
+        fontWeight: active ? 'bold' : 'normal',
+      }}
+    >
+      [ {active ? '*' : ' '} {label} ]
+    </button>
   );
 }
 
@@ -155,9 +198,12 @@ function ActivityRow({ entry: e }: { entry: ActivityEntry }) {
       {e.counterparty_pubkey && (
         <div style={{ color: 'var(--dim)', fontSize: 12 }}>
           {e.type === 'send' ? 'to' : 'from'}{': '}
-          <span title={e.counterparty_pubkey}>
+          <Link
+            to={`/explorer/account/${e.counterparty_pubkey}`}
+            title={e.counterparty_pubkey}
+          >
             <code>{e.counterparty_display_name ?? shortPubkey(e.counterparty_pubkey)}</code>
-          </span>
+          </Link>
           {' '}<CopyButton text={e.counterparty_pubkey} label="copy" />
         </div>
       )}
@@ -172,8 +218,11 @@ function ActivityRow({ entry: e }: { entry: ActivityEntry }) {
       {/* Row 4: tx ID */}
       {e.id && (
         <div style={{ color: 'var(--dim)', fontSize: 11 }}>
-          tx: <code title={e.id}>{e.id.slice(0, 8)}…</code>{' '}
-          <CopyButton text={e.id} label="copy" />
+          tx:{' '}
+          <Link to={`/explorer/tx/${e.id}`} title={e.id}>
+            <code>{e.id.slice(0, 8)}…</code>
+          </Link>
+          {' '}<CopyButton text={e.id} label="copy" />
         </div>
       )}
     </div>

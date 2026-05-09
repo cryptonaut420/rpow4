@@ -14,6 +14,7 @@ import { activityRoutes } from './routes/activity.js';
 import { ledgerRoutes } from './routes/ledger.js';
 import { statsRoutes } from './routes/stats.js';
 import { explorerRoutes } from './routes/explorer.js';
+import { faucetRoutes } from './routes/faucet.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -36,6 +37,12 @@ export interface AppConfig {
   halvingIntervalBlocks: number;
   /** Per-send fee in base units at halving 0. Halves with every reward halving. */
   sendBaseFeeBaseUnits: bigint;
+  /** Faucet on/off switch. */
+  faucetEnabled: boolean;
+  /** Amount granted by each successful faucet claim, in base units. */
+  faucetClaimAmountBaseUnits: bigint;
+  /** Cooldown between faucet claims for the same pubkey or IP. */
+  faucetCooldownHours: number;
   signingPrivateKeyHex: string;
   signingPublicKeyHex: string;
   webOrigin: string;
@@ -76,6 +83,8 @@ export interface AppCaches {
   explorerTx: TtlCache<string, CachedJsonResponse | null>;
   /** Public /explorer/account/:pubkey first-page responses, keyed by pubkey. */
   explorerAccount: TtlCache<string, unknown>;
+  /** Public /faucet status (treasury balance + global config). Per-caller cache key. */
+  faucetStatus: TtlCache<string, unknown>;
 }
 
 declare module 'fastify' {
@@ -137,6 +146,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // Tx details are immutable; a long TTL avoids redundant DB reads.
     explorerTx: new TtlCache<string, CachedJsonResponse | null>({ ttlMs: 3_600_000, maxSize: 10_000 }),
     explorerAccount: new TtlCache<string, unknown>({ ttlMs: 3_000, maxSize: 50_000 }),
+    // Faucet status: treasury balance + caller-specific eligibility. Short
+    // TTL because the visible "next claim at" countdown should feel live.
+    faucetStatus: new TtlCache<string, unknown>({ ttlMs: 2_000, maxSize: 20_000 }),
   };
   app.decorate('caches', caches);
   app.decorate('invalidateAccount', (pubkey: string) => {
@@ -156,6 +168,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     caches.leaderboard.clear();
     // Explorer feed shows recent network events — clear on every new event.
     caches.explorerFeed.clear();
+    // Faucet status surfaces treasury balance + global config; treasury
+    // balance changes whenever the ledger advances.
+    caches.faucetStatus.clear();
   });
 
   await app.register(cookie, { secret: opts.config.sessionSecret });
@@ -257,6 +272,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(ledgerRoutes);
   await app.register(statsRoutes);
   await app.register(explorerRoutes);
+  await app.register(faucetRoutes);
 
   // Public-key PEM is fully determined by the signing config; precompute
   // once at startup instead of rebuilding on every request.

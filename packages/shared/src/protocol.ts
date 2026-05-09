@@ -421,3 +421,46 @@ export interface ExplorerAccountResponse extends ExplorerAccountSummary {
   next_cursor?: string;
 }
 
+// ---- faucet -----------------------------------------------------------------
+
+export type FaucetIneligibleReason =
+  | 'disabled'
+  | 'treasury_dry'
+  | 'cooldown_pubkey'
+  | 'cooldown_ip'
+  | 'login_required';
+
+export interface FaucetStatusResponse {
+  enabled: boolean;
+  /** True only when authed, treasury has funds, and no cooldown is active. */
+  eligible: boolean;
+  claim_amount_base_units: string;
+  cooldown_hours: number;
+  cooldown_seconds: number;
+  treasury_balance_base_units: string;
+  treasury_pubkey: string;
+  /** ISO timestamp of the most recent disqualifying claim (pubkey or IP). */
+  last_claim_at?: string;
+  /** When the caller becomes eligible again. */
+  next_claim_at?: string;
+  last_claim_amount_base_units?: string;
+  ineligible_reason?: FaucetIneligibleReason;
+}
+
+export interface FaucetClaimResponse {
+  ok: true;
+  amount_base_units: string;
+  transfer_id: string;
+  claim_id: string;
+  claimed_at: string;
+  next_claim_at: string;
+}
+
+export interface FaucetClaimError {
+  error: 'COOLDOWN_ACTIVE' | 'TREASURY_DRY' | 'BAD_REQUEST' | 'UNAUTHORIZED' | 'INTERNAL';
+  message: string;
+  last_claim_at?: string;
+  next_claim_at?: string;
+  cooldown_reason?: 'pubkey' | 'ip';
+}
+
