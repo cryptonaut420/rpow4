@@ -13,10 +13,13 @@ const app = await buildApp({
   pool,
   config: {
     sessionSecret: env.SESSION_SECRET,
-    difficultyBits: env.DIFFICULTY_BITS,
-    difficultyFloor: env.DIFFICULTY_FLOOR,
+    difficultyStartBits: env.DIFFICULTY_BITS,
+    difficultyStepBlocks: env.DIFFICULTY_STEP_BLOCKS,
+    difficultyMaxBits: env.DIFFICULTY_MAX_BITS,
     signupDifficultyBits: env.SIGNUP_DIFFICULTY_BITS,
     mintMaxSupply: env.MINT_MAX_SUPPLY,
+    baseRewardBaseUnits: env.MINT_BASE_REWARD_BASE_UNITS,
+    halvingIntervalBlocks: env.HALVING_INTERVAL_BLOCKS,
     signingPrivateKeyHex: env.RPOW_SIGNING_PRIVATE_KEY_HEX,
     signingPublicKeyHex: env.RPOW_SIGNING_PUBLIC_KEY_HEX,
     webOrigin: env.WEB_ORIGIN,
@@ -29,7 +32,7 @@ const app = await buildApp({
 attachPoolErrorLogger(pool, (msg, err) => app.log.error({ err }, msg));
 
 await app.listen({ host: '0.0.0.0', port: env.PORT });
-app.log.info(`rpow2 server listening on :${env.PORT}`);
+app.log.info(`rpow4 server listening on :${env.PORT}`);
 
 /**
  * Graceful shutdown: drain in-flight HTTP requests before tearing the

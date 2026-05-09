@@ -59,7 +59,7 @@ describe('POST /signup/challenge', () => {
     expect(r.status).toBe(200);
     expect(r.body.envelope.handle).toBe('alice');
     expect(r.body.envelope.pubkey).toBe(kp.publicKeyBase58);
-    expect(r.body.envelope.domain).toBe('rpow2.signup');
+    expect(r.body.envelope.domain).toBe('rpow4.signup');
     expect(r.body.envelope.difficulty_bits).toBe(8);
     expect(r.body.envelope_mac).toMatch(/^[0-9a-f]{64}$/);
     expect(r.body.pow_prefix_hex).toMatch(/^[0-9a-f]+$/);

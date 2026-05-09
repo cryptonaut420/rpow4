@@ -2,9 +2,10 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { loginAsRandomWallet, makeTestApp, type TestWallet } from './helpers.js';
 import { findSolutionForTest } from '../src/pow.js';
 
-// In the halving schedule with test config (mintMaxSupply=21 RPOW), one mint
-// always credits MINT_BASE_REWARD_BASE_UNITS = 7,812,500 base units (the cap is
-// reached far before the first 1M-RPOW halving boundary).
+// In the test fixture, baseRewardBaseUnits=7_812_500 and the
+// halving/difficulty step intervals are pushed to 1_000_000 blocks each
+// — the schedule stays in tier 0 throughout the test suite. Every
+// successful mint credits 7,812,500 base units.
 const REWARD_BASE_UNITS = 7_812_500n;
 const ONE_RPOW = 1_000_000_000n;
 const CAP_BASE_UNITS = 21n * ONE_RPOW;

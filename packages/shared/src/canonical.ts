@@ -5,7 +5,7 @@
 //   - bigints serialize as decimal strings (so the JSON round-trips through
 //     untyped JSON parsers without precision loss)
 //   - undefined / function / symbol values are dropped (mirrors JSON.stringify)
-//   - the final signed message is "rpow2.<action>.v1\n" + canonical-json
+//   - the final signed message is "rpow4.<action>.v1\n" + canonical-json
 //
 // The domain prefix prevents replay across action types.
 
@@ -56,5 +56,5 @@ export function canonicalJson(value: unknown): string {
  * a message that contains its own signature is an unfixable chicken-and-egg.
  */
 export function canonicalMessage(action: CanonicalAction, body: unknown): string {
-  return `rpow2.${action}.${CANONICAL_VERSION}\n${canonicalJson(body)}`;
+  return `rpow4.${action}.${CANONICAL_VERSION}\n${canonicalJson(body)}`;
 }

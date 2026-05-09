@@ -3,8 +3,8 @@
 # Exits 0 if all checks pass; nonzero on any failure.
 set -euo pipefail
 
-VPS_IP="${VPS_IP:-15.204.254.192}"
-HOST="api.rpow2.com"
+VPS_IP="${VPS_IP:?missing  (VPS public IP)}"
+HOST="${HOST:-api.rpow4.com}"
 RESOLVE="--resolve ${HOST}:443:${VPS_IP}"
 
 curl_ok () {

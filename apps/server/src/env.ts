@@ -1,5 +1,25 @@
 import { z } from 'zod';
 
+/**
+ * Coerce a positive integer-bigint env var into a `bigint`. We can't
+ * lean on `z.coerce.bigint()` because it accepts arbitrary precision /
+ * negative input; we want to mirror the behavior of the integer envs
+ * (positive, finite) but in BigInt form so the schedule's base-units
+ * arithmetic stays in `bigint` end-to-end.
+ */
+const positiveBigInt = (defaultValue: bigint) =>
+  z
+    .union([z.string(), z.bigint(), z.number()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined || v === '') return defaultValue;
+      const s = typeof v === 'string' ? v.trim() : v.toString();
+      if (!/^[1-9][0-9]*$/.test(s)) {
+        throw new Error('must be a positive integer string');
+      }
+      return BigInt(s);
+    });
+
 const Schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(8080),
@@ -9,13 +29,28 @@ const Schema = z.object({
   SESSION_SECRET: z.string().min(32),
   RPOW_SIGNING_PRIVATE_KEY_HEX: z.string().regex(/^[0-9a-f]{64}$/),
   RPOW_SIGNING_PUBLIC_KEY_HEX: z.string().regex(/^[0-9a-f]{64}$/),
-  DIFFICULTY_BITS: z.coerce.number().int().min(4).max(40).default(28),
-  DIFFICULTY_FLOOR: z.coerce.number().int().min(4).max(40).default(20),
+
+  // Initial trailing-zero-bit difficulty. The schedule starts here at
+  // block 0 and steps up by +1 every DIFFICULTY_STEP_BLOCKS blocks,
+  // capped at DIFFICULTY_MAX_BITS. Production default is 24 (~10s on a
+  // modern laptop), dev/local override to 14 for instant feedback.
+  DIFFICULTY_BITS: z.coerce.number().int().min(4).max(40).default(24),
+  DIFFICULTY_STEP_BLOCKS: z.coerce.number().int().positive().default(164_062),
+  DIFFICULTY_MAX_BITS: z.coerce.number().int().min(4).max(64).default(50),
+
   // Anti-spam PoW for /signup. Tuned so a modern laptop completes in
-  // 5–10s. Lower than the main mining difficulty by design — this is
-  // friction, not currency. Easy to crank up if abuse appears.
-  SIGNUP_DIFFICULTY_BITS: z.coerce.number().int().min(8).max(40).default(22),
+  // well under a second (~262k hashes at 18 bits). Lower than the main
+  // mining difficulty by design — this is friction, not currency. Crank
+  // it up if abuse appears.
+  SIGNUP_DIFFICULTY_BITS: z.coerce.number().int().min(4).max(40).default(18),
+
+  // Block-based issuance schedule. Defaults match Bitcoin's exact math:
+  // 50 RPOW initial reward × 210,000 blocks × 2 (geometric sum) =
+  // 21,000,000 RPOW exactly.
+  MINT_BASE_REWARD_BASE_UNITS: positiveBigInt(50_000_000_000n),
+  HALVING_INTERVAL_BLOCKS: z.coerce.number().int().positive().default(210_000),
   MINT_MAX_SUPPLY: z.coerce.number().int().positive().default(21_000_000),
+
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   TURNSTILE_SECRET: z.string().optional(),
 });

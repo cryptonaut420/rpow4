@@ -45,11 +45,17 @@ describe('POST /challenge', () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it('stamps the configured difficulty regardless of supply (halving model has fixed difficulty)', async () => {
+  it('stamps the start-of-schedule difficulty while block_height is below the first step', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
     const w = await loginAsRandomWallet(ctx.app);
     const a = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } })).json();
     expect(a.difficulty_bits).toBe(8);
+    // Bumping minted_supply does not advance difficulty in the block-based
+    // schedule. Difficulty advances with block_height (mint count), which
+    // the test fixture sets a giant step-blocks for, so it stays at 8.
+    // (The block-height-driven step is unit-tested in schedule.test.ts;
+    // wiring it through the route would require waiting out the 5-second
+    // counter cache, which isn't worth the flake.)
     await setMintedSupplyBaseUnits(ctx, 10n * ONE_RPOW);
     const b = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } })).json();
     expect(b.difficulty_bits).toBe(8);

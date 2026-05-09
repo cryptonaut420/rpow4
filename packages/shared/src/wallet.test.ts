@@ -82,9 +82,10 @@ describe('SLIP-0010 Ed25519 against official spec test vectors', () => {
   });
 
   // Regression vector: BIP-39 + SLIP-0010 + tweetnacl pipeline. The mnemonic
-  // is the BIP-39 reference all-zero phrase; on Solana's path m/44'/501'/0'/0'
-  // it derives the value below. Reproducible by any spec-compliant
-  // implementation (e.g. solana-keygen, ed25519-hd-key + bip39).
+  // is the BIP-39 reference all-zero phrase; on the canonical RPOW path
+  // m/44'/501'/0'/0' it derives the value below. Reproducible by any
+  // spec-compliant Ed25519 SLIP-0010 implementation (ed25519-hd-key + bip39
+  // is the smallest reference stack).
   it('all-zero mnemonic on m/44\'/501\'/0\'/0\' is stable', () => {
     const m = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
     const kp = mnemonicToKeypair(m);

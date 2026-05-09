@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Flip api.rpow2.com A (and AAAA if VPS_IPV6 is set) to point at VPS.
-# Required env: CLOUDFLARE_API_TOKEN, VPS_IP, VPS_IPV6 (or "NONE")
+# Flip api.rpow4.com A (and AAAA if VPS_IPV6 is set) to point at VPS.
+# Required env: CLOUDFLARE_API_TOKEN, VPS_IP, VPS_IPV6 (or "NONE"),
+#               ZONE_ID, A_REC_ID, AAAA_REC_ID
 set -euo pipefail
 
-ZONE_ID="685720286628e21c9b43f260ac6b63bf"
-A_REC_ID="34daa777f0dbbdbd1e3c97d6c12e9837"
-AAAA_REC_ID="1cfb2458cc028a8f95bea16a439bff6c"
+: "${ZONE_ID:?missing  (Cloudflare zone id for the rpow4 domain)}"
+: "${A_REC_ID:?missing  (A record id for api.rpow4.com)}"
+: "${AAAA_REC_ID:?missing  (AAAA record id for api.rpow4.com; pass dummy if unused)}"
 
 : "${CLOUDFLARE_API_TOKEN:?missing}"
 : "${VPS_IP:?missing}"
@@ -35,5 +36,5 @@ fi
 
 echo
 echo "Live records:"
-api "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=api.rpow2.com" \
+api "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=api.rpow4.com" \
   | jq -r '.result[] | "  \(.type) \(.name) -> \(.content) (proxied=\(.proxied), ttl=\(.ttl))"'

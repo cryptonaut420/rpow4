@@ -38,7 +38,7 @@ describe('canonicalJson', () => {
 describe('canonicalMessage', () => {
   it('prefixes the canonical JSON with the action + version domain separator', () => {
     const msg = canonicalMessage('transfer', { a: 1 });
-    expect(msg).toBe('rpow2.transfer.v1\n{"a":1}');
+    expect(msg).toBe('rpow4.transfer.v1\n{"a":1}');
   });
 
   it('produces distinct messages for different actions, even with identical bodies', () => {

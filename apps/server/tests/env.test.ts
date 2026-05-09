@@ -31,6 +31,6 @@ describe('parseEnv', () => {
 
   it('defaults optional envs sensibly', () => {
     const env = parseEnv(baseValid);
-    expect(env.SIGNUP_DIFFICULTY_BITS).toBe(22);
+    expect(env.SIGNUP_DIFFICULTY_BITS).toBe(18);
   });
 });

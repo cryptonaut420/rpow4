@@ -1,6 +1,6 @@
 # Local dev with Docker Compose
 
-The whole rpow2 stack — Postgres, the API server, the web SPA — boots from
+The whole rpow4 stack — Postgres, the API server, the web SPA — boots from
 **one** command:
 
 ```bash
@@ -54,8 +54,8 @@ down. Open <http://localhost:5173/#/login> and either:
   (the same format Solana CLI's `id.json` uses, just base58'd).
 
 The browser derives a SLIP-0010 Ed25519 keypair at `m/44'/501'/0'/0'`
-(the Solana derivation path) and signs the `/auth/session` envelope with
-it; the server only ever sees your public key and signatures.
+and signs the `/auth/session` envelope with it; the server only ever
+sees your public key and signatures.
 
 ## What's where
 
@@ -109,9 +109,9 @@ install (one-shot)
 
 | Volume | Used for |
 |---|---|
-| `rpow2-dev_rpow-pg-data` | Postgres cluster data files |
-| `rpow2-dev_rpow-node-modules` | Hoisted `node_modules` shared by all services |
-| `rpow2-dev_rpow-runtime` | `signing-keys.env` so token sigs survive restarts |
+| `rpow4-dev_rpow-pg-data` | Postgres cluster data files |
+| `rpow4-dev_rpow-node-modules` | Hoisted `node_modules` shared by all services |
+| `rpow4-dev_rpow-runtime` | `signing-keys.env` so token sigs survive restarts |
 
 To wipe all state and start clean:
 

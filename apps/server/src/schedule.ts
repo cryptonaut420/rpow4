@@ -1,65 +1,108 @@
-// Bitcoin-style halving issuance schedule.
+// RPOW4 Bitcoin-style issuance schedule.
 //
-//   - Difficulty is fixed at MINT_DIFFICULTY_BITS_DEFAULT (24) trailing-zero bits.
-//   - Reward starts at MINT_BASE_REWARD_BASE_UNITS (= 1/128 RPOW = 7,812,500
-//     base units, where 10^9 base units = 1 RPOW).
-//   - Reward halves every time minted_supply crosses a 1,000,000-RPOW boundary.
-//   - Schedule terminates at the 21M cap or when the reward in base units
-//     drops below 1 (≈22 halvings — the cap terminates first in practice).
+// Tokenomics summary:
+//
+//   - 1 accepted PoW solution = 1 "block" in the simulation.
+//   - The reward starts at 50 RPOW per block (= 50 * 10^9 base units) and
+//     halves every 210,000 blocks (Bitcoin-exact: the geometric sum
+//     50 * 210,000 * 2 = 21,000,000 RPOW gives an exact 21M cap).
+//   - Difficulty starts at 24 trailing-zero bits and steps up by +1 bit
+//     every 164,062 blocks (≈ 21M / 128, a slow Bitcoin-flavored ramp).
+//   - Difficulty is hard-capped at 50 bits so the schedule stays
+//     mineable on commodity hardware in the long tail.
+//   - The schedule terminates either at the 21M cap or when the
+//     integer-floored reward drops below 1 base unit. Either way the
+//     hard 21M cap is enforced by the route layer.
+//
+// This file is the single source of truth for the issuance curve. The
+// callers (`/mint`, `/challenge`, `/ledger`) pass per-app overrides
+// (sourced from `AppConfig`) so tests and dev can shrink intervals
+// without touching production constants.
 
-export const MINT_DIFFICULTY_BITS_DEFAULT = 24;
-export const BASE_UNITS_PER_RPOW = 1_000_000_000n;        // 9 decimals
-export const MINT_BASE_REWARD_BASE_UNITS = 7_812_500n;    // = BASE_UNITS_PER_RPOW / 128n
-export const MINT_HALVING_INTERVAL_RPOW = 1_000_000;
+export const BASE_UNITS_PER_RPOW = 1_000_000_000n;          // 9 decimals
+export const MINT_BASE_REWARD_BASE_UNITS = 50_000_000_000n; // 50 RPOW
+export const MINT_HALVING_INTERVAL_BLOCKS = 210_000;
+export const MINT_DIFFICULTY_START_BITS = 24;
+export const MINT_DIFFICULTY_STEP_BLOCKS = 164_062;          // 21,000,000 / 128
+export const MINT_DIFFICULTY_MAX_BITS = 50;
 export const MINT_MAX_SUPPLY_RPOW = 21_000_000;
 
 export interface ScheduleOpts {
-  difficultyBits?: number;
   baseRewardBaseUnits?: bigint;
-  halvingIntervalRpow?: number;
+  halvingIntervalBlocks?: number;
+  difficultyStartBits?: number;
+  difficultyStepBlocks?: number;
+  difficultyMaxBits?: number;
   maxSupplyRpow?: number;
 }
 
 export interface ScheduleInfo {
-  currentDifficultyBits: number;
+  /** Block height at which `currentRewardBaseUnits` and `currentDifficultyBits` apply. */
+  blockHeight: bigint;
   currentRewardBaseUnits: bigint;
-  halvingIndex: number;                 // 0 during phase 0
-  nextHalvingAtBaseUnits: bigint;       // capped at maxSupply
-  baseUnitsToNextHalving: bigint;
+  currentDifficultyBits: number;
+  /** 0 during the first 210k blocks, then 1, 2, 3, ... */
+  halvingIndex: number;
+  /** 0 during the first difficulty-step block window, then 1, 2, ... */
+  difficultyTier: number;
+  nextHalvingAtBlock: bigint;
+  nextDifficultyAtBlock: bigint;
+  blocksToNextHalving: bigint;
+  blocksToNextDifficultyStep: bigint;
   nextRewardBaseUnits: bigint;
+  nextDifficultyBits: number;
+  /** Hard cap reached (minted >= 21M). */
   isCapped: boolean;
-  isMintable: boolean;                  // false when capped or reward is 0
+  /** Reward > 0 AND not capped. */
+  isMintable: boolean;
 }
 
 interface Resolved {
-  difficultyBits: number;
   baseRewardBaseUnits: bigint;
-  halvingIntervalBaseUnits: bigint;
+  halvingIntervalBlocks: bigint;
+  difficultyStartBits: number;
+  difficultyStepBlocks: bigint;
+  difficultyMaxBits: number;
   maxSupplyBaseUnits: bigint;
 }
 
 function resolve(opts?: ScheduleOpts): Resolved {
-  const difficultyBits = opts?.difficultyBits ?? MINT_DIFFICULTY_BITS_DEFAULT;
   const baseRewardBaseUnits = opts?.baseRewardBaseUnits ?? MINT_BASE_REWARD_BASE_UNITS;
-  const halvingIntervalRpow = opts?.halvingIntervalRpow ?? MINT_HALVING_INTERVAL_RPOW;
+  const halvingIntervalBlocks = opts?.halvingIntervalBlocks ?? MINT_HALVING_INTERVAL_BLOCKS;
+  const difficultyStartBits = opts?.difficultyStartBits ?? MINT_DIFFICULTY_START_BITS;
+  const difficultyStepBlocks = opts?.difficultyStepBlocks ?? MINT_DIFFICULTY_STEP_BLOCKS;
+  const difficultyMaxBits = opts?.difficultyMaxBits ?? MINT_DIFFICULTY_MAX_BITS;
   const maxSupplyRpow = opts?.maxSupplyRpow ?? MINT_MAX_SUPPLY_RPOW;
+
+  if (halvingIntervalBlocks <= 0) throw new Error('halvingIntervalBlocks must be positive');
+  if (difficultyStepBlocks <= 0) throw new Error('difficultyStepBlocks must be positive');
+  if (difficultyMaxBits < difficultyStartBits) {
+    throw new Error('difficultyMaxBits must be >= difficultyStartBits');
+  }
+
   return {
-    difficultyBits,
     baseRewardBaseUnits,
-    halvingIntervalBaseUnits: BigInt(halvingIntervalRpow) * BASE_UNITS_PER_RPOW,
+    halvingIntervalBlocks: BigInt(halvingIntervalBlocks),
+    difficultyStartBits,
+    difficultyStepBlocks: BigInt(difficultyStepBlocks),
+    difficultyMaxBits,
     maxSupplyBaseUnits: BigInt(maxSupplyRpow) * BASE_UNITS_PER_RPOW,
   };
 }
 
-export function difficultyBitsForSupply(_mintedBaseUnits: bigint, opts?: ScheduleOpts): number {
-  // Difficulty is constant in the halving model.
-  return resolve(opts).difficultyBits;
+function nonNegBlock(h: bigint): bigint {
+  return h < 0n ? 0n : h;
 }
 
-export function currentRewardBaseUnits(mintedBaseUnits: bigint, opts?: ScheduleOpts): bigint {
+/**
+ * Reward (in base units) for a block mined at height `blockHeight`. The
+ * very first mint is at height 0; the reward is constant within a
+ * halving window and is integer-floored at each halving boundary.
+ */
+export function currentRewardForBlock(blockHeight: bigint, opts?: ScheduleOpts): bigint {
   const r = resolve(opts);
-  const minted = mintedBaseUnits < 0n ? 0n : mintedBaseUnits;
-  const halvings = minted / r.halvingIntervalBaseUnits;
+  const h = nonNegBlock(blockHeight);
+  const halvings = h / r.halvingIntervalBlocks;
   let reward = r.baseRewardBaseUnits;
   for (let i = 0n; i < halvings; i++) {
     reward = reward / 2n;
@@ -68,26 +111,59 @@ export function currentRewardBaseUnits(mintedBaseUnits: bigint, opts?: ScheduleO
   return reward;
 }
 
-export function scheduleInfo(mintedBaseUnits: bigint, opts?: ScheduleOpts): ScheduleInfo {
+/**
+ * Trailing-zero-bit difficulty at block `blockHeight`. Starts at
+ * `difficultyStartBits`, +1 every `difficultyStepBlocks` blocks, capped
+ * at `difficultyMaxBits` so the schedule stays mineable indefinitely.
+ */
+export function difficultyForBlock(blockHeight: bigint, opts?: ScheduleOpts): number {
   const r = resolve(opts);
+  const h = nonNegBlock(blockHeight);
+  const tiers = h / r.difficultyStepBlocks;
+  const raw = r.difficultyStartBits + Number(tiers);
+  return Math.min(raw, r.difficultyMaxBits);
+}
+
+export function scheduleInfoForBlock(
+  blockHeight: bigint,
+  mintedBaseUnits: bigint,
+  opts?: ScheduleOpts,
+): ScheduleInfo {
+  const r = resolve(opts);
+  const h = nonNegBlock(blockHeight);
   const minted = mintedBaseUnits < 0n ? 0n : mintedBaseUnits;
-  const halvingIndex = Number(minted / r.halvingIntervalBaseUnits);
-  const reward = currentRewardBaseUnits(minted, opts);
+
+  const halvings = h / r.halvingIntervalBlocks;
+  const halvingIndex = Number(halvings);
+  const reward = currentRewardForBlock(h, opts);
   const nextReward = reward === 0n ? 0n : reward / 2n;
-  const naiveNextHalving = (BigInt(halvingIndex) + 1n) * r.halvingIntervalBaseUnits;
-  const nextHalvingAt = naiveNextHalving > r.maxSupplyBaseUnits
-    ? r.maxSupplyBaseUnits
-    : naiveNextHalving;
+  const nextHalvingAtBlock = (halvings + 1n) * r.halvingIntervalBlocks;
+  const blocksToNextHalving = nextHalvingAtBlock - h;
+
+  const difficultyTiersRaw = h / r.difficultyStepBlocks;
+  const currentDifficultyBits = difficultyForBlock(h, opts);
+  const nextDifficultyAtBlock = (difficultyTiersRaw + 1n) * r.difficultyStepBlocks;
+  const blocksToNextDifficultyStep = nextDifficultyAtBlock - h;
+  // Difficulty never decreases, but past the max cap it stops climbing.
+  const nextDifficultyBits = currentDifficultyBits >= r.difficultyMaxBits
+    ? r.difficultyMaxBits
+    : currentDifficultyBits + 1;
+
   const isCapped = minted >= r.maxSupplyBaseUnits;
   const isMintable = !isCapped && reward > 0n;
-  const baseUnitsToNextHalving = nextHalvingAt > minted ? nextHalvingAt - minted : 0n;
+
   return {
-    currentDifficultyBits: r.difficultyBits,
+    blockHeight: h,
     currentRewardBaseUnits: reward,
+    currentDifficultyBits,
     halvingIndex,
-    nextHalvingAtBaseUnits: nextHalvingAt,
-    baseUnitsToNextHalving,
+    difficultyTier: Number(difficultyTiersRaw),
+    nextHalvingAtBlock,
+    nextDifficultyAtBlock,
+    blocksToNextHalving,
+    blocksToNextDifficultyStep,
     nextRewardBaseUnits: nextReward,
+    nextDifficultyBits,
     isCapped,
     isMintable,
   };

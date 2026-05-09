@@ -5,14 +5,18 @@ import { verifyCanonical } from '@rpow/shared';
 import { verifySolution } from '../pow.js';
 import { signTokenPayload } from '../signing.js';
 import { withTxRetry } from '../db.js';
-import { currentRewardBaseUnits, BASE_UNITS_PER_RPOW } from '../schedule.js';
+import {
+  currentRewardForBlock,
+  difficultyForBlock,
+  BASE_UNITS_PER_RPOW,
+} from '../schedule.js';
 import { macMintChallenge, macsEqual, type MintChallengeEnvelope } from '../mint-challenge.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
 
 const Body = z.object({
   challenge_id: z.string().uuid(),
   nonce_prefix: z.string().regex(/^[0-9a-f]{32}$/),
-  difficulty_bits: z.number().int().min(4).max(40),
+  difficulty_bits: z.number().int().min(4).max(64),
   issued_at: z.string(),
   expires_at: z.string(),
   challenge_mac: z.string().regex(/^[0-9a-f]{64}$/),
@@ -47,7 +51,7 @@ export async function mintRoutes(app: FastifyInstance) {
       difficulty_bits: parsed.data.difficulty_bits,
       issued_at: parsed.data.issued_at,
       expires_at: parsed.data.expires_at,
-      domain: 'rpow2.mint',
+      domain: 'rpow4.mint',
     };
     const expectedMac = macMintChallenge(challengeEnvelope, app.config.sessionSecret);
     if (!macsEqual(expectedMac, parsed.data.challenge_mac)) {
@@ -62,6 +66,15 @@ export async function mintRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'INVALID_SOLUTION', message: 'hash does not meet difficulty' });
     }
 
+    const scheduleOpts = {
+      baseRewardBaseUnits: app.config.baseRewardBaseUnits,
+      halvingIntervalBlocks: app.config.halvingIntervalBlocks,
+      difficultyStartBits: app.config.difficultyStartBits,
+      difficultyStepBlocks: app.config.difficultyStepBlocks,
+      difficultyMaxBits: app.config.difficultyMaxBits,
+      maxSupplyRpow: app.config.mintMaxSupply,
+    };
+
     const result = await withTxRetry(
       app.pool,
       async (c) => {
@@ -74,25 +87,53 @@ export async function mintRoutes(app: FastifyInstance) {
         );
         if (accepted.rows[0]) return { error: 'CHALLENGE_ALREADY_CLAIMED' as const, message: 'already claimed' };
 
-        const { rows: counterRows } = await c.query<{ value: string }>(
-          `SELECT value::text FROM app_counters WHERE name='minted_supply'`,
+        // Read both counters in one round-trip. The schedule is purely
+        // a function of block_height; the cap check uses minted_supply.
+        const { rows: counterRows } = await c.query<{ name: string; value: string }>(
+          `SELECT name, value::text AS value
+             FROM app_counters
+            WHERE name IN ('minted_supply','block_height')`,
         );
-        const mintedBaseUnits = counterRows[0] ? BigInt(counterRows[0].value) : 0n;
+        let mintedBaseUnits = 0n;
+        let blockHeight = 0n;
+        for (const r of counterRows) {
+          if (r.name === 'minted_supply') mintedBaseUnits = BigInt(r.value);
+          else if (r.name === 'block_height') blockHeight = BigInt(r.value);
+        }
 
-        const reward = currentRewardBaseUnits(mintedBaseUnits, {
-          maxSupplyRpow: app.config.mintMaxSupply,
-        });
+        // Reward and difficulty are stamped at the block height the
+        // mint will be sealed AT (= current height; the bump to
+        // height+1 happens further down on success).
+        const reward = currentRewardForBlock(blockHeight, scheduleOpts);
         if (reward === 0n) {
-          return { error: 'SUPPLY_EXHAUSTED' as const, message: '21M cap reached or reward floored' };
+          return { error: 'SUPPLY_EXHAUSTED' as const, message: 'reward floored to zero — schedule terminated' };
+        }
+        const expectedDifficulty = difficultyForBlock(blockHeight, scheduleOpts);
+        if (parsed.data.difficulty_bits !== expectedDifficulty) {
+          // Schedule advanced between challenge issuance and mint
+          // submission. Reject so the client refetches a current
+          // challenge instead of mining against a stale difficulty.
+          return {
+            error: 'CHALLENGE_EXPIRED' as const,
+            message: 'difficulty changed between challenge and mint; request a new challenge',
+          };
         }
 
         const capBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
+        // Atomically bump minted_supply (with cap guard) AND block_height.
+        // If the cap guard fails we bump nothing — block_height only
+        // advances when an event is actually issued.
         const supplyResult = await c.query(
-          `UPDATE app_counters SET value = value + $2::bigint
-           WHERE name='minted_supply' AND value + $2::bigint <= $1::bigint`,
-          [capBaseUnits.toString(), reward.toString()],
+          `UPDATE app_counters
+             SET value = value + (CASE
+               WHEN name = 'minted_supply' THEN $1::bigint
+               ELSE 1::bigint
+             END)
+           WHERE name IN ('minted_supply','block_height')
+             AND (SELECT value FROM app_counters WHERE name='minted_supply') + $1::bigint <= $2::bigint`,
+          [reward.toString(), capBaseUnits.toString()],
         );
-        if (supplyResult.rowCount === 0) {
+        if (supplyResult.rowCount !== 2) {
           return { error: 'SUPPLY_EXHAUSTED' as const, message: '21M cap reached' };
         }
 
@@ -132,10 +173,7 @@ export async function mintRoutes(app: FastifyInstance) {
         );
 
         // INSERT ledger_events + propagate event_seq to the two sidecar
-        // tables in a single round-trip via data-modifying CTEs. Each
-        // sub-statement runs against the same snapshot, but the sidecar
-        // updates read event_seq through the explicit data flow from
-        // `inserted`, which is the supported cross-CTE pattern.
+        // tables in a single round-trip via data-modifying CTEs.
         const insertedEvent = await c.query<LedgerEventRow>(
           `WITH inserted AS (
              INSERT INTO ledger_events(
@@ -182,7 +220,10 @@ export async function mintRoutes(app: FastifyInstance) {
     );
 
     if ('error' in result) {
-      const status = result.error === 'SUPPLY_EXHAUSTED' ? 410 : 400;
+      const status =
+        result.error === 'SUPPLY_EXHAUSTED' ? 410 :
+        result.error === 'CHALLENGE_EXPIRED' ? 410 :
+        400;
       return reply.code(status).send(result);
     }
     // Successful mint changes the user's balance + activity feed.

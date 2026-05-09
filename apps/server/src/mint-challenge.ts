@@ -8,7 +8,7 @@ export interface MintChallengeEnvelope {
   difficulty_bits: number;
   issued_at: string;
   expires_at: string;
-  domain: 'rpow2.mint';
+  domain: 'rpow4.mint';
 }
 
 export function macMintChallenge(envelope: MintChallengeEnvelope, secret: string): string {

@@ -25,11 +25,11 @@ step () { echo; echo "[$(date -u +%H:%M:%SZ)] $*"; }
 echo "rpow cutover starting. Verify pre-flight:"
 echo "  - VPS_IP=$VPS_IP, VPS_IPV6=$VPS_IPV6"
 echo "  - safety dump already archived to B2 (Task 8.7)"
-echo "  - TTL=60 already set on api.rpow2.com (done 2026-05-07)"
+echo "  - TTL=60 already set on api.rpow4.com"
 gate "ALL PRE-FLIGHT VERIFIED"
 
 step "T+0s: stopping Fly app"
-flyctl scale count 0 --app rpow2-server
+flyctl scale count 0 --app rpow4-server
 sleep 5
 
 step "T+10s: verifying Neon quiescence"
@@ -56,20 +56,20 @@ step "T+100s: GATE 2 — smoke test via --resolve"
 VPS_IP="$VPS_IP" "$HERE/smoke-test.sh"
 gate "Confirm /health, /ledger, TLS all OK"
 
-step "T+125s: DNS FLIP — point api.rpow2.com at VPS"
+step "T+125s: DNS FLIP — point api.rpow4.com at VPS"
 "$HERE/dns-flip.sh"
 
 step "T+130s: watching propagation (~60s)"
 for i in 1 2 3 4 5; do
     sleep 12
     echo "$(date -u +%H:%M:%SZ)"
-    dig +short A api.rpow2.com @1.1.1.1
-    dig +short A api.rpow2.com @8.8.8.8
+    dig +short A api.rpow4.com @1.1.1.1
+    dig +short A api.rpow4.com @8.8.8.8
 done
 
 step "T+200s: live curl through real DNS"
-curl -sS -o /dev/null -w "HTTP %{http_code} cert=%{ssl_verify_result} via %{remote_ip}\n" https://api.rpow2.com/health || true
+curl -sS -o /dev/null -w "HTTP %{http_code} cert=%{ssl_verify_result} via %{remote_ip}\n" https://api.rpow4.com/health || true
 
 step "Cutover complete. Monitor for 30 min:"
 echo "  ssh $VPS_HOST 'journalctl -u rpow-server -f'"
-echo "  ssh $VPS_HOST 'sudo tail -f /var/log/nginx/api.rpow2.com.access.log'"
+echo "  ssh $VPS_HOST 'sudo tail -f /var/log/nginx/api.rpow4.com.access.log'"

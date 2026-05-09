@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { scheduleInfo, BASE_UNITS_PER_RPOW } from '../schedule.js';
+import { scheduleInfoForBlock, BASE_UNITS_PER_RPOW } from '../schedule.js';
 import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
 
 const MAX_LEDGER_EVENTS_LIMIT = 100;
@@ -57,12 +57,14 @@ export async function ledgerRoutes(app: FastifyInstance) {
     return app.caches.ledger.get('singleton', async () => {
       const { rows } = await app.pool.query<{
         minted_supply: string;
+        block_height: string;
         circulating_supply: string;
         user_count: string;
         total_transferred: string;
       }>(
         `SELECT
            COALESCE((SELECT value FROM app_counters WHERE name='minted_supply'), 0)::text AS minted_supply,
+           COALESCE((SELECT value FROM app_counters WHERE name='block_height'), 0)::text AS block_height,
            COALESCE((SELECT value FROM ledger_stats WHERE name='circulating_supply'), 0)::text AS circulating_supply,
            COALESCE((SELECT value FROM ledger_stats WHERE name='user_count'), 0)::text AS user_count,
            COALESCE((SELECT sum(value) FROM ledger_stat_shards WHERE name='total_transferred'), 0)::text AS total_transferred`,
@@ -70,13 +72,18 @@ export async function ledgerRoutes(app: FastifyInstance) {
 
       const stats = rows[0]!;
       const counterBaseUnits = BigInt(stats.minted_supply);
+      const blockHeight = BigInt(stats.block_height);
       const totalTransferredBaseUnits = BigInt(stats.total_transferred);
       const circulatingBaseUnits = BigInt(stats.circulating_supply);
       const userCount = Number(stats.user_count);
       const maxSupplyBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
 
-      const info = scheduleInfo(counterBaseUnits, {
-        difficultyBits: app.config.difficultyBits,
+      const info = scheduleInfoForBlock(blockHeight, counterBaseUnits, {
+        baseRewardBaseUnits: app.config.baseRewardBaseUnits,
+        halvingIntervalBlocks: app.config.halvingIntervalBlocks,
+        difficultyStartBits: app.config.difficultyStartBits,
+        difficultyStepBlocks: app.config.difficultyStepBlocks,
+        difficultyMaxBits: app.config.difficultyMaxBits,
         maxSupplyRpow: app.config.mintMaxSupply,
       });
 
@@ -87,12 +94,24 @@ export async function ledgerRoutes(app: FastifyInstance) {
         minted_supply_counter_base_units: counterBaseUnits.toString(),
         max_supply_base_units: maxSupplyBaseUnits.toString(),
         base_units_per_rpow: BASE_UNITS_PER_RPOW.toString(),
-        current_difficulty_bits: Math.max(app.config.difficultyFloor, info.currentDifficultyBits),
+
+        block_height: blockHeight.toString(),
+        halving_interval_blocks: app.config.halvingIntervalBlocks,
+        difficulty_step_blocks: app.config.difficultyStepBlocks,
+        difficulty_max_bits: app.config.difficultyMaxBits,
+
+        current_difficulty_bits: info.currentDifficultyBits,
+        next_difficulty_bits: info.nextDifficultyBits,
+        next_difficulty_at_block: info.nextDifficultyAtBlock.toString(),
+        blocks_to_next_difficulty_step: info.blocksToNextDifficultyStep.toString(),
+        difficulty_tier: info.difficultyTier,
+
         current_reward_base_units: info.currentRewardBaseUnits.toString(),
         next_reward_base_units: info.nextRewardBaseUnits.toString(),
-        next_halving_at_base_units: info.nextHalvingAtBaseUnits.toString(),
-        base_units_to_next_halving: info.baseUnitsToNextHalving.toString(),
+        next_halving_at_block: info.nextHalvingAtBlock.toString(),
+        blocks_to_next_halving: info.blocksToNextHalving.toString(),
         halving_index: info.halvingIndex,
+
         is_capped: info.isCapped,
         user_count: userCount,
       };

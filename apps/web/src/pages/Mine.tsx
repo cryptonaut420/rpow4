@@ -240,28 +240,25 @@ export function MinePage() {
 
   const running = status === 'mining';
 
-  // Halving / reward block (when ledger has loaded). Shown above the per-run
-  // mining stats so users see what they're actually mining for.
+  // Block / reward block (when ledger has loaded). Shown above the per-run
+  // mining stats so users see what they're actually mining for. RPOW4
+  // tokenomics are Bitcoin-flavored: 50 RPOW initial reward, halves every
+  // 210k blocks, difficulty +1 bit every 164,062 blocks.
   let rewardBlock = '';
   if (ledger) {
     const currentReward = formatRpow(ledger.current_reward_base_units);
     const nextReward = formatRpow(ledger.next_reward_base_units);
-    const nextHalvingAt = formatRpow(ledger.next_halving_at_base_units);
-    const toGo = formatRpow(ledger.base_units_to_next_halving);
-    // Reward fraction expressed as 1/N. Base reward at halving_index 0 is
-    // 1/128 RPOW (= 7,812,500 base units), and halves each tier.
-    const baseDenom = 128;
-    const rewardFrac = `1/${baseDenom * 2 ** ledger.halving_index}`;
-    const nextRewardFrac = ledger.is_capped ? '—' : `1/${baseDenom * 2 ** (ledger.halving_index + 1)}`;
     const yourRate = bench ? formatHashrate(bench.hps) : 'measuring…';
     const eta = bench
       ? formatDuration(expectedSecondsAt(ledger.current_difficulty_bits, bench.hps))
       : '—';
-    rewardBlock = `  CURRENT REWARD   : ${currentReward} RPOW (${rewardFrac}) per solution
+    rewardBlock = `  BLOCK HEIGHT     : ${ledger.block_height}
+  CURRENT REWARD   : ${currentReward} RPOW per solution  (halving #${ledger.halving_index})
   CURRENT DIFFICULTY: ${ledger.current_difficulty_bits} trailing zero bits
   YOUR HASHRATE    : ${yourRate}  (~${eta} per solution on this CPU)
-  NEXT HALVING AT  : ${nextHalvingAt} RPOW total minted (${toGo} RPOW to go)
-  NEXT REWARD      : ${ledger.is_capped ? 'CAPPED' : `${nextReward} RPOW (${nextRewardFrac})`}
+  NEXT HALVING AT  : block ${ledger.next_halving_at_block}  (${ledger.blocks_to_next_halving} to go)
+  NEXT REWARD      : ${ledger.is_capped ? 'CAPPED' : `${nextReward} RPOW`}
+  NEXT DIFFICULTY  : +1 bit at block ${ledger.next_difficulty_at_block}  (${ledger.blocks_to_next_difficulty_step} to go)
 
 `;
   }

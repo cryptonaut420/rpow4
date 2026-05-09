@@ -9,7 +9,7 @@ shape of each component.
         Browser
           │
           ▼
-  rpow2.com (Netlify CDN)                          api.rpow2.com (OVH VPS)
+  rpow4.com (Netlify CDN)                          api.rpow4.com (OVH VPS)
   ─────────────────────────                        ──────────────────────────
   apps/web (React + Vite)            HTTPS         nginx :443  (Let's Encrypt)
   HashRouter SPA                  ─────────►       │
@@ -28,7 +28,7 @@ Concretely, as of 2026-05-08:
 - **API** — OVH VPS (Ubuntu 25.04, kernel 6.14, ~4–8 GB RAM) at
   `15.204.254.192`. Single Node 22 process under systemd
   ([`rpow-server.service`](../../ops/systemd/rpow-server.service)) behind
-  nginx ([`api.rpow2.com.conf`](../../ops/nginx/api.rpow2.com.conf)).
+  nginx ([`api.rpow4.com.conf`](../../ops/nginx/api.rpow4.com.conf)).
 - **DB** — PostgreSQL 17 on the same VPS. Unix-socket only. App pool size 30
   (see [`db.ts`](../../apps/server/src/db.ts)).
 - **DNS / TLS** — Cloudflare DNS (DNS-only for `api.*`, proxied for apex).
@@ -57,7 +57,7 @@ rpow/
 │   │   │   ├── db.ts              pg Pool factory, transaction retry helper, runMigrations
 │   │   │   ├── session.ts         HMAC-signed `pubkey|exp` cookie
 │   │   │   ├── pow.ts             trailing-zero-bits SHA-256 verifier
-│   │   │   ├── schedule.ts        halving math, BASE_UNITS_PER_RPOW, supply-aware reward
+│   │   │   ├── schedule.ts        block-based halving + difficulty schedule (RPOW4)
 │   │   │   ├── signing.ts         Ed25519 server token sign/verify
 │   │   │   └── routes/
 │   │   │       ├── auth.ts        /auth/{challenge,session,logout}
@@ -97,14 +97,14 @@ rpow/
 │   │       └── difficulty.ts      trailingZeroBits, hex/u64 helpers (used by server + worker)
 │
 ├── ops/                           VPS-side ops surface
-│   ├── nginx/api.rpow2.com.conf
+│   ├── nginx/api.rpow4.com.conf
 │   ├── systemd/rpow-{server,backup,healthcheck}.{service,timer}
 │   └── *.sh                       backup, dns-flip, smoke-test, parity-check, etc.
 │
 ├── docs/
 │   ├── RUNBOOK.md                 operator runbook
 │   ├── overview/                  this folder
-│   └── superpowers/{specs,plans}/ canonical design specs and implementation plans
+│   └── superpowers/{specs,plans}/ historical design specs (predecessor RPOW2)
 │
 ├── fly.toml                       (legacy) Fly.io config
 ├── netlify.toml                   web SPA build + redirects
@@ -148,8 +148,8 @@ rpow/
 | Auth context | `readSession(req, secret)` in [`session.ts`](../../apps/server/src/session.ts), used by every protected route |
 | Per-action signature verification | `verifyCanonical(action, body, pubkey, sig)` from `@rpow/shared`, called by `/mint` and `/send` |
 | Idempotency | Partial UNIQUE index on `ledger_events.idempotency_key` for transfers; route handlers detect 23505 conflicts and return the original outcome |
-| Hot-path caching | `/challenge` caches `app_counters.minted_supply` for 5s; `/ledger` reads maintained stats and caches the response for 5s |
-| Cap enforcement | `pg_advisory_xact_lock(hashtext('rpow_mint_supply'))` + atomic `UPDATE … WHERE value + reward <= cap` in [`mint.ts`](../../apps/server/src/routes/mint.ts) |
+| Hot-path caching | `/challenge` caches the `(minted_supply, block_height)` pair for 5s; `/ledger` reads maintained stats and caches the response for 5s |
+| Cap enforcement | `pg_advisory_xact_lock(hashtext('rpow_mint_supply'))` + atomic `UPDATE app_counters … WHERE value + reward <= cap` in [`mint.ts`](../../apps/server/src/routes/mint.ts) (also bumps `block_height` in the same statement) |
 | Public token-issuer key | Served at `/.well-known/rpow-pubkey.pem` (DER → PEM-wrapped Ed25519 SubjectPublicKeyInfo) |
 
 ## Failure modes (high level)

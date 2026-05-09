@@ -1,8 +1,8 @@
-# rpow2
+# rpow4
 
 > A tribute to the original RPOW by Hal Finney.
 
-A faithful modern recreation of Hal Finney's [Reusable Proofs of Work](https://nakamotoinstitute.org/finney/rpow/) (2004). BIP-39/SLIP-0010 wallet auth (no email), hashcash mining, maintained balance rows, per-action client signatures persisted on the ledger, public statistics.
+A faithful modern recreation of Hal Finney's [Reusable Proofs of Work](https://nakamotoinstitute.org/finney/rpow/) (2004), Bitcoin-flavored. BIP-39 / SLIP-0010 wallet auth (no email), hashcash mining, maintained balance rows, per-action client signatures persisted on the ledger, public statistics. **50 RPOW initial reward, halving every 210,000 blocks, hard 21,000,000 cap, no founder allocation.**
 
 ## Quickstart
 
@@ -49,7 +49,7 @@ To run the stack with low difficulty for hands-on testing:
 DATABASE_URL=postgres://postgres:p@localhost:55432/postgres \
 SESSION_SECRET=$(openssl rand -hex 32) \
 WEB_ORIGIN=http://localhost:5173 \
-DIFFICULTY_BITS=20 DIFFICULTY_FLOOR=8 \
+DIFFICULTY_BITS=14 \
 $(node -e 'import("./apps/server/dist/signing.js").then(({generateKeypair})=>{const k=generateKeypair(); console.log("RPOW_SIGNING_PRIVATE_KEY_HEX="+k.privateHex+" RPOW_SIGNING_PUBLIC_KEY_HEX="+k.publicHex);})') \
 npm --workspace @rpow/server run dev
 
@@ -57,12 +57,25 @@ npm --workspace @rpow/server run dev
 npm --workspace @rpow/web run dev
 ```
 
+## Tokenomics
+
+RPOW4 mirrors Bitcoin's issuance curve, sped up by removing the 10-minute block-time enforcement. The simulation runs as fast as the network can mine; difficulty is the only governor.
+
+| Parameter                      | Value                                  |
+|--------------------------------|----------------------------------------|
+| Hard supply cap                | 21,000,000 RPOW                        |
+| Initial block reward           | 50 RPOW (= 50 × 10⁹ base units)        |
+| Reward halving cadence         | every 210,000 blocks                   |
+| Initial difficulty             | 24 trailing-zero bits (`DIFFICULTY_BITS`) |
+| Difficulty step                | +1 bit every 164,062 blocks (≈ 21M / 128) |
+| Difficulty ceiling             | 50 bits                                |
+| Founder allocation / premine   | **none**                                |
+
+1 successful PoW = 1 block. The reward and difficulty schedules are pure functions of the global `block_height` counter (a sibling of `minted_supply` in `app_counters`), so the curve is fully deterministic and queryable from `/ledger`.
+
 ## Deploy
 
-- Server: OVH VPS (`api.rpow2.com`), systemd-managed Node 22 behind nginx
-- Web: Netlify (`rpow2.com`)
-- DB: Postgres 17 on the same VPS, Unix-socket only
-- DNS: Cloudflare
+The repo's ops/ scripts and nginx config target a hostname (`api.rpow4.com` or whatever you prefer). DNS, certs, and Netlify wiring are operator decisions outside the codebase.
 
 See `docs/RUNBOOK.md` for operator instructions.
 

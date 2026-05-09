@@ -5,9 +5,10 @@
 //   - imported from an existing BIP-39 mnemonic (with optional passphrase), or
 //   - imported from a raw 32-byte seed / 64-byte secretKey (hex or base58).
 //
-// HD derivation follows SLIP-0010 (Ed25519 variant) on path m/44'/501'/0'/0'.
-// That's the same path Solana / Phantom use, so a single mnemonic resolves to
-// the same identity across rpow2 and any standard SOL wallet.
+// HD derivation follows SLIP-0010 (Ed25519 variant) on the canonical RPOW
+// path m/44'/501'/0'/0'. Coin type 501 is the SLIP-0044 registration commonly
+// used for Ed25519 chains; we adopt it so any standard SLIP-0010/Ed25519
+// tooling can re-derive the same keypair from a given mnemonic.
 
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
@@ -28,7 +29,7 @@ export interface RpowKeypair {
   publicKeyBase58: string;
 }
 
-const SOLANA_DERIVATION_PATH = "m/44'/501'/0'/0'";
+const RPOW_DERIVATION_PATH = "m/44'/501'/0'/0'";
 
 // ---- BIP-39 -----------------------------------------------------------------
 
@@ -112,13 +113,13 @@ function keypairFromSeed(privSeed: Uint8Array): RpowKeypair {
 }
 
 /**
- * Derive a keypair from a mnemonic on Solana's standard path
- * (m/44'/501'/0'/0'). Importing the same mnemonic into Phantom / a Solana
- * CLI keypair will produce this same keypair.
+ * Derive a keypair from a mnemonic on the canonical RPOW HD path
+ * (m/44'/501'/0'/0'). Any SLIP-0010 / Ed25519 wallet using the same path
+ * (and the same mnemonic + passphrase) will produce this same keypair.
  */
 export function mnemonicToKeypair(mnemonic: string, passphrase = ''): RpowKeypair {
   const seed = mnemonicToSeed(mnemonic, passphrase);
-  const node = slip0010DerivePath(seed, SOLANA_DERIVATION_PATH);
+  const node = slip0010DerivePath(seed, RPOW_DERIVATION_PATH);
   return keypairFromSeed(node.key);
 }
 

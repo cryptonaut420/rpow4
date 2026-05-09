@@ -75,3 +75,31 @@ Ultra-low-latency pass:
 - [x] /health and /health/ready use fast-json-stringify response schemas so probe responses skip generic JSON.stringify.
 - [x] Cached session verifier coverage in tests (positive, negative, exp boundary).
 
+Mining throttle removal + UI request flood fix:
+- [x] Removed @fastify/rate-limit registration in buildApp and per-route rateLimit configs from /auth/*, /signup/*, /challenge, /mint, /send, /lookup.
+- [x] Dropped the @fastify/rate-limit dependency from apps/server/package.json.
+- [x] Mine page throttles /me + /ledger refresh to once per second during continuous mining; sessionMinted updates per-coin.
+- [x] Forced /me + /ledger refresh fires on STOP and at the end of the final mining cycle so the user always sees the true post-stop state.
+- [x] Mine page guards against double-clicks on MINE so a stale click can't spawn a parallel mining loop.
+
+Mine page render-storm fix:
+- [x] Dropped the 'submitting' status; status stays 'mining' for the whole run so it no longer flickers to 'submitting' and back on every coin.
+- [x] Per-coin counters (totalHashes, currentCycleHashes, sessionMinted, lastTokenId, sessionStartedAt, sessionStoppedAt) moved to refs.
+- [x] A 4 Hz interval forces a single repaint while mining, so the page renders at most ~4x/sec instead of 60+x/sec.
+- [x] Removed redundant per-cycle setState calls (setStatus('mining'), setError(''), setHashes('0'), setElapsed(0)).
+- [x] Hashes / elapsed / rate now show session totals (monotonic, readable) instead of resetting on every cycle.
+- [x] Stats freeze at the final values when the run ends instead of jumping back to zero.
+
+RPOW4 tokenomics + branding:
+- [x] schedule.ts rewritten as block-based: 50 RPOW base reward, halving every 210k blocks, 24-bit start difficulty, +1 bit per 164,062 blocks, 50-bit cap, 21M hard cap.
+- [x] Migration 017 adds app_counters.block_height with backfill from ledger_events MINT count.
+- [x] env.ts + AppConfig: replaced DIFFICULTY_FLOOR with DIFFICULTY_STEP_BLOCKS / DIFFICULTY_MAX_BITS / MINT_BASE_REWARD_BASE_UNITS / HALVING_INTERVAL_BLOCKS.
+- [x] /mint atomically increments block_height with minted_supply and validates that client-stamped difficulty matches the schedule's current difficulty.
+- [x] /challenge stamps difficulty from the current block height (cached counter).
+- [x] /ledger LedgerResponse exposes block-based fields (block_height, current_reward, next_reward, halving_index, current/next difficulty, blocks_to_next_*).
+- [x] Ledger.tsx renders block-based fields and ABOUT panel rewritten — RPOW4 branding, no Solana/founder/premine references.
+- [x] Wire-format domain rename: rpow2 → rpow4 across auth/signup/mint canonical envelopes, IndexedDB store name, server log line, App.tsx banner.
+- [x] Branding rename across README, docker README, overview docs, ops/nginx, fly.toml, netlify.toml, compose.yaml project name + volumes.
+- [x] Stripped SRPOW + founder allocation: deleted srpow-wrap design + plan docs, deleted outdated stats.html, rewrote RUNBOOK.md tokenomics section.
+- [x] Test suites updated: schedule, ledger, mint, challenge, signup, canonical for new schedule + new wire constants.
+

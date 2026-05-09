@@ -1,9 +1,9 @@
 // Wire-format types used by both server and web.
 //
 // Identity: every account is keyed by a 32-byte Ed25519 public key,
-// transmitted as base58 ("publicKeyBase58", same alphabet Solana uses).
-// All state-changing requests carry a `client_signature_base58` which is the
-// detached Ed25519 signature over canonicalMessage(action, body) — see
+// transmitted as base58 ("publicKeyBase58"). All state-changing
+// requests carry a `client_signature_base58` which is the detached
+// Ed25519 signature over canonicalMessage(action, body) — see
 // canonical.ts for the exact byte layout.
 
 // ---- auth -------------------------------------------------------------------
@@ -18,7 +18,7 @@ export interface AuthChallengeEnvelope {
   nonce: string;       // hex(16)
   issued_at: string;   // ISO8601
   expires_at: string;  // ISO8601 (issued_at + 5 min)
-  domain: string;      // e.g. "rpow2"
+  domain: string;      // e.g. "rpow4"
 }
 
 export interface AuthChallengeResponse {
@@ -90,7 +90,7 @@ export interface SignupChallengeEnvelope {
   difficulty_bits: number;
   issued_at: string;         // ISO8601
   expires_at: string;        // ISO8601 (issued_at + 1h)
-  domain: string;            // 'rpow2.signup'
+  domain: string;            // 'rpow4.signup'
 }
 
 export interface SignupChallengeResponse {
@@ -148,7 +148,7 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'admin', 'administrator', 'root', 'system', 'sysadmin', 'official',
   'security', 'team', 'staff', 'mod', 'moderator',
   // brand
-  'rpow', 'rpow2', 'srpow', 'finney', 'satoshi',
+  'rpow', 'rpow2', 'rpow3', 'rpow4', 'srpow', 'finney', 'satoshi',
   // language placeholders
   'null', 'undefined', 'none', 'true', 'false', 'self', 'you',
 ]);
@@ -276,12 +276,25 @@ export interface LedgerResponse {
   minted_supply_counter_base_units: string;
   max_supply_base_units: string;
   base_units_per_rpow: string;
+
+  /** Block-based RPOW4 schedule. 1 mint = 1 block. */
+  block_height: string;
+  halving_interval_blocks: number;
+  difficulty_step_blocks: number;
+  difficulty_max_bits: number;
+
   current_difficulty_bits: number;
+  next_difficulty_bits: number;
+  next_difficulty_at_block: string;
+  blocks_to_next_difficulty_step: string;
+  difficulty_tier: number;
+
   current_reward_base_units: string;
   next_reward_base_units: string;
-  next_halving_at_base_units: string;
-  base_units_to_next_halving: string;
+  next_halving_at_block: string;
+  blocks_to_next_halving: string;
   halving_index: number;
+
   is_capped: boolean;
   user_count: number;
 }

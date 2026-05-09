@@ -15,7 +15,7 @@ import { shortPubkey } from '@rpow/shared';
 
 const HEADER = [
   '+======================================================================+',
-  '|                   RPOW2 - Reusable Proofs of Work                    |',
+  '|                   RPOW4 - Reusable Proofs of Work                    |',
   '+======================================================================+',
 ].join('\n');
 

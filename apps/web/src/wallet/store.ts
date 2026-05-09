@@ -1,7 +1,7 @@
 import { decryptString, encryptString, type EncryptedBlob } from './crypto.js';
 
 /**
- * IndexedDB wallet store. Two object stores in DB `rpow2-wallet`:
+ * IndexedDB wallet store. Two object stores in DB `rpow4-wallet`:
  *
  *   - meta    : keyPath `id` (always 'self'), holds non-secret hints —
  *               `pubkey`, `createdAt`, `kind` ('mnemonic' | 'privateKey').
@@ -16,7 +16,7 @@ import { decryptString, encryptString, type EncryptedBlob } from './crypto.js';
  * back up your mnemonic somewhere offline.
  */
 
-const DB_NAME = 'rpow2-wallet';
+const DB_NAME = 'rpow4-wallet';
 const DB_VERSION = 1;
 const META_STORE = 'meta';
 const SECRET_STORE = 'secret';

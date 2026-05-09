@@ -11,7 +11,7 @@ import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '../session.js'
 import { withTxRetry } from '../db.js';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-const DOMAIN = 'rpow2';
+const DOMAIN = 'rpow4';
 
 function macEnvelope(envelope: AuthChallengeEnvelope, secret: string): string {
   return createHmac('sha256', secret).update(canonicalJson(envelope)).digest('hex');

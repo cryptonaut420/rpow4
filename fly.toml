@@ -1,4 +1,4 @@
-app = "rpow2-server"
+app = "rpow4-server"
 primary_region = "iad"
 
 [build]
@@ -6,8 +6,7 @@ primary_region = "iad"
 
 [env]
   PORT = "8080"
-  WEB_ORIGIN = "https://rpow2.com"
-  MAGIC_LINK_BASE_URL = "https://api.rpow2.com"
+  WEB_ORIGIN = "https://rpow4.com"
 
 [http_service]
   internal_port = 8080

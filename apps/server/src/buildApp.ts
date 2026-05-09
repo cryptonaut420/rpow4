@@ -18,10 +18,20 @@ import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier
 
 export interface AppConfig {
   sessionSecret: string;
-  difficultyBits: number;
-  difficultyFloor: number;
+  /** Trailing-zero-bit difficulty at block height 0 (RPOW4 schedule start). */
+  difficultyStartBits: number;
+  /** Blocks between difficulty +1-bit steps. */
+  difficultyStepBlocks: number;
+  /** Hard cap on stamped difficulty so the schedule stays mineable forever. */
+  difficultyMaxBits: number;
+  /** PoW difficulty for /signup (anti-spam, not currency). */
   signupDifficultyBits: number;
+  /** 21,000,000 in production. Express in whole RPOW; base-unit cap is derived. */
   mintMaxSupply: number;
+  /** Initial block reward in base units. 50 RPOW = 50_000_000_000 in production. */
+  baseRewardBaseUnits: bigint;
+  /** Blocks between reward halvings. 210,000 in production (Bitcoin-exact). */
+  halvingIntervalBlocks: number;
   signingPrivateKeyHex: string;
   signingPublicKeyHex: string;
   webOrigin: string;

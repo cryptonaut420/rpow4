@@ -1,4 +1,4 @@
-# Local dev stack for rpow2. Bring everything up with one command:
+# Local dev stack for rpow4. Bring everything up with one command:
 #
 #     ./up.sh
 #
@@ -15,7 +15,7 @@
 # file written by ./up.sh (or set yourself before running compose).
 # Per-user secrets belong in the optional, gitignored docker/dev.env.local.
 
-name: rpow2-dev
+name: rpow4-dev
 
 services:
   db:

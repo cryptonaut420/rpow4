@@ -11,22 +11,16 @@
   # Playwright is a devDep of apps/web for E2E tests only. Skip the ~150MB Chromium download on Netlify builds.
   PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
 
-# Static pages served directly (before SPA catch-all)
-[[redirects]]
-  from = "/stats"
-  to = "/stats.html"
-  status = 200
-
 # SPA fallback — for HashRouter all paths actually live at index.html, so this is belt-and-suspenders.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
-# Production: web client points at the Fly-hosted API
+# Production: web client points at the API host
 [context.production.environment]
-  VITE_API_BASE_URL = "https://api.rpow2.com"
+  VITE_API_BASE_URL = "https://api.rpow4.com"
 
 # Branch deploys default to the same API
 [context.deploy-preview.environment]
-  VITE_API_BASE_URL = "https://api.rpow2.com"
+  VITE_API_BASE_URL = "https://api.rpow4.com"

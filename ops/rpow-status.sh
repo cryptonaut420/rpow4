@@ -36,7 +36,7 @@ sudo -u postgres psql -At -d rpow -c "
 " 2>/dev/null | sed 's/^/  /'
 
 bar "TLS cert"
-echo | openssl s_client -servername api.rpow2.com -connect 127.0.0.1:443 2>/dev/null \
+echo | openssl s_client -servername api.rpow4.com -connect 127.0.0.1:443 2>/dev/null \
   | openssl x509 -noout -enddate 2>/dev/null | sed 's/^/  /'
 
 bar "last backup"

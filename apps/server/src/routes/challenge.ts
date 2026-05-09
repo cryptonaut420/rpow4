@@ -1,25 +1,39 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { difficultyBitsForSupply, BASE_UNITS_PER_RPOW } from '../schedule.js';
+import { difficultyForBlock, BASE_UNITS_PER_RPOW } from '../schedule.js';
 import { macMintChallenge, type MintChallengeEnvelope } from '../mint-challenge.js';
 import { TtlCache } from '../cache.js';
 
-// Supply count is checked twice per mining round: here at /challenge
+interface CounterSnapshot {
+  mintedBaseUnits: bigint;
+  blockHeight: bigint;
+}
+
+// Counter snapshot is checked twice per mining round: here at /challenge
 // (advisory only — used to pick difficulty and fail-fast at cap) and again
 // inside /mint under an advisory lock (authoritative). Cache for 5s; the
-// cap check is harmless to be slightly stale because /mint re-checks
-// under the lock.
-const SUPPLY_CACHE_MS = 5_000;
+// cap and difficulty hints are harmless to be slightly stale because
+// /mint re-checks under the lock and returns CHALLENGE_EXPIRED if the
+// schedule advanced underneath the client.
+const COUNTER_CACHE_MS = 5_000;
 
 export async function challengeRoutes(app: FastifyInstance) {
-  const supplyCache = new TtlCache<'singleton', bigint>({ ttlMs: SUPPLY_CACHE_MS, maxSize: 1 });
+  const counterCache = new TtlCache<'singleton', CounterSnapshot>({ ttlMs: COUNTER_CACHE_MS, maxSize: 1 });
 
-  async function mintedSupplyBaseUnits(): Promise<bigint> {
-    return supplyCache.get('singleton', async () => {
-      const { rows } = await app.pool.query<{ value: string }>(
-        `SELECT value::text FROM app_counters WHERE name='minted_supply'`,
+  async function readCounters(): Promise<CounterSnapshot> {
+    return counterCache.get('singleton', async () => {
+      const { rows } = await app.pool.query<{ name: string; value: string }>(
+        `SELECT name, value::text AS value
+           FROM app_counters
+          WHERE name IN ('minted_supply','block_height')`,
       );
-      return rows[0] ? BigInt(rows[0].value) : 0n;
+      let mintedBaseUnits = 0n;
+      let blockHeight = 0n;
+      for (const r of rows) {
+        if (r.name === 'minted_supply') mintedBaseUnits = BigInt(r.value);
+        else if (r.name === 'block_height') blockHeight = BigInt(r.value);
+      }
+      return { mintedBaseUnits, blockHeight };
     });
   }
 
@@ -27,17 +41,17 @@ export async function challengeRoutes(app: FastifyInstance) {
     const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
 
-    const minted = await mintedSupplyBaseUnits();
+    const { mintedBaseUnits, blockHeight } = await readCounters();
     const capBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
-    if (minted >= capBaseUnits) {
+    if (mintedBaseUnits >= capBaseUnits) {
       return reply.code(410).send({ error: 'SUPPLY_EXHAUSTED', message: '21M cap reached' });
     }
 
-    const scheduledBits = difficultyBitsForSupply(minted, {
-      difficultyBits: app.config.difficultyBits,
-      maxSupplyRpow: app.config.mintMaxSupply,
+    const difficulty = difficultyForBlock(blockHeight, {
+      difficultyStartBits: app.config.difficultyStartBits,
+      difficultyStepBlocks: app.config.difficultyStepBlocks,
+      difficultyMaxBits: app.config.difficultyMaxBits,
     });
-    const difficulty = Math.max(app.config.difficultyFloor, scheduledBits);
 
     const id = randomUUID();
     const noncePrefix = randomBytes(16);
@@ -49,7 +63,7 @@ export async function challengeRoutes(app: FastifyInstance) {
       difficulty_bits: difficulty,
       issued_at: new Date(now).toISOString(),
       expires_at: new Date(now + 5 * 60 * 1000).toISOString(),
-      domain: 'rpow2.mint',
+      domain: 'rpow4.mint',
     };
     return {
       challenge_id: envelope.challenge_id,

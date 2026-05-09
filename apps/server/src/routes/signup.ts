@@ -15,7 +15,7 @@ import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '../session.js'
 import { withTxRetry } from '../db.js';
 
 const SIGNUP_TTL_MS = 60 * 60 * 1000; // 1h, generous so a slow phone has time
-const DOMAIN = 'rpow2.signup';
+const DOMAIN = 'rpow4.signup';
 
 function macEnvelope(envelope: SignupChallengeEnvelope, secret: string): string {
   return createHmac('sha256', secret).update(canonicalJson(envelope)).digest('hex');

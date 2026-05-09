@@ -4,6 +4,12 @@ import { api } from '../api.js';
 import type { LedgerResponse } from '@rpow/shared';
 import { formatRpow } from '../lib/format.js';
 
+function formatNumber(value: string): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return n.toLocaleString('en-US');
+}
+
 export function LedgerPage() {
   const [d, setD] = useState<LedgerResponse | null>(null);
   useEffect(() => { api.ledger().then(setD); }, []);
@@ -11,6 +17,8 @@ export function LedgerPage() {
   const totalMinted = formatRpow(d.total_minted_base_units);
   const totalTransferred = formatRpow(d.total_transferred_base_units);
   const circulating = formatRpow(d.circulating_supply_base_units);
+  const reward = formatRpow(d.current_reward_base_units);
+  const nextReward = formatRpow(d.next_reward_base_units);
   return (
     <>
       <Panel title="PUBLIC LEDGER">
@@ -18,9 +26,16 @@ export function LedgerPage() {
 {`  TOTAL MINTED        : ${totalMinted} RPOW
   TOTAL TRANSFERRED   : ${totalTransferred} RPOW
   CIRCULATING SUPPLY  : ${circulating} RPOW
-  CURRENT DIFFICULTY  : ${d.current_difficulty_bits} trailing zero bits
-                        (constant; halving issuance, hard cap 21M)
   USER COUNT          : ${d.user_count}
+
+  BLOCK HEIGHT        : ${formatNumber(d.block_height)}
+  CURRENT REWARD      : ${reward} RPOW per block
+  NEXT REWARD         : ${nextReward} RPOW (in ${formatNumber(d.blocks_to_next_halving)} blocks)
+  HALVING INDEX       : ${d.halving_index} of ~36 (geometric to 21M cap)
+
+  CURRENT DIFFICULTY  : ${d.current_difficulty_bits} trailing zero bits
+  NEXT DIFFICULTY     : ${d.next_difficulty_bits} (in ${formatNumber(d.blocks_to_next_difficulty_step)} blocks)
+  DIFFICULTY CEILING  : ${d.difficulty_max_bits} bits
 `}
         </pre>
         <div style={{ marginTop: 12 }} className="tagline">
@@ -29,7 +44,7 @@ export function LedgerPage() {
         </div>
       </Panel>
 
-      <Panel title="ABOUT RPOW">
+      <Panel title="ABOUT RPOW4">
         <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
 {`  Hal Finney published RPOW (Reusable Proofs of Work) in 2004 as the
   first cryptographic money based on proof-of-work. Bitcoin came four
@@ -51,16 +66,25 @@ export function LedgerPage() {
   to a chain, automatic difficulty adjustment, and a fixed 21M supply
   cap.
 
-  rpow2.com is a modern tribute to the spirit of Finney's original.
-  No IBM 4758 — Ed25519 signatures, BIP-39 / SLIP-0010 wallets, every
+  RPOW4 is a modern tribute to the spirit of Finney's original. No IBM
+  4758 — Ed25519 signatures, BIP-39 / SLIP-0010 wallets, every
   state-changing action signed by the user's keypair, Postgres ledger.
-  Still centralized — but Bitcoin-flavored where it counts: a fixed
-  21,000,000 supply cap and a Bitcoin-style halving issuance curve —
-  difficulty stays constant; the per-solution reward halves every
-  1,000,000 RPOW minted, on down to zero.
+  Still centralized — but Bitcoin-flavored where it counts:
 
-  The 21M cap is enforced by the server ledger. Accepted proofs credit
-  balances directly, and transfers move ledger balances with no fees.
+  - Hard 21,000,000 RPOW supply cap, exactly. No founder allocation,
+    no premine, no operator-held wallet skimmed off the top — every
+    RPOW in circulation was earned by an accepted proof of work.
+  - Bitcoin-style block reward: 50 RPOW per accepted PoW solution
+    initially, halving every 210,000 blocks. The geometric sum closes
+    out at exactly 21M.
+  - Difficulty ramps with the schedule: 24 trailing-zero bits at
+    block 0, +1 bit every 164,062 blocks (≈ 21M / 128), capped at
+    50 bits so the schedule stays mineable forever.
+  - No 10-minute block-time enforcement — the simulation runs as fast
+    as the network can mine. Difficulty is the only governor.
+
+  Accepted proofs credit balances directly. Transfers move ledger
+  balances with no fees.
 
   Caveat: this IS a centralized system. The ledger lives in a Postgres
   database operated by one person on rented infrastructure. If that

@@ -41,10 +41,18 @@ export async function makeTestApp(opts: {
     test: true,
     config: {
       sessionSecret: 'x'.repeat(32),
-      difficultyBits: 8,
-      difficultyFloor: 4,
+      // Tests use the legacy 1/128-RPOW reward against a 21-RPOW cap so
+      // the cap-exhausted edge case is reachable in a few mints. Halving
+      // and difficulty-step intervals are pushed far above any test's
+      // block count so the schedule stays in its starting tier — tests
+      // assert a constant reward and a constant difficulty.
+      difficultyStartBits: 8,
+      difficultyStepBlocks: 1_000_000,
+      difficultyMaxBits: 50,
       signupDifficultyBits: opts.signupDifficultyBits ?? 8,
       mintMaxSupply: 21,
+      baseRewardBaseUnits: 7_812_500n,
+      halvingIntervalBlocks: 1_000_000,
       signingPrivateKeyHex: '11'.repeat(32),
       signingPublicKeyHex: '22'.repeat(32),
       webOrigin: 'http://web.test',
