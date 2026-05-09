@@ -58,11 +58,18 @@ if ! grep -qx db <<<"$RUNNING"; then
   exit 3
 fi
 
-# CTE version: find the row by pubkey OR case-insensitive display_name,
-# flip the flag, return (pubkey, new_state, display_name) so this script
-# can print a friendly summary. psql -v binds :'arg' as a quoted literal,
-# so the value is never interpolated into the SQL text.
-SQL=$(cat <<'EOF'
+# CTE: find the row by pubkey OR case-insensitive display_name, flip the
+# flag, return (pubkey, new_state, display_name) for a friendly summary.
+#
+# The SQL is fed in through stdin (not -c) because psql variable
+# substitution (`:'arg'` → safely quoted SQL literal) is only performed
+# for stdin / file input, not for command-string mode. -v binds the
+# value globally; the heredoc just carries the SQL.
+OUT=$(
+  "${COMPOSE[@]}" exec -T db \
+    psql -X -A -t -F '|' -U rpow -d rpow \
+    -v arg="$ARG" \
+<<'SQL'
 WITH match AS (
   SELECT pubkey FROM accounts
   WHERE pubkey = :'arg' OR lower(display_name) = lower(:'arg')
@@ -76,14 +83,7 @@ upd AS (
   RETURNING a.pubkey, a.send_fees_waived, COALESCE(a.display_name, '') AS display_name
 )
 SELECT pubkey, send_fees_waived, display_name FROM upd;
-EOF
-)
-
-OUT=$(
-  "${COMPOSE[@]}" exec -T db \
-    psql -X -A -t -F '|' -U rpow -d rpow \
-    -v arg="$ARG" \
-    -c "$SQL"
+SQL
 )
 OUT=$(printf '%s' "$OUT" | tr -d '\r' | sed -E '/^$/d')
 
