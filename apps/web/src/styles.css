@@ -45,6 +45,10 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* Prevent fixed-width <pre> blocks (ASCII headers, panel borders) from
+ * stretching the viewport on narrow screens. Each pre still scrolls
+ * horizontally inside its own container if its content overflows. */
+html, body { max-width: 100%; overflow-x: hidden; }
 
 body {
   background:
@@ -57,6 +61,14 @@ body {
   -webkit-font-smoothing: antialiased;
   /* very subtle CRT scanlines */
   position: relative;
+}
+
+/* Default pre handling: stay within the parent and scroll inside if content
+ * is wider than the available space. Individual pres can still opt into
+ * pre-wrap via inline style (see Ledger / Explorer). */
+pre {
+  max-width: 100%;
+  overflow-x: auto;
 }
 body::before {
   content: '';
@@ -125,6 +137,26 @@ input:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); }
   position: relative;
   z-index: 2;
 }
+
+.app-footer {
+  margin-top: 28px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--accent-dim);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+  flex-wrap: wrap;
+  text-align: center;
+}
+.app-footer a {
+  color: var(--dim);
+  border-bottom-color: transparent;
+}
+.app-footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 .terminal {
   background: var(--bg-2);
@@ -369,8 +401,34 @@ main { margin-top: 4px; }
  * eat half the screen, and bump the action buttons' touch target to a
  * comfortable 32px+ tap height. The visualizer panel naturally scales
  * via its monospace col-count measurement, so nothing to do there.
+ *
+ * App-shell: shrink the giant ASCII header so it doesn't try to render
+ * 70 characters at 15px (~600px wide) on a 360px viewport. Tighten
+ * default font size a touch and trim outer margins so the terminal
+ * actually fits. Body-level overflow-x:hidden handles whatever still
+ * leaks past these adjustments.
  */
 @media (max-width: 600px) {
+  body { font-size: 13.5px; }
+  .app-shell {
+    margin: 16px auto 32px;
+    padding: 0 10px;
+  }
+  /* The HEADER ASCII art is 72 chars wide; clamp() keeps it readable on
+   * tablets but shrinks aggressively on small phones so the box fits. */
+  header > pre:first-of-type {
+    font-size: clamp(7px, 2.5vw, 13px);
+    line-height: 1.2;
+  }
+  header nav {
+    font-size: 12px;
+    line-height: 1.9;
+  }
+  /* SupplyBar's bottom stats put two long phrases on one row — let them
+   * stack on mobile so they don't get cropped or scroll horizontally. */
+  .supply-stats { flex-direction: column; gap: 2px; align-items: flex-start; }
+  .supply-stats > span:last-child { color: var(--dimmer); }
+  .app-footer { margin-top: 18px; font-size: 11px; gap: 10px; }
   .mining-bar-inner {
     padding: 6px 10px 10px;
   }

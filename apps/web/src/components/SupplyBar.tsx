@@ -79,7 +79,7 @@ export function SupplyBar() {
       </div>
 
       {/* Stats */}
-      <div style={{
+      <div className="supply-stats" style={{
         display: 'flex',
         justifyContent: 'space-between',
         marginTop: 5,

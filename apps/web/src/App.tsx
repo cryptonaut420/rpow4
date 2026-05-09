@@ -101,6 +101,16 @@ export default function App() {
             <Route path="/docs" element={<DocsPage />} />
           </Routes>
         </main>
+        <footer className="app-footer">
+          <a
+            href="https://github.com/cryptonaut420/rpow4"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="rpow4 on github"
+          >
+            [ github ]
+          </a>
+        </footer>
       </div>
       <MiningBar />
       </MiningProvider>
