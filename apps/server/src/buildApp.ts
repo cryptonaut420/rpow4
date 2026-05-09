@@ -12,6 +12,7 @@ import { mintRoutes } from './routes/mint.js';
 import { sendRoutes } from './routes/send.js';
 import { activityRoutes } from './routes/activity.js';
 import { ledgerRoutes } from './routes/ledger.js';
+import { statsRoutes } from './routes/stats.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -64,6 +65,8 @@ export interface AppCaches {
   ledger: TtlCache<'singleton', CachedJsonResponse>;
   /** Public /ledger/events pre-serialized pages, keyed by cursor + limit. */
   ledgerEvents: TtlCache<string, CachedJsonResponse>;
+  /** Public /stats/leaderboard top-100 pre-serialized response. */
+  leaderboard: TtlCache<'singleton', CachedJsonResponse>;
 }
 
 declare module 'fastify' {
@@ -116,6 +119,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     lookup: new TtlCache<string, unknown | null>({ ttlMs: 30_000, maxSize: 50_000 }),
     ledger: new TtlCache<'singleton', CachedJsonResponse>({ ttlMs: 5_000, maxSize: 1 }),
     ledgerEvents: new TtlCache<string, CachedJsonResponse>({ ttlMs: 1_500, maxSize: 256 }),
+    // Leaderboard moves slowly — the rerank only matters when balances
+    // shift. 10s TTL keeps load tiny while still feeling live.
+    leaderboard: new TtlCache<'singleton', CachedJsonResponse>({ ttlMs: 10_000, maxSize: 1 }),
   };
   app.decorate('caches', caches);
   app.decorate('invalidateAccount', (pubkey: string) => {
@@ -129,6 +135,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate('invalidateLedger', () => {
     caches.ledger.clear();
     caches.ledgerEvents.clear();
+    // Mints + transfers both shift balances; if they invalidate /ledger
+    // they should also invalidate the leaderboard so rankings stay live.
+    caches.leaderboard.clear();
   });
 
   await app.register(cookie, { secret: opts.config.sessionSecret });
@@ -228,6 +237,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(sendRoutes);
   await app.register(activityRoutes);
   await app.register(ledgerRoutes);
+  await app.register(statsRoutes);
 
   // Public-key PEM is fully determined by the signing config; precompute
   // once at startup instead of rebuilding on every request.

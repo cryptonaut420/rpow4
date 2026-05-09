@@ -152,8 +152,8 @@ export async function sendRoutes(app: FastifyInstance) {
           );
 
           // INSERT ledger_events + propagate event_seq to the two sidecar
-          // tables in a single round-trip. See mint.ts for the same
-          // CTE-pattern explanation.
+          // tables + bump the global transfer counter, all in a single
+          // round-trip. See mint.ts for the CTE-pattern explanation.
           const insertedEvent = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
@@ -176,6 +176,11 @@ export async function sendRoutes(app: FastifyInstance) {
                SET event_seq = i.event_seq
                FROM inserted i
                WHERE t.idempotency_key = i.idempotency_key
+             ),
+             upd_transfer_count AS (
+               UPDATE app_counters
+               SET value = value + 1
+               WHERE name='transfer_count'
              )
              SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                     amount::text AS amount, challenge_id, solution_nonce, idempotency_key,

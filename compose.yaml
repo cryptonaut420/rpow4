@@ -24,6 +24,16 @@ services:
       POSTGRES_USER: rpow
       POSTGRES_PASSWORD: rpow_dev
       POSTGRES_DB: rpow
+    # Each test creates its own schema and runs every migration into it,
+    # which means 128+ ledger_events partitions per test schema. With
+    # vitest's parallel runner the default max_locks_per_transaction (64)
+    # gets exhausted on DROP SCHEMA CASCADE. Bumping it well above the
+    # per-schema relation count is the supported Postgres knob; same DB,
+    # negligible memory cost.
+    command:
+      - postgres
+      - -c
+      - max_locks_per_transaction=512
     volumes:
       - rpow-pg-data:/var/lib/postgresql/data
     ports:

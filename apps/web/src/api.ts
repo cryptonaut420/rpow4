@@ -6,6 +6,7 @@ import type {
   AuthSessionRequestBody,
   AuthSessionResponse,
   ChallengeResponse,
+  LeaderboardResponse,
   LedgerEventsResponse,
   LedgerResponse,
   LookupResponse,
@@ -65,6 +66,7 @@ export const api = {
     const suffix = qs.toString();
     return call<LedgerEventsResponse>('GET', `/ledger/events${suffix ? `?${suffix}` : ''}`);
   },
+  leaderboard: () => call<LeaderboardResponse>('GET', '/stats/leaderboard'),
   lookup: (name: string) => call<LookupResponse>('GET', `/lookup/${encodeURIComponent(name)}`),
 
   // Write endpoints — bodies must already include client_signature_base58

@@ -58,6 +58,7 @@ export async function ledgerRoutes(app: FastifyInstance) {
       const { rows } = await app.pool.query<{
         minted_supply: string;
         block_height: string;
+        transfer_count: string;
         circulating_supply: string;
         user_count: string;
         total_transferred: string;
@@ -65,6 +66,7 @@ export async function ledgerRoutes(app: FastifyInstance) {
         `SELECT
            COALESCE((SELECT value FROM app_counters WHERE name='minted_supply'), 0)::text AS minted_supply,
            COALESCE((SELECT value FROM app_counters WHERE name='block_height'), 0)::text AS block_height,
+           COALESCE((SELECT value FROM app_counters WHERE name='transfer_count'), 0)::text AS transfer_count,
            COALESCE((SELECT value FROM ledger_stats WHERE name='circulating_supply'), 0)::text AS circulating_supply,
            COALESCE((SELECT value FROM ledger_stats WHERE name='user_count'), 0)::text AS user_count,
            COALESCE((SELECT sum(value) FROM ledger_stat_shards WHERE name='total_transferred'), 0)::text AS total_transferred`,
@@ -73,6 +75,7 @@ export async function ledgerRoutes(app: FastifyInstance) {
       const stats = rows[0]!;
       const counterBaseUnits = BigInt(stats.minted_supply);
       const blockHeight = BigInt(stats.block_height);
+      const transferCount = BigInt(stats.transfer_count);
       const totalTransferredBaseUnits = BigInt(stats.total_transferred);
       const circulatingBaseUnits = BigInt(stats.circulating_supply);
       const userCount = Number(stats.user_count);
@@ -96,6 +99,7 @@ export async function ledgerRoutes(app: FastifyInstance) {
         base_units_per_rpow: BASE_UNITS_PER_RPOW.toString(),
 
         block_height: blockHeight.toString(),
+        transfer_count: transferCount.toString(),
         halving_interval_blocks: app.config.halvingIntervalBlocks,
         difficulty_step_blocks: app.config.difficultyStepBlocks,
         difficulty_max_bits: app.config.difficultyMaxBits,

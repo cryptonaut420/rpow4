@@ -10,6 +10,7 @@ import { MinePage } from './pages/Mine.js';
 import { SendPage } from './pages/Send.js';
 import { ActivityPage } from './pages/Activity.js';
 import { LedgerPage } from './pages/Ledger.js';
+import { StatsPage } from './pages/Stats.js';
 import { CopyButton } from './components/CopyButton.js';
 import { shortPubkey } from '@rpow/shared';
 
@@ -45,6 +46,7 @@ export default function App() {
             <NavLink to="/send">[ send ]</NavLink>{' '}
             <NavLink to="/activity">[ activity ]</NavLink>{' '}
             <NavLink to="/ledger">[ ledger ]</NavLink>{' '}
+            <NavLink to="/stats">[ stats ]</NavLink>{' '}
             {signedIn ? (
               <>
                 <span style={{ color: 'var(--dim)' }} title={me!.pubkey}>
@@ -68,6 +70,7 @@ export default function App() {
             <Route path="/send" element={<SendPage />} />
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/ledger" element={<LedgerPage />} />
+            <Route path="/stats" element={<StatsPage />} />
           </Routes>
         </main>
       </div>
