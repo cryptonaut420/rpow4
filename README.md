@@ -20,13 +20,15 @@ Standing on the shoulders of the projects that came before:
 - **Claim tokens.** Bearer claim tokens for true off-platform / offline sends — closer in spirit to Hal Finney's original "reusable" PoW where the token itself was the artifact you handed over.
 - **Transaction fees.** Send fee that halves alongside the block reward, paid into a treasury pubkey on-ledger.
 - **Decimal sends.** 9 decimal places (10⁹ base units per RPOW), so you can send fractional amounts.
+- **Memo field** on sends and claims, persisted on the ledger.
 - **Faucet** — bootstraps new wallets so new users can try sends/claims without mining first.
 - **Trollbox** — signed public chat module, because what's a coin community without one.
 - **Block explorer** — browse blocks, transfers, claims, and account histories.
+- **Leaderboards** — richest accounts and top miners, refreshed live on the Stats page.
 - **Public API docs** — every route documented in-app, signing rules included.
+- **In-app History tab** — Hal Finney's RPOW writings, the cypherpunk manifestos, the Bitcoin white paper, and other primary sources, all read-along inside the SPA. Worth your time.
 - **Improvements across every other module** the predecessors shipped — mining loop, ledger consistency, observability, deploy story (one-shot AWS EC2 script + Let's Encrypt).
 - **Much more to come.**
-- **Some fun / interesting history** in [`docs/overview/`](./docs/overview/README.md) and the Hal Finney material it points to — worth a read.
 
 ## Quickstart
 
