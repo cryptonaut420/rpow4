@@ -11,6 +11,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@chenglou/pretext": "^0.0.6",
     "@rpow/shared": "*",
     "hash-wasm": "^4.11.0",
     "react": "^18.3.0",

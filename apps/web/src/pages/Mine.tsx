@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { MiningVisualizer, type MiningVisualizerHandles } from '../components/MiningVisualizer.js';
 import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { api } from '../api.js';
@@ -58,6 +59,11 @@ export function MinePage() {
   // /me + /ledger background refresh throttle.
   const lastRefreshAtRef = useRef(0);
 
+  // Imperative handle for the cypherpunk visualizer. Driven from worker
+  // progress events and the mint success path, never via React state, so
+  // hash-rain frames and per-block FX don't trigger a Mine page re-render.
+  const vizHandlesRef = useRef<MiningVisualizerHandles | null>(null);
+
   useEffect(() => () => {
     stopRequestedRef.current = true;
     workerRef.current?.terminate();
@@ -113,6 +119,7 @@ export function MinePage() {
       ch = await api.challenge();
     } catch (err: any) {
       sessionStoppedAtRef.current = performance.now();
+      vizHandlesRef.current?.setActive(false);
       setError(err?.message ?? 'failed to fetch challenge');
       setStatus('error');
       return;
@@ -129,11 +136,24 @@ export function MinePage() {
         // 250 ms cadence inside the worker; bumps the running cycle
         // hash count without poking React state.
         currentCycleHashesRef.current = BigInt(m.hashes);
+        // Forward to the visualizer (RAF-driven, no React re-render).
+        if (vizHandlesRef.current) {
+          const elapsedSec = Math.max(1, m.elapsed_ms) / 1000;
+          const cycleHashes = Number(BigInt(m.hashes));
+          vizHandlesRef.current.setProgress({
+            bestZeros: typeof m.best_zeros === 'number' ? m.best_zeros : -1,
+            bestHashHex: typeof m.best_hash_hex === 'string' ? m.best_hash_hex : '',
+            bestNonceHex: typeof m.best_nonce_hex === 'string' ? m.best_nonce_hex : '',
+            hashesPerSec: cycleHashes / elapsedSec,
+            cycleHashes,
+          });
+        }
         return;
       }
       if (m.type === 'aborted') {
         w.terminate(); workerRef.current = null;
         sessionStoppedAtRef.current = performance.now();
+        vizHandlesRef.current?.setActive(false);
         setStatus('idle');
         return;
       }
@@ -156,6 +176,20 @@ export function MinePage() {
           currentCycleHashesRef.current = 0n;
           sessionMintedRef.current += 1;
           lastTokenIdRef.current = r.token.id;
+          // Cypherpunk win FX. Reads the freshest ledger snapshot if we have
+          // one for the block height label, but doesn't block on it.
+          if (vizHandlesRef.current) {
+            const reward = ledger
+              ? `+${formatRpow(ledger.current_reward_base_units)} RPOW credited`
+              : 'block credited';
+            const nonceHex = BigInt(m.solution_nonce).toString(16).padStart(16, '0');
+            vizHandlesRef.current.triggerWin({
+              hashHex: typeof m.hash_hex === 'string' ? m.hash_hex : '',
+              nonceHex,
+              rewardLabel: reward,
+              blockHeight: ledger?.block_height,
+            });
+          }
           // Throttled to once / second; sessionMintedRef updates every coin.
           refreshAccount();
 
@@ -164,11 +198,13 @@ export function MinePage() {
             startOne();
           } else {
             sessionStoppedAtRef.current = performance.now();
+            vizHandlesRef.current?.setActive(false);
             setStatus('idle');
             refreshAccount({ force: true });
           }
         } catch (err: any) {
           sessionStoppedAtRef.current = performance.now();
+          vizHandlesRef.current?.setActive(false);
           setError(err?.message ?? 'mint failed');
           setStatus('error');
         }
@@ -192,6 +228,7 @@ export function MinePage() {
     lastRefreshAtRef.current = 0;
     setError('');
     setStatus('mining');
+    vizHandlesRef.current?.setActive(true);
     startOne();
   }
 
@@ -284,6 +321,10 @@ ${rewardBlock}  TARGET           : ${target ?? '--'} trailing zero bits
   MINED THIS RUN   : ${sessionMinted}${sessionRewardLabel}${error ? `\n  ERROR            : ${error}` : ''}
 `}
       </pre>
+      <MiningVisualizer
+        target={target ?? (ledger?.current_difficulty_bits ?? 0)}
+        handlesRef={vizHandlesRef}
+      />
       {lastTokenId && (
         <div style={{ marginTop: 4, color: 'var(--dim)', fontSize: 12 }}>
           last token: <code>{lastTokenId}</code> <CopyButton text={lastTokenId} />
