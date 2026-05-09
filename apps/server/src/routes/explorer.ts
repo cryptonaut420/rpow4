@@ -1,0 +1,402 @@
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import { z } from 'zod';
+import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
+import type {
+  ExplorerFeedResponse,
+  ExplorerTxResponse,
+  ExplorerAccountResponse,
+} from '@rpow/shared';
+
+const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const FeedQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+});
+
+const AccountQuerySchema = z.object({
+  cursor: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+});
+
+function sendCachedJson(
+  reply: FastifyReply,
+  cached: CachedJsonResponse,
+  ifNoneMatch: string | undefined,
+  cacheControl: string,
+): FastifyReply {
+  reply.header('etag', cached.etag);
+  reply.header('cache-control', cacheControl);
+  if (ifNoneMatch === cached.etag) {
+    return reply.code(304).send();
+  }
+  reply.header('content-type', JSON_CONTENT_TYPE);
+  return reply.send(cached.json);
+}
+
+export async function explorerRoutes(app: FastifyInstance) {
+  // ---- GET /explorer/feed ---------------------------------------------------
+  // Public paginated network event feed with display names.
+  // Cached per cursor+limit key; cleared on new events via invalidateLedger().
+  app.get('/explorer/feed', async (req, reply) => {
+    const qp = FeedQuerySchema.safeParse(req.query);
+    if (!qp.success) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
+    }
+    const { cursor, limit } = qp.data;
+    const cacheKey = `${cursor ?? ''}|${limit}`;
+    const ifNoneMatch = (req.headers as Record<string, string | undefined>)['if-none-match'];
+
+    const cached = await app.caches.explorerFeed.get(cacheKey, async () => {
+      const cursorFilter = cursor ? `AND e.event_seq < $1::bigint` : '';
+      const params: unknown[] = [];
+      if (cursor) params.push(cursor);
+      params.push(limit + 1);
+      const limitParam = `$${params.length}`;
+
+      const result = await app.pool.query<{
+        event_seq: string;
+        id: string;
+        event_type: string;
+        actor_pubkey: string;
+        actor_display_name: string | null;
+        counterparty_pubkey: string | null;
+        counterparty_display_name: string | null;
+        amount: string;
+        fee_base_units: string;
+        memo: string | null;
+        created_at: Date;
+      }>(
+        `SELECT e.event_seq::text,
+                e.id::text,
+                e.event_type,
+                e.actor_pubkey,
+                a1.display_name AS actor_display_name,
+                e.counterparty_pubkey,
+                a2.display_name AS counterparty_display_name,
+                e.amount::text AS amount,
+                e.fee_base_units::text,
+                e.memo,
+                e.created_at
+         FROM ledger_recent_events e
+         LEFT JOIN accounts a1 ON a1.pubkey = e.actor_pubkey
+         LEFT JOIN accounts a2 ON a2.pubkey = e.counterparty_pubkey
+         ${cursorFilter}
+         ORDER BY e.event_seq DESC
+         LIMIT ${limitParam}`,
+        params,
+      );
+
+      const rows = result.rows;
+      const hasMore = rows.length > limit;
+      const pageRows = rows.slice(0, limit);
+
+      const body: ExplorerFeedResponse = {
+        events: pageRows.map((r) => ({
+          event_seq: r.event_seq,
+          id: r.id,
+          type: r.event_type === 'MINT' ? 'mint' : 'transfer',
+          actor_pubkey: r.actor_pubkey,
+          ...(r.actor_display_name ? { actor_display_name: r.actor_display_name } : {}),
+          ...(r.counterparty_pubkey ? { counterparty_pubkey: r.counterparty_pubkey } : {}),
+          ...(r.counterparty_display_name ? { counterparty_display_name: r.counterparty_display_name } : {}),
+          amount_base_units: r.amount,
+          fee_base_units: r.fee_base_units,
+          ...(r.memo ? { memo: r.memo } : {}),
+          at: r.created_at.toISOString(),
+        })),
+        ...(hasMore ? { next_cursor: pageRows[pageRows.length - 1]?.event_seq } : {}),
+      };
+
+      return buildCachedJsonResponse(body);
+    });
+
+    return sendCachedJson(reply, cached, ifNoneMatch, 'public, max-age=3, stale-while-revalidate=15');
+  });
+
+  // ---- GET /explorer/tx/:id -------------------------------------------------
+  // Public immutable transaction detail by UUID.
+  // Long TTL cache — txs are immutable once confirmed.
+  app.get('/explorer/tx/:id', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!UUID_PATTERN.test(id)) {
+      return reply.code(404).send({ error: 'BAD_REQUEST', message: 'invalid transaction id format' });
+    }
+
+    const ifNoneMatch = (req.headers as Record<string, string | undefined>)['if-none-match'];
+
+    const cached = await app.caches.explorerTx.get(id, async () => {
+      // ledger_event_ids maps UUID → event_seq for O(1) lookup, then
+      // the JOIN to ledger_events uses the partition key (event_seq) directly.
+      const result = await app.pool.query<{
+        event_seq: string;
+        id: string;
+        event_type: string;
+        actor_pubkey: string;
+        actor_display_name: string | null;
+        counterparty_pubkey: string | null;
+        counterparty_display_name: string | null;
+        amount: string;
+        fee_base_units: string;
+        memo: string | null;
+        challenge_id: string | null;
+        client_signature_base58: string | null;
+        created_at: Date;
+      }>(
+        `SELECT e.event_seq::text,
+                e.id::text,
+                e.event_type,
+                e.actor_pubkey,
+                a1.display_name AS actor_display_name,
+                e.counterparty_pubkey,
+                a2.display_name AS counterparty_display_name,
+                e.amount::text AS amount,
+                e.fee_base_units::text,
+                e.memo,
+                e.challenge_id,
+                e.client_signature_base58,
+                e.created_at
+         FROM ledger_event_ids i
+         JOIN ledger_events e ON e.event_seq = i.event_seq
+         LEFT JOIN accounts a1 ON a1.pubkey = e.actor_pubkey
+         LEFT JOIN accounts a2 ON a2.pubkey = e.counterparty_pubkey
+         WHERE i.id = $1::uuid`,
+        [id],
+      );
+
+      if (result.rows.length === 0) return null;
+      const r = result.rows[0]!;
+
+      const body: ExplorerTxResponse = {
+        event_seq: r.event_seq,
+        id: r.id,
+        type: r.event_type === 'MINT' ? 'mint' : 'transfer',
+        actor_pubkey: r.actor_pubkey,
+        ...(r.actor_display_name ? { actor_display_name: r.actor_display_name } : {}),
+        ...(r.counterparty_pubkey ? { counterparty_pubkey: r.counterparty_pubkey } : {}),
+        ...(r.counterparty_display_name ? { counterparty_display_name: r.counterparty_display_name } : {}),
+        amount_base_units: r.amount,
+        fee_base_units: r.fee_base_units,
+        ...(r.memo ? { memo: r.memo } : {}),
+        ...(r.challenge_id ? { challenge_id: r.challenge_id } : {}),
+        ...(r.client_signature_base58 ? { client_signature_base58: r.client_signature_base58 } : {}),
+        at: r.created_at.toISOString(),
+      };
+
+      return buildCachedJsonResponse(body);
+    });
+
+    if (cached === null) {
+      return reply.code(404).send({ error: 'BAD_REQUEST', message: 'transaction not found' });
+    }
+
+    return sendCachedJson(reply, cached, ifNoneMatch, 'public, max-age=3600, immutable');
+  });
+
+  // ---- GET /explorer/account/:pubkey ----------------------------------------
+  // Public account view: summary stats + paginated event history.
+  // First-page responses cached per pubkey; cleared on balance changes.
+  app.get('/explorer/account/:pubkey', async (req, reply) => {
+    const { pubkey } = req.params as { pubkey: string };
+
+    const qp = AccountQuerySchema.safeParse(req.query);
+    if (!qp.success) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
+    }
+    const { cursor, limit } = qp.data;
+
+    const cacheKey = cursor ? null : pubkey;
+
+    const buildPage = async (): Promise<ExplorerAccountResponse | null> => {
+      const acctResult = await app.pool.query<{
+        display_name: string | null;
+        spendable: string;
+        minted: string;
+        sent: string;
+        received: string;
+        blocks_mined: string;
+        events_count: string;
+      }>(
+        `SELECT ac.display_name,
+                ab.spendable_base_units::text AS spendable,
+                ab.minted_base_units::text AS minted,
+                ab.sent_base_units::text AS sent,
+                ab.received_base_units::text AS received,
+                ab.blocks_mined::text,
+                ab.events_count::text
+         FROM account_balances ab
+         LEFT JOIN accounts ac ON ac.pubkey = ab.pubkey
+         WHERE ab.pubkey = $1`,
+        [pubkey],
+      );
+
+      if (acctResult.rows.length === 0) return null;
+      const acct = acctResult.rows[0]!;
+
+      const cursorBigInt: bigint | null = cursor ? BigInt(cursor) : null;
+      const cursorFilter = cursorBigInt !== null ? `AND e.event_seq < $2::bigint` : '';
+      const params: unknown[] = [pubkey];
+      if (cursorBigInt !== null) params.push(cursorBigInt.toString());
+      params.push(limit + 1);
+      const limitParam = `$${params.length}`;
+
+      const recent = await app.pool.query<{
+        id: string | null;
+        type: 'mint' | 'send' | 'receive';
+        event_seq: string;
+        amount: string;
+        fee_base_units: string;
+        memo: string | null;
+        counterparty_pubkey: string | null;
+        counterparty_display_name: string | null;
+        at: Date;
+      }>(
+        `SELECT e.id::text AS id,
+                e.type,
+                e.event_seq::text AS event_seq,
+                e.amount::text AS amount,
+                e.fee_base_units::text AS fee_base_units,
+                e.memo,
+                e.counterparty_pubkey,
+                a.display_name AS counterparty_display_name,
+                e.created_at AS at
+         FROM account_recent_events e
+         LEFT JOIN accounts a ON a.pubkey = e.counterparty_pubkey
+         WHERE e.pubkey = $1 ${cursorFilter}
+         ORDER BY e.event_seq DESC
+         LIMIT ${limitParam}`,
+        params,
+      );
+
+      let rows = recent.rows;
+
+      // Fall back to partitioned history if hot table doesn't fill the page.
+      if (rows.length < limit + 1) {
+        const oldestHot = rows[rows.length - 1]?.event_seq ?? null;
+        const histParams: unknown[] = [pubkey];
+        const filters: string[] = [];
+
+        if (cursorBigInt !== null) {
+          histParams.push(cursorBigInt.toString());
+          filters.push(`AND event_seq < $${histParams.length}::bigint`);
+        }
+        if (oldestHot) {
+          histParams.push(oldestHot);
+          filters.push(`AND event_seq < $${histParams.length}::bigint`);
+        }
+        histParams.push(limit + 1 - rows.length);
+        const histLimitParam = `$${histParams.length}`;
+        const filterSql = filters.join(' ');
+
+        const historical = await app.pool.query<{
+          id: string | null;
+          type: 'mint' | 'send' | 'receive';
+          event_seq: string;
+          amount: string;
+          fee_base_units: string;
+          memo: string | null;
+          counterparty_pubkey: string | null;
+          counterparty_display_name: string | null;
+          at: Date;
+        }>(
+          `WITH events AS (
+            (SELECT NULL::uuid AS id,
+                    'mint' AS type,
+                    event_seq,
+                    amount,
+                    0::bigint AS fee_base_units,
+                    NULL::text AS memo,
+                    NULL::text AS counterparty_pubkey,
+                    created_at
+             FROM ledger_events
+             WHERE event_type='MINT' AND actor_pubkey=$1 ${filterSql}
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})
+            UNION ALL
+            (SELECT id,
+                    'send' AS type,
+                    event_seq,
+                    amount,
+                    fee_base_units,
+                    memo,
+                    counterparty_pubkey,
+                    created_at
+             FROM ledger_events
+             WHERE event_type='TRANSFER' AND actor_pubkey=$1 ${filterSql}
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})
+            UNION ALL
+            (SELECT id,
+                    'receive' AS type,
+                    event_seq,
+                    amount,
+                    0::bigint AS fee_base_units,
+                    memo,
+                    actor_pubkey AS counterparty_pubkey,
+                    created_at
+             FROM ledger_events
+             WHERE event_type='TRANSFER' AND counterparty_pubkey=$1 ${filterSql}
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})
+           )
+           SELECT ev.id::text AS id,
+                  ev.type::text AS type,
+                  ev.event_seq::text AS event_seq,
+                  ev.amount::text AS amount,
+                  ev.fee_base_units::text AS fee_base_units,
+                  ev.memo,
+                  ev.counterparty_pubkey,
+                  a.display_name AS counterparty_display_name,
+                  ev.created_at AS at
+           FROM events ev
+           LEFT JOIN accounts a ON a.pubkey = ev.counterparty_pubkey
+           ORDER BY ev.event_seq DESC
+           LIMIT ${histLimitParam}`,
+          histParams,
+        );
+
+        rows = [...rows, ...historical.rows];
+      }
+
+      const hasMore = rows.length > limit;
+      const pageRows = rows.slice(0, limit);
+      const nextCursor = hasMore ? pageRows[pageRows.length - 1]?.event_seq : undefined;
+
+      return {
+        pubkey,
+        ...(acct.display_name ? { display_name: acct.display_name } : {}),
+        spendable_base_units: acct.spendable,
+        minted_base_units: acct.minted,
+        sent_base_units: acct.sent,
+        received_base_units: acct.received,
+        blocks_mined: acct.blocks_mined,
+        total_count: parseInt(acct.events_count, 10),
+        items: pageRows.map((r) => ({
+          ...(r.id ? { id: r.id } : {}),
+          event_seq: r.event_seq,
+          type: r.type,
+          amount_base_units: r.amount,
+          ...(r.type === 'send' && r.fee_base_units !== '0' ? { fee_base_units: r.fee_base_units } : {}),
+          ...(r.memo ? { memo: r.memo } : {}),
+          ...(r.counterparty_pubkey ? { counterparty_pubkey: r.counterparty_pubkey } : {}),
+          ...(r.counterparty_display_name ? { counterparty_display_name: r.counterparty_display_name } : {}),
+          at: r.at.toISOString(),
+        })),
+        ...(nextCursor ? { next_cursor: nextCursor } : {}),
+      };
+    };
+
+    let body: ExplorerAccountResponse | null;
+    if (cacheKey) {
+      body = (await app.caches.explorerAccount.get(cacheKey, buildPage)) as ExplorerAccountResponse | null;
+    } else {
+      body = await buildPage();
+    }
+
+    if (body === null) {
+      return reply.code(404).send({ error: 'BAD_REQUEST', message: 'account not found' });
+    }
+
+    reply.header('cache-control', 'public, max-age=3, stale-while-revalidate=15');
+    return body;
+  });
+}

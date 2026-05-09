@@ -13,6 +13,7 @@ import { sendRoutes } from './routes/send.js';
 import { activityRoutes } from './routes/activity.js';
 import { ledgerRoutes } from './routes/ledger.js';
 import { statsRoutes } from './routes/stats.js';
+import { explorerRoutes } from './routes/explorer.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -69,6 +70,12 @@ export interface AppCaches {
   ledgerEvents: TtlCache<string, CachedJsonResponse>;
   /** Public /stats/leaderboard top-100 pre-serialized response, keyed by sort variant. */
   leaderboard: TtlCache<string, CachedJsonResponse>;
+  /** Public /explorer/feed pre-serialized pages, keyed by cursor|limit. */
+  explorerFeed: TtlCache<string, CachedJsonResponse>;
+  /** Public /explorer/tx/:id pre-serialized responses, keyed by tx UUID. Immutable — no invalidation. */
+  explorerTx: TtlCache<string, CachedJsonResponse | null>;
+  /** Public /explorer/account/:pubkey first-page responses, keyed by pubkey. */
+  explorerAccount: TtlCache<string, unknown>;
 }
 
 declare module 'fastify' {
@@ -126,11 +133,16 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // variants ('balance' | 'minted') share the same cache, hence
     // maxSize=2 and a string key.
     leaderboard: new TtlCache<string, CachedJsonResponse>({ ttlMs: 10_000, maxSize: 2 }),
+    explorerFeed: new TtlCache<string, CachedJsonResponse>({ ttlMs: 3_000, maxSize: 256 }),
+    // Tx details are immutable; a long TTL avoids redundant DB reads.
+    explorerTx: new TtlCache<string, CachedJsonResponse | null>({ ttlMs: 3_600_000, maxSize: 10_000 }),
+    explorerAccount: new TtlCache<string, unknown>({ ttlMs: 3_000, maxSize: 50_000 }),
   };
   app.decorate('caches', caches);
   app.decorate('invalidateAccount', (pubkey: string) => {
     caches.me.invalidate(pubkey);
     caches.activity.invalidate(pubkey);
+    caches.explorerAccount.invalidate(pubkey);
   });
   app.decorate('invalidateLookup', (name: string | null | undefined) => {
     if (!name) return;
@@ -142,6 +154,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // Mints + transfers both shift balances; if they invalidate /ledger
     // they should also invalidate the leaderboard so rankings stay live.
     caches.leaderboard.clear();
+    // Explorer feed shows recent network events — clear on every new event.
+    caches.explorerFeed.clear();
   });
 
   await app.register(cookie, { secret: opts.config.sessionSecret });
@@ -242,6 +256,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(activityRoutes);
   await app.register(ledgerRoutes);
   await app.register(statsRoutes);
+  await app.register(explorerRoutes);
 
   // Public-key PEM is fully determined by the signing config; precompute
   // once at startup instead of rebuilding on every request.

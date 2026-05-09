@@ -367,3 +367,57 @@ export interface LedgerEventsResponse {
   next_cursor?: string;
 }
 
+// ---- explorer ---------------------------------------------------------------
+
+export interface ExplorerEvent {
+  event_seq: string;
+  id: string;
+  type: 'mint' | 'transfer';
+  actor_pubkey: string;
+  actor_display_name?: string;
+  counterparty_pubkey?: string;
+  counterparty_display_name?: string;
+  amount_base_units: string;
+  fee_base_units: string;
+  memo?: string;
+  at: string; // iso8601
+}
+
+export interface ExplorerFeedResponse {
+  events: ExplorerEvent[];
+  next_cursor?: string;
+}
+
+export interface ExplorerTxResponse extends ExplorerEvent {
+  challenge_id?: string;
+  client_signature_base58?: string;
+}
+
+export interface ExplorerAccountSummary {
+  pubkey: string;
+  display_name?: string;
+  spendable_base_units: string;
+  minted_base_units: string;
+  sent_base_units: string;
+  received_base_units: string;
+  blocks_mined: string;
+  total_count: number;
+}
+
+export interface ExplorerAccountEvent {
+  id?: string;
+  event_seq: string;
+  type: 'mint' | 'send' | 'receive';
+  amount_base_units: string;
+  fee_base_units?: string;
+  memo?: string;
+  counterparty_pubkey?: string;
+  counterparty_display_name?: string;
+  at: string; // iso8601
+}
+
+export interface ExplorerAccountResponse extends ExplorerAccountSummary {
+  items: ExplorerAccountEvent[];
+  next_cursor?: string;
+}
+

@@ -6,6 +6,9 @@ import type {
   AuthSessionRequestBody,
   AuthSessionResponse,
   ChallengeResponse,
+  ExplorerAccountResponse,
+  ExplorerFeedResponse,
+  ExplorerTxResponse,
   LeaderboardResponse,
   LeaderboardSort,
   LedgerEventsResponse,
@@ -76,6 +79,23 @@ export const api = {
   leaderboard: (sort: LeaderboardSort = 'balance') =>
     call<LeaderboardResponse>('GET', `/stats/leaderboard?sort=${sort}`),
   lookup: (name: string) => call<LookupResponse>('GET', `/lookup/${encodeURIComponent(name)}`),
+
+  // Explorer (public)
+  explorerFeed: (cursor?: string, limit?: number) => {
+    const qs = new URLSearchParams();
+    if (cursor) qs.set('cursor', cursor);
+    if (limit) qs.set('limit', String(limit));
+    const suffix = qs.toString();
+    return call<ExplorerFeedResponse>('GET', `/explorer/feed${suffix ? `?${suffix}` : ''}`);
+  },
+  explorerTx: (id: string) => call<ExplorerTxResponse>('GET', `/explorer/tx/${encodeURIComponent(id)}`),
+  explorerAccount: (pubkey: string, cursor?: string, limit?: number) => {
+    const qs = new URLSearchParams();
+    if (cursor) qs.set('cursor', cursor);
+    if (limit) qs.set('limit', String(limit));
+    const suffix = qs.toString();
+    return call<ExplorerAccountResponse>('GET', `/explorer/account/${encodeURIComponent(pubkey)}${suffix ? `?${suffix}` : ''}`);
+  },
 
   // Write endpoints — bodies must already include client_signature_base58
   challenge: () => call<ChallengeResponse>('POST', '/challenge'),
