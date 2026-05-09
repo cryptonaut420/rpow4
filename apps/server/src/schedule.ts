@@ -7,7 +7,9 @@
 //     halves every 210,000 blocks (Bitcoin-exact: the geometric sum
 //     50 * 210,000 * 2 = 21,000,000 RPOW gives an exact 21M cap).
 //   - Difficulty starts at 24 trailing-zero bits and steps up by +1 bit
-//     every 164,062 blocks (≈ 21M / 128, a slow Bitcoin-flavored ramp).
+//     every 50,000 blocks. The 24→50-bit ramp completes around block
+//     1.3M (roughly the 6th halving), keeping mining responsive while
+//     a young chain establishes its hashrate.
 //   - Difficulty is hard-capped at 50 bits so the schedule stays
 //     mineable on commodity hardware in the long tail.
 //   - The schedule terminates either at the 21M cap or when the
@@ -23,7 +25,7 @@ export const BASE_UNITS_PER_RPOW = 1_000_000_000n;          // 9 decimals
 export const MINT_BASE_REWARD_BASE_UNITS = 50_000_000_000n; // 50 RPOW
 export const MINT_HALVING_INTERVAL_BLOCKS = 210_000;
 export const MINT_DIFFICULTY_START_BITS = 24;
-export const MINT_DIFFICULTY_STEP_BLOCKS = 164_062;          // 21,000,000 / 128
+export const MINT_DIFFICULTY_STEP_BLOCKS = 50_000;
 export const MINT_DIFFICULTY_MAX_BITS = 50;
 export const MINT_MAX_SUPPLY_RPOW = 21_000_000;
 

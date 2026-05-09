@@ -35,7 +35,7 @@ const Schema = z.object({
   // capped at DIFFICULTY_MAX_BITS. Production default is 24 (~10s on a
   // modern laptop), dev/local override to 14 for instant feedback.
   DIFFICULTY_BITS: z.coerce.number().int().min(4).max(40).default(24),
-  DIFFICULTY_STEP_BLOCKS: z.coerce.number().int().positive().default(164_062),
+  DIFFICULTY_STEP_BLOCKS: z.coerce.number().int().positive().default(50_000),
   DIFFICULTY_MAX_BITS: z.coerce.number().int().min(4).max(64).default(50),
 
   // Anti-spam PoW for /signup. Tuned so a modern laptop completes in

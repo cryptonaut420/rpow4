@@ -72,7 +72,7 @@ The RPOW4 schedule is parameterized by env so the operator can adjust dev/stagin
 | Env var | Default | Effect |
 |---|---|---|
 | `DIFFICULTY_BITS` | 24 | Initial trailing-zero-bit difficulty. The schedule starts here at block 0 and steps up over time. |
-| `DIFFICULTY_STEP_BLOCKS` | 164062 | Blocks between +1-bit difficulty steps. |
+| `DIFFICULTY_STEP_BLOCKS` | 50000 | Blocks between +1-bit difficulty steps. |
 | `DIFFICULTY_MAX_BITS` | 50 | Hard ceiling on stamped difficulty. |
 | `MINT_BASE_REWARD_BASE_UNITS` | 50000000000 | Initial reward per accepted PoW (= 50 RPOW × 10⁹). |
 | `HALVING_INTERVAL_BLOCKS` | 210000 | Blocks between reward halvings. |

@@ -52,9 +52,9 @@ describe('RPOW4 block-based schedule (production defaults)', () => {
 describe('RPOW4 difficulty schedule', () => {
   const STEP = BigInt(MINT_DIFFICULTY_STEP_BLOCKS);
 
-  it('starts at 24 bits and steps up +1 every 164,062 blocks', () => {
+  it('starts at 24 bits and steps up +1 every 50,000 blocks', () => {
     expect(MINT_DIFFICULTY_START_BITS).toBe(24);
-    expect(MINT_DIFFICULTY_STEP_BLOCKS).toBe(164_062);
+    expect(MINT_DIFFICULTY_STEP_BLOCKS).toBe(50_000);
     expect(difficultyForBlock(0n)).toBe(24);
     expect(difficultyForBlock(STEP - 1n)).toBe(24);
     expect(difficultyForBlock(STEP)).toBe(25);

@@ -28,19 +28,23 @@ BASE_UNITS_PER_RPOW           = 1_000_000_000n
 MINT_BASE_REWARD_BASE_UNITS   = 50_000_000_000n  // 50 RPOW
 MINT_HALVING_INTERVAL_BLOCKS  = 210_000
 MINT_DIFFICULTY_START_BITS    = 24
-MINT_DIFFICULTY_STEP_BLOCKS   = 164_062            // ≈ 21M / 128
+MINT_DIFFICULTY_STEP_BLOCKS   = 50_000
 MINT_DIFFICULTY_MAX_BITS      = 50
 MINT_MAX_SUPPLY_RPOW          = 21_000_000
 ```
 
 | Block range                | Reward (RPOW) | Difficulty (bits) |
 |----------------------------|---------------|-------------------|
-| 0 .. 164,061               | 50            | 24                |
-| 164,062 .. 210,000-1        | 50            | 25                |
-| 210,000 .. 328,124          | 25            | 25                |
-| 328,125 .. 420,000-1        | 25            | 26                |
-| ... (halvings every 210k, +1 bit every 164,062, capped at 50) |        |        |
-| ≥ ~36 × 210,000             | 0 (floors)    | 50 (capped)       |
+| 0 .. 49,999                | 50            | 24                |
+| 50,000 .. 99,999           | 50            | 25                |
+| 100,000 .. 149,999         | 50            | 26                |
+| 150,000 .. 199,999         | 50            | 27                |
+| 200,000 .. 209,999         | 50            | 28                |
+| 210,000 .. 249,999         | 25            | 28                |
+| 250,000 .. 299,999         | 25            | 29                |
+| ... (halvings every 210k, +1 bit every 50k, capped at 50) |        |        |
+| ≥ 1,300,000 (= 26 × 50k)   | (per halving) | 50 (capped)       |
+| ≥ ~36 × 210,000            | 0 (floors)    | 50 (capped)       |
 
 The geometric sum of `50 × 210,000 × (1 + 1/2 + 1/4 + …)` is exactly
 **21,000,000 RPOW**, so the cap closes naturally. The hard cap in
