@@ -14,6 +14,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const FeedQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  /** Omit or `all` — show both. `mint` / `transfer` restrict the feed. */
+  type: z.enum(['all', 'mint', 'transfer']).optional().default('all'),
 });
 
 const AccountQuerySchema = z.object({
@@ -45,12 +47,18 @@ export async function explorerRoutes(app: FastifyInstance) {
     if (!qp.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
     }
-    const { cursor, limit } = qp.data;
-    const cacheKey = `${cursor ?? ''}|${limit}`;
+    const { cursor, limit, type: feedType } = qp.data;
+    const cacheKey = `${cursor ?? ''}|${limit}|${feedType}`;
     const ifNoneMatch = (req.headers as Record<string, string | undefined>)['if-none-match'];
 
     const cached = await app.caches.explorerFeed.get(cacheKey, async () => {
       const cursorFilter = cursor ? `AND e.event_seq < $1::bigint` : '';
+      const typeClause =
+        feedType === 'mint'
+          ? `AND e.event_type = 'MINT'`
+          : feedType === 'transfer'
+            ? `AND e.event_type = 'TRANSFER'`
+            : '';
       const params: unknown[] = [];
       if (cursor) params.push(cursor);
       params.push(limit + 1);
@@ -83,7 +91,9 @@ export async function explorerRoutes(app: FastifyInstance) {
          FROM ledger_recent_events e
          LEFT JOIN accounts a1 ON a1.pubkey = e.actor_pubkey
          LEFT JOIN accounts a2 ON a2.pubkey = e.counterparty_pubkey
+         WHERE true
          ${cursorFilter}
+         ${typeClause}
          ORDER BY e.event_seq DESC
          LIMIT ${limitParam}`,
         params,

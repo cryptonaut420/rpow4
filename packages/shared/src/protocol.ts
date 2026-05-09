@@ -486,15 +486,6 @@ export interface TrollboxPostRequestBody {
   client_signature_base58: string;
 }
 
-export interface TrollboxPostResponse {
-  ok: true;
-  message_id: string;
-  /** Underlying TRANSFER ledger event id for the fee paid to the treasury. */
-  fee_event_id: string;
-  fee_base_units: string;
-  posted_at: string;
-}
-
 export interface TrollboxMessage {
   id: string;
   /** Strictly increasing sequence used for cursor pagination. */
@@ -505,6 +496,17 @@ export interface TrollboxMessage {
   fee_base_units: string;
   fee_event_id: string;
   posted_at: string;
+}
+
+export interface TrollboxPostResponse {
+  ok: true;
+  message_id: string;
+  /** Underlying TRANSFER ledger event id for the fee paid to the treasury. */
+  fee_event_id: string;
+  fee_base_units: string;
+  posted_at: string;
+  /** Full feed row — clients can prepend immediately instead of waiting on GET /trollbox. */
+  message: TrollboxMessage;
 }
 
 export interface TrollboxFeedResponse {

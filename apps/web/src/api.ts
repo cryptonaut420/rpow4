@@ -41,12 +41,21 @@ import type {
 
 const BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080';
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  init?: Pick<RequestInit, 'cache' | 'headers'>,
+): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method,
     credentials: 'include',
-    headers: body ? { 'content-type': 'application/json' } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
+    cache: init?.cache ?? 'default',
+    headers: {
+      ...(body ? { 'content-type': 'application/json' } : {}),
+      ...(init?.headers as Record<string, string> | undefined),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
     let err: ApiError;
@@ -94,10 +103,15 @@ export const api = {
   lookup: (name: string) => call<LookupResponse>('GET', `/lookup/${encodeURIComponent(name)}`),
 
   // Explorer (public)
-  explorerFeed: (cursor?: string, limit?: number) => {
+  explorerFeed: (
+    cursor?: string,
+    limit?: number,
+    type: 'all' | 'mint' | 'transfer' = 'all',
+  ) => {
     const qs = new URLSearchParams();
     if (cursor) qs.set('cursor', cursor);
     if (limit) qs.set('limit', String(limit));
+    if (type !== 'all') qs.set('type', type);
     const suffix = qs.toString();
     return call<ExplorerFeedResponse>('GET', `/explorer/feed${suffix ? `?${suffix}` : ''}`);
   },
@@ -120,7 +134,9 @@ export const api = {
     if (cursor) qs.set('cursor', cursor);
     if (limit) qs.set('limit', String(limit));
     const suffix = qs.toString();
-    return call<TrollboxFeedResponse>('GET', `/trollbox${suffix ? `?${suffix}` : ''}`);
+    return call<TrollboxFeedResponse>('GET', `/trollbox${suffix ? `?${suffix}` : ''}`, undefined, {
+      cache: 'no-store',
+    });
   },
   trollboxPost: (b: TrollboxPostRequestBody) =>
     call<TrollboxPostResponse>('POST', '/trollbox', b),

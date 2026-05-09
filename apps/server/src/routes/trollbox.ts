@@ -1,10 +1,12 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   TREASURY_PUBKEY,
   TROLLBOX_BODY_MAX,
   verifyCanonical,
+  type TrollboxMessage,
 } from '@rpow/shared';
 import { withTxRetry } from '../db.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
@@ -12,6 +14,53 @@ import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
 
 const MAX_TROLLBOX_LIMIT = 100;
 const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
+
+/** DB row shape for building the wire-format message seen in GET /trollbox. */
+interface TrollboxMsgRow {
+  id: string;
+  seq: string;
+  author_pubkey: string;
+  author_display_name: string | null;
+  body: string;
+  fee_base_units: string;
+  fee_event_id: string;
+  created_at: Date;
+}
+
+function rowToWireMessage(row: TrollboxMsgRow): TrollboxMessage {
+  return {
+    id: row.id,
+    seq: row.seq,
+    author_pubkey: row.author_pubkey,
+    ...(row.author_display_name ? { author_display_name: row.author_display_name } : {}),
+    body: row.body,
+    fee_base_units: row.fee_base_units,
+    fee_event_id: row.fee_event_id,
+    posted_at: row.created_at.toISOString(),
+  };
+}
+
+async function selectMessageByIdem(
+  db: Pool | PoolClient,
+  author: string,
+  idem: string,
+): Promise<TrollboxMsgRow | null> {
+  const r = await db.query<TrollboxMsgRow>(
+    `SELECT m.id,
+            m.seq::text AS seq,
+            m.author_pubkey,
+            a.display_name AS author_display_name,
+            m.body,
+            m.fee_base_units::text AS fee_base_units,
+            m.fee_event_id::text AS fee_event_id,
+            m.created_at
+       FROM trollbox_messages m
+       LEFT JOIN accounts a ON a.pubkey = m.author_pubkey
+      WHERE m.author_pubkey = $1 AND m.idempotency_key = $2`,
+    [author, idem],
+  );
+  return r.rows[0] ?? null;
+}
 
 const PostBody = z.object({
   body: z.string().min(1).max(TROLLBOX_BODY_MAX),
@@ -169,6 +218,7 @@ export async function trollboxRoutes(app: FastifyInstance) {
           fee_event_id: string;
           fee_base_units: string;
           posted_at: string;
+          message: TrollboxMessage;
         }
       | {
           error: 'INSUFFICIENT_BALANCE' | 'BAD_REQUEST';
@@ -183,15 +233,9 @@ export async function trollboxRoutes(app: FastifyInstance) {
         async (c) => {
           // Idempotency: a network retry from the same author with the
           // same key should observe the original row, not double-post.
-          const dup = await c.query<{ id: string; body: string; fee_event_id: string; created_at: Date; fee_base_units: string }>(
-            `SELECT id, body, fee_event_id, created_at, fee_base_units::text AS fee_base_units
-               FROM trollbox_messages
-              WHERE author_pubkey = $1 AND idempotency_key = $2`,
-            [author, idem],
-          );
-          if (dup.rows[0]) {
-            const row = dup.rows[0];
-            if (row.body !== body) {
+          const dup = await selectMessageByIdem(c, author, idem);
+          if (dup) {
+            if (dup.body !== body) {
               return {
                 error: 'BAD_REQUEST' as const,
                 message: 'idempotency_key reused with a different body',
@@ -200,10 +244,11 @@ export async function trollboxRoutes(app: FastifyInstance) {
             }
             return {
               ok: true as const,
-              message_id: row.id,
-              fee_event_id: row.fee_event_id,
-              fee_base_units: row.fee_base_units,
-              posted_at: row.created_at.toISOString(),
+              message_id: dup.id,
+              fee_event_id: dup.fee_event_id,
+              fee_base_units: dup.fee_base_units,
+              posted_at: dup.created_at.toISOString(),
+              message: rowToWireMessage(dup),
             };
           }
 
@@ -331,13 +376,12 @@ export async function trollboxRoutes(app: FastifyInstance) {
           // Record the trollbox row last so a constraint violation
           // (only the author+idem unique index) doesn't leave a stray
           // ledger event behind. The whole tx rolls back together.
-          const messageInsert = await c.query<{ id: string }>(
+          const messageInsert = await c.query(
             `INSERT INTO trollbox_messages(
                author_pubkey, body, fee_base_units, fee_event_id,
                idempotency_key, client_signature_base58, created_at
              )
-             VALUES($1,$2,$3,$4,$5,$6,$7)
-             RETURNING id`,
+             VALUES($1,$2,$3,$4,$5,$6,$7)`,
             [
               author,
               body,
@@ -348,14 +392,22 @@ export async function trollboxRoutes(app: FastifyInstance) {
               createdAt,
             ],
           );
-          const messageId = messageInsert.rows[0]!.id;
+          if (messageInsert.rowCount !== 1) {
+            throw new Error('trollbox insert affected unexpected row count');
+          }
+
+          const wireRow = await selectMessageByIdem(c, author, idem);
+          if (!wireRow) {
+            throw new Error('trollbox row missing after insert');
+          }
 
           return {
             ok: true as const,
-            message_id: messageId,
-            fee_event_id: transferId,
-            fee_base_units: fee.toString(),
-            posted_at: createdAt.toISOString(),
+            message_id: wireRow.id,
+            fee_event_id: wireRow.fee_event_id,
+            fee_base_units: wireRow.fee_base_units,
+            posted_at: wireRow.created_at.toISOString(),
+            message: rowToWireMessage(wireRow),
           };
         },
         { onRetry: (err, attempt) => app.log.warn({ err, attempt, route: 'trollbox' }, 'tx retry') },
@@ -365,14 +417,8 @@ export async function trollboxRoutes(app: FastifyInstance) {
       // and return the canonical row.
       const code = (e as { code?: string } | null)?.code;
       if (code === '23505') {
-        const existing = await app.pool.query<{ id: string; body: string; fee_event_id: string; created_at: Date; fee_base_units: string }>(
-          `SELECT id, body, fee_event_id, created_at, fee_base_units::text AS fee_base_units
-             FROM trollbox_messages
-            WHERE author_pubkey = $1 AND idempotency_key = $2`,
-          [author, idem],
-        );
-        if (existing.rows[0]) {
-          const row = existing.rows[0];
+        const row = await selectMessageByIdem(app.pool, author, idem);
+        if (row) {
           if (row.body !== body) {
             return reply.code(409).send({
               error: 'BAD_REQUEST',
@@ -385,6 +431,7 @@ export async function trollboxRoutes(app: FastifyInstance) {
             fee_event_id: row.fee_event_id,
             fee_base_units: row.fee_base_units,
             posted_at: row.created_at.toISOString(),
+            message: rowToWireMessage(row),
           });
         }
       }

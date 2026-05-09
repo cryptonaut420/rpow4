@@ -327,11 +327,12 @@ do {
           path: '/explorer/feed',
           auth: 'public',
           summary: 'Like /ledger/events, plus actor and counterparty display names when set.',
-          description: 'Best for building a public activity timeline UI. Same cursor scheme as /ledger/events.',
+          description: 'Best for building a public activity timeline UI. Same cursor scheme as /ledger/events. Optional `type`: `all` (default), `mint`, or `transfer` to restrict to mints or transfers only.',
           request: {
             kind: 'query',
             example: `cursor: string  (from previous page; optional)
-limit:  number  (1..100, default 50)`,
+limit:  number  (1..100, default 50)
+type:   'all' | 'mint' | 'transfer'  (optional, default all)`,
           },
           response: `{
   "events": [
@@ -351,8 +352,8 @@ limit:  number  (1..100, default 50)`,
   ],
   "next_cursor": "11"
 }`,
-          curl: `curl '${B}/explorer/feed?limit=20'`,
-          js: `const feed = await fetch('${B}/explorer/feed?limit=50').then(r => r.json());`,
+          curl: `curl '${B}/explorer/feed?limit=20&type=mint'`,
+          js: `const feed = await fetch('${B}/explorer/feed?limit=50&type=transfer').then(r => r.json());`,
         },
         {
           id: 'explorer-tx',

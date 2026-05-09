@@ -65,7 +65,7 @@ export async function statsRoutes(app: FastifyInstance) {
         blocks_mined: string;
       }>(
         `SELECT
-           row_number() OVER ()::text AS rank,
+           row_number() OVER (ORDER BY ${orderColumn} DESC, b.pubkey)::text AS rank,
            b.pubkey,
            a.display_name,
            b.spendable_base_units::text AS spendable_base_units,

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useMatch, useNavigate, Link } from 'react-router-dom';
+import { useMatch, useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
@@ -141,7 +141,16 @@ function ExplorerHistoryBlurb() {
   );
 }
 
+function parseFeedType(searchParams: URLSearchParams): 'all' | 'mint' | 'transfer' {
+  const t = searchParams.get('type');
+  if (t === 'mint' || t === 'transfer') return t;
+  return 'all';
+}
+
 function FeedView() {
+  const [searchParams] = useSearchParams();
+  const feedType = parseFeedType(searchParams);
+
   const [events, setEvents] = useState<ExplorerEvent[]>([]);
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [loading, setLoading] = useState(true);
@@ -151,21 +160,21 @@ function FeedView() {
   const loadFirst = useCallback(() => {
     setLoading(true);
     setError('');
-    api.explorerFeed(undefined, PAGE_SIZE)
+    api.explorerFeed(undefined, PAGE_SIZE, feedType)
       .then((r: ExplorerFeedResponse) => {
         setEvents(r.events);
         setNextCursor(r.next_cursor);
       })
       .catch((e: any) => setError(e?.message ?? 'failed to load feed'))
       .finally(() => setLoading(false));
-  }, []);
+  }, [feedType]);
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
   const loadMore = () => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
-    api.explorerFeed(nextCursor, PAGE_SIZE)
+    api.explorerFeed(nextCursor, PAGE_SIZE, feedType)
       .then((r: ExplorerFeedResponse) => {
         setEvents((prev) => [...prev, ...r.events]);
         setNextCursor(r.next_cursor);
@@ -177,11 +186,25 @@ function FeedView() {
   if (loading) return <div style={{ color: 'var(--dim)' }}>loading feed...</div>;
   if (error) return <div className="error">{error}</div>;
 
+  const linkStyle = (active: boolean) => ({
+    borderBottom: active ? '1px solid var(--accent)' : '1px dotted var(--accent-dim)',
+    color: active ? 'var(--accent)' : 'var(--fg)',
+    opacity: active ? 1 : 0.75,
+    textDecoration: 'none',
+    fontSize: 12,
+  });
+
   return (
     <>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ color: 'var(--dim)', fontSize: 12 }}>RECENT NETWORK TRANSACTIONS</span>
         <button onClick={loadFirst} style={{ fontSize: 11 }}>[ refresh ]</button>
+      </div>
+      <div style={{ marginBottom: 12, fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: '6px 12px', alignItems: 'center' }}>
+        <span style={{ color: 'var(--dim)' }}>show</span>
+        <Link to="/explorer" style={linkStyle(feedType === 'all')}>[ all ]</Link>
+        <Link to="/explorer?type=mint" style={linkStyle(feedType === 'mint')}>[ mints ]</Link>
+        <Link to="/explorer?type=transfer" style={linkStyle(feedType === 'transfer')}>[ transfers ]</Link>
       </div>
 
       {events.length === 0 ? (

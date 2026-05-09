@@ -12,7 +12,7 @@ import { shortPubkey, TROLLBOX_BODY_MAX } from '@rpow/shared';
 import type { TrollboxFeedResponse, TrollboxMessage } from '@rpow/shared';
 
 const PAGE_SIZE = 50;
-const POLL_INTERVAL_MS = 15_000;
+const POLL_INTERVAL_MS = 10_000;
 
 /** Format an ISO timestamp as a short relative-time string. */
 function formatTs(iso: string): string {
@@ -126,12 +126,16 @@ export function TrollboxPage() {
     const idem = crypto.randomUUID();
     const sigBody = { body: trimmed, idempotency_key: idem };
     try {
-      await api.trollboxPost({
+      const r = await api.trollboxPost({
         ...sigBody,
         client_signature_base58: wallet.sign('trollbox.post', sigBody),
       });
       setDraft('');
       setPostOk(true);
+      setMessages((prev) => {
+        const withoutDup = prev.filter((m) => m.id !== r.message.id);
+        return [r.message, ...withoutDup];
+      });
       await Promise.all([refreshFirstPage(), refreshMe()]);
     } catch (err: unknown) {
       const e = err as { error?: string; message?: string };
@@ -184,7 +188,7 @@ export function TrollboxPage() {
 
         {feedError && <div className="error" style={{ marginTop: 12 }}>{feedError}</div>}
 
-        <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {loading ? (
             <div>loading...</div>
           ) : messages.length === 0 ? (
@@ -277,17 +281,21 @@ function Composer(p: ComposerProps) {
         value={p.draft}
         onChange={(e) => p.setDraft(e.target.value)}
         placeholder="say something to the network..."
-        rows={3}
+        rows={4}
         maxLength={TROLLBOX_BODY_MAX * 2 /* let users type past the limit; we trim+block on submit */}
         style={{
           width: '100%',
+          minHeight: 88,
           fontFamily: 'inherit',
-          fontSize: 'inherit',
-          background: 'transparent',
+          fontSize: 15,
+          lineHeight: 1.45,
+          background: 'rgba(0,0,0,0.25)',
           color: 'var(--fg)',
-          border: '1px solid var(--dim)',
-          padding: 8,
+          border: '1px solid var(--accent-dim)',
+          borderRadius: 4,
+          padding: '10px 12px',
           resize: 'vertical',
+          boxShadow: 'inset 0 0 0 1px rgba(255,255,255,0.03)',
         }}
         onKeyDown={(e) => {
           // Cmd/Ctrl + Enter posts. Plain Enter inserts a newline so
@@ -323,6 +331,7 @@ function Composer(p: ComposerProps) {
         <button
           onClick={p.onPost}
           disabled={!p.canPost}
+          style={{ fontSize: 13, padding: '6px 16px' }}
           title={
             p.tooLong
               ? 'message is too long'
@@ -357,11 +366,17 @@ function TrollboxRow({ message }: { message: TrollboxMessage }) {
   return (
     <div
       style={{
-        borderBottom: '1px solid var(--dim)',
-        paddingBottom: 8,
+        border: '1px solid var(--accent-dim)',
+        borderLeft: '3px solid var(--accent)',
+        background:
+          'linear-gradient(90deg, rgba(110, 231, 183, 0.07) 0%, rgba(0,0,0,0.22) 45%, transparent 100%)',
+        borderRadius: 4,
+        padding: '12px 14px',
+        marginBottom: 2,
         display: 'flex',
         flexDirection: 'column',
-        gap: 4,
+        gap: 8,
+        boxShadow: '0 4px 24px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)',
       }}
     >
       <div
@@ -370,25 +385,35 @@ function TrollboxRow({ message }: { message: TrollboxMessage }) {
           gap: 12,
           alignItems: 'baseline',
           flexWrap: 'wrap',
-          fontSize: 12,
+          fontSize: 11,
+          letterSpacing: '0.04em',
+          color: 'var(--dim)',
         }}
       >
         <Link
           to={`/explorer/account/${message.author_pubkey}`}
           title={message.author_pubkey}
-          style={{ color: 'var(--fg)', fontWeight: 'bold' }}
+          style={{ color: 'var(--accent)', fontWeight: 700, letterSpacing: '0.04em', textTransform: 'none', fontSize: 13 }}
         >
-          <code>{authorLabel}</code>
+          <code style={{ fontSize: 13 }}>{authorLabel}</code>
         </Link>
         <CopyButton text={message.author_pubkey} label="copy" />
-        <span style={{ color: 'var(--dim)' }}>{formatTs(message.posted_at)}</span>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{formatTs(message.posted_at)}</span>
       </div>
-      <div style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>
+      <div
+        style={{
+          wordBreak: 'break-word',
+          whiteSpace: 'pre-wrap',
+          fontSize: 15,
+          lineHeight: 1.55,
+          color: 'var(--fg)',
+        }}
+      >
         {rendered}
       </div>
-      <div style={{ color: 'var(--dim)', fontSize: 11 }}>
+      <div style={{ color: 'var(--dim)', fontSize: 10, letterSpacing: '0.08em' }}>
         <Link to={`/explorer/tx/${message.fee_event_id}`} title="view fee transfer in explorer">
-          fee tx: <code>{message.fee_event_id.slice(0, 8)}…</code>
+          fee tx · <code style={{ fontSize: 11 }}>{message.fee_event_id.slice(0, 8)}…</code>
         </Link>
       </div>
     </div>
