@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { TREASURY_PUBKEY } from '@rpow/shared';
 import { loginAsRandomWallet, makeTestApp, type TestWallet } from './helpers.js';
 
 async function seedToken(
@@ -183,6 +184,76 @@ describe('POST /send', () => {
     expect(r1.json().transfer_id).toBe(r2.json().transfer_id);
     const aMe = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie: a.cookie } })).json();
     expect(aMe.balance_base_units).toBe(ONE_RPOW.toString()); // only one token transferred, not two
+  });
+
+  it('waives send fee when accounts.send_fees_waived is true', async () => {
+    const ctx = await makeTestApp({ sendBaseFeeBaseUnits: ONE_RPOW }); cleanup = ctx.cleanup;
+    const a = await loginAsRandomWallet(ctx.app);
+    const b = await loginAsRandomWallet(ctx.app);
+    await seedToken(ctx, a.publicKeyBase58, 5n * ONE_RPOW);
+
+    await ctx.pool.query(
+      `UPDATE accounts SET send_fees_waived = true WHERE pubkey = $1`,
+      [a.publicKeyBase58],
+    );
+
+    const treasuryBefore = await ctx.pool.query<{ s: string }>(
+      `SELECT coalesce(spendable_base_units,0)::text AS s FROM account_balances WHERE pubkey = $1`,
+      [TREASURY_PUBKEY],
+    );
+    const tb0 = BigInt(treasuryBefore.rows[0]?.s ?? '0');
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/send',
+      headers: { cookie: a.cookie, 'content-type': 'application/json' },
+      payload: sendBody(a, b.publicKeyBase58, ONE_RPOW),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      fee_base_units: '0',
+      transferred_base_units: ONE_RPOW.toString(),
+    });
+
+    const aMe = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie: a.cookie } })).json();
+    expect(aMe.balance_base_units).toBe((4n * ONE_RPOW).toString());
+    expect(aMe.send_fees_waived).toBe(true);
+
+    const treasuryAfter = await ctx.pool.query<{ s: string }>(
+      `SELECT coalesce(spendable_base_units,0)::text AS s FROM account_balances WHERE pubkey = $1`,
+      [TREASURY_PUBKEY],
+    );
+    expect(BigInt(treasuryAfter.rows[0]?.s ?? '0')).toBe(tb0);
+  });
+
+  it('charges configured send fee when send_fees_waived is false', async () => {
+    const ctx = await makeTestApp({ sendBaseFeeBaseUnits: ONE_RPOW }); cleanup = ctx.cleanup;
+    const a = await loginAsRandomWallet(ctx.app);
+    const b = await loginAsRandomWallet(ctx.app);
+    await seedToken(ctx, a.publicKeyBase58, 5n * ONE_RPOW);
+
+    const treasuryBefore = await ctx.pool.query<{ s: string }>(
+      `SELECT coalesce(spendable_base_units,0)::text AS s FROM account_balances WHERE pubkey = $1`,
+      [TREASURY_PUBKEY],
+    );
+    const tb0 = BigInt(treasuryBefore.rows[0]?.s ?? '0');
+
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/send',
+      headers: { cookie: a.cookie, 'content-type': 'application/json' },
+      payload: sendBody(a, b.publicKeyBase58, ONE_RPOW),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().fee_base_units).toBe(ONE_RPOW.toString());
+
+    const aMe = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie: a.cookie } })).json();
+    expect(aMe.balance_base_units).toBe((3n * ONE_RPOW).toString());
+    expect(aMe.send_fees_waived).toBe(false);
+
+    const treasuryAfter = await ctx.pool.query<{ s: string }>(
+      `SELECT coalesce(spendable_base_units,0)::text AS s FROM account_balances WHERE pubkey = $1`,
+      [TREASURY_PUBKEY],
+    );
+    expect(BigInt(treasuryAfter.rows[0]?.s ?? '0')).toBe(tb0 + ONE_RPOW);
   });
 
   it('succeeds for arbitrary amounts without exact token denominations', async () => {

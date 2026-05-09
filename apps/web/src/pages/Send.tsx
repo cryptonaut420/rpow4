@@ -93,7 +93,8 @@ export function SendPage() {
   }
 
   const balance = BigInt(me.balance_base_units);
-  const fee = ledger ? BigInt(ledger.current_fee_base_units) : 0n;
+  const networkFee = ledger ? BigInt(ledger.current_fee_base_units) : 0n;
+  const fee = me.send_fees_waived ? 0n : networkFee;
   const maxSendable = balance > fee ? balance - fee : 0n;
 
   // Live cost breakdown — computed on every render so the total preview is always current.
@@ -143,7 +144,7 @@ export function SendPage() {
     }
 
     // Check that amount + fee fits within the balance.
-    const feeBu = ledger ? BigInt(ledger.current_fee_base_units) : 0n;
+    const feeBu = me.send_fees_waived ? 0n : (ledger ? BigInt(ledger.current_fee_base_units) : 0n);
     const totalNeeded = amBu + feeBu;
     if (totalNeeded > balance) {
       const feeRpow = formatRpow(feeBu);
@@ -180,7 +181,7 @@ export function SendPage() {
       setStatus('error');
       const code = err?.error ?? 'INTERNAL';
       const msgMap: Record<string, string> = {
-        INSUFFICIENT_BALANCE: `not enough balance — remember the ${formatRpow(fee.toString())} RPOW fee is deducted on top of the amount`,
+        INSUFFICIENT_BALANCE: `not enough balance — remember the ${formatRpow(networkFee.toString())} RPOW fee is deducted on top of the amount`,
         BAD_REQUEST: err?.message ?? 'bad request',
         INVALID_SIGNATURE: 'wallet signature did not verify (try unlocking again)',
         UNAUTHORIZED: 'session expired — sign in again',
@@ -198,6 +199,12 @@ export function SendPage() {
             <span>
               {' '}· network fee: <strong style={{ color: 'var(--fg)' }}>{formatRpow(fee)} RPOW</strong>
               {' '}· max sendable: <strong style={{ color: 'var(--fg)' }}>{formatRpow(maxSendable)} RPOW</strong>
+            </span>
+          )}
+          {fee === 0n && networkFee > 0n && me.send_fees_waived && (
+            <span>
+              {' '}· network fee waived for this account (max sendable:{' '}
+              <strong style={{ color: 'var(--fg)' }}>{formatRpow(maxSendable)} RPOW</strong>)
             </span>
           )}
         </div>

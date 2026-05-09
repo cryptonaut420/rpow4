@@ -7,7 +7,8 @@
     "build": "tsc -b",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
-    "test": "vitest run"
+    "test": "vitest run",
+    "toggle-send-fees": "tsx src/scripts/toggle-send-fees.ts"
   },
   "dependencies": {
     "@fastify/compress": "^7.0.3",

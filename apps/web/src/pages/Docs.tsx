@@ -733,15 +733,16 @@ await fetch('${B}/auth/session', {
           method: 'GET',
           path: '/me',
           auth: 'session',
-          summary: 'Pubkey, display name, and balance for the signed-in account.',
-          description: 'All amounts are in base units; divide by 10⁹ to get RPOW.',
+          summary: 'Pubkey, display name, balance, and fee-waiver flag for the signed-in account.',
+          description: 'All amounts are in base units; divide by 10⁹ to get RPOW. When send_fees_waived is true, POST /send does not charge a network fee (operators toggle via npm run toggle-send-fees in apps/server, not the API).',
           response: `{
   "pubkey": "9aXt...",
   "display_name": "alice",
   "balance_base_units": "8500000000",
   "minted_base_units": "9500000000",
   "sent_base_units": "1000000000",
-  "received_base_units": "0"
+  "received_base_units": "0",
+  "send_fees_waived": false
 }`,
           errors: [
             { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie or session expired' },

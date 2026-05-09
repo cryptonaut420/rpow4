@@ -6,6 +6,7 @@ interface MeRow {
   minted: string;
   sent: string;
   received: string;
+  send_fees_waived: boolean;
 }
 
 export async function meRoutes(app: FastifyInstance) {
@@ -21,6 +22,7 @@ export async function meRoutes(app: FastifyInstance) {
     const body = await app.caches.me.get(pubkey, async () => {
       const { rows } = await app.pool.query<MeRow>(
         `SELECT a.display_name,
+                coalesce(a.send_fees_waived, false) AS send_fees_waived,
                 coalesce(b.spendable_base_units,0)::text AS spendable,
                 coalesce(b.minted_base_units,0)::text AS minted,
                 coalesce(b.sent_base_units,0)::text AS sent,
@@ -39,6 +41,7 @@ export async function meRoutes(app: FastifyInstance) {
         minted_base_units: account.minted,
         sent_base_units: account.sent,
         received_base_units: account.received,
+        send_fees_waived: account.send_fees_waived,
       };
     });
     if (body === null) {

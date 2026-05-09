@@ -102,7 +102,16 @@ export async function sendRoutes(app: FastifyInstance) {
           );
           const blockHeight = BigInt(heightRow.rows[0]?.value ?? '0');
           const halvingIndex = Math.floor(Number(blockHeight) / app.config.halvingIntervalBlocks);
-          const fee = computeFee(app.config.sendBaseFeeBaseUnits, halvingIndex);
+          const baseFee = computeFee(app.config.sendBaseFeeBaseUnits, halvingIndex);
+
+          const waiveRow = await c.query<{ waived: boolean }>(
+            `SELECT COALESCE(
+               (SELECT send_fees_waived FROM accounts WHERE pubkey = $1),
+               false
+             ) AS waived`,
+            [sender],
+          );
+          const fee = waiveRow.rows[0]?.waived === true ? 0n : baseFee;
           const totalDebit = target + fee;
 
           for (const pubkey of [sender, recipient].sort()) {

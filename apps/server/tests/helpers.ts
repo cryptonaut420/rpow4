@@ -13,6 +13,8 @@ import pg from 'pg';
 
 export async function makeTestApp(opts: {
   signupDifficultyBits?: number;
+  /** Override default 0 — use for send-fee behavior tests. */
+  sendBaseFeeBaseUnits?: bigint;
 } = {}): Promise<{
   app: Awaited<ReturnType<typeof buildApp>>;
   pool: Pool;
@@ -53,7 +55,7 @@ export async function makeTestApp(opts: {
       mintMaxSupply: 21,
       baseRewardBaseUnits: 7_812_500n,
       halvingIntervalBlocks: 1_000_000,
-      sendBaseFeeBaseUnits: 0n,
+      sendBaseFeeBaseUnits: opts.sendBaseFeeBaseUnits ?? 0n,
       faucetEnabled: true,
       faucetClaimAmountBaseUnits: 1_000_000n,
       faucetCooldownHours: 24,

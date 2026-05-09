@@ -47,6 +47,8 @@ export interface MeResponse {
   minted_base_units: string;
   sent_base_units: string;
   received_base_units: string;
+  /** True when ops waived per-send fees for this pubkey (`toggle-send-fees` script). */
+  send_fees_waived: boolean;
 }
 
 /**

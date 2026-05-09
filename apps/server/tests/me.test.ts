@@ -23,6 +23,7 @@ describe('GET /me', () => {
       minted_base_units: '0',
       sent_base_units: '0',
       received_base_units: '0',
+      send_fees_waived: false,
     });
   });
 });
