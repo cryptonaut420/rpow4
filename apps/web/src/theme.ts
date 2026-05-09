@@ -1,4 +1,4 @@
-const THEMES = ['default', 'amber', 'green'] as const;
+const THEMES = ['default', 'amber', 'green', 'ice', 'rose', 'violet'] as const;
 export type Theme = (typeof THEMES)[number];
 
 export function applyTheme(t: Theme) {

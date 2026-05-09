@@ -21,6 +21,27 @@
   --accent-dim: rgba(91, 224, 154, 0.18);
   --glow: rgba(91, 224, 154, 0.08);
 }
+/* Ice — cold cyan-blue, like a terminal running in cryo */
+:root[data-theme="ice"] {
+  --fg: #7dd3fc;
+  --accent: #7dd3fc;
+  --accent-dim: rgba(125, 211, 252, 0.18);
+  --glow: rgba(125, 211, 252, 0.07);
+}
+/* Rose — deep neon pink, high contrast cyberpunk */
+:root[data-theme="rose"] {
+  --fg: #f472b6;
+  --accent: #f472b6;
+  --accent-dim: rgba(244, 114, 182, 0.18);
+  --glow: rgba(244, 114, 182, 0.08);
+}
+/* Violet — deep purple, cold and electric */
+:root[data-theme="violet"] {
+  --fg: #a78bfa;
+  --accent: #a78bfa;
+  --accent-dim: rgba(167, 139, 250, 0.18);
+  --glow: rgba(167, 139, 250, 0.08);
+}
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
