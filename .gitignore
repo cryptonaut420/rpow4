@@ -6,6 +6,7 @@ build/
 .env
 .env.local
 .env.vps
+ops/aws-ec2/prod.env
 # Per-user secrets layer for the docker compose dev stack (Resend / Solana).
 docker/dev.env.local
 *.log

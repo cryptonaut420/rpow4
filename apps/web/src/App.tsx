@@ -6,7 +6,6 @@ import { useWallet } from './wallet/WalletProvider.js';
 import { api } from './api.js';
 import { LoginPage } from './pages/Login.js';
 import { WalletPage } from './pages/Wallet.js';
-import { MinePage } from './pages/Mine.js';
 import { SendPage } from './pages/Send.js';
 import { ActivityPage } from './pages/Activity.js';
 import { LedgerPage } from './pages/Ledger.js';
@@ -20,6 +19,8 @@ import { ClaimPage } from './pages/Claim.js';
 import { RedeemPage } from './pages/Redeem.js';
 import { CopyButton } from './components/CopyButton.js';
 import { SupplyBar } from './components/SupplyBar.js';
+import { MiningBar } from './components/MiningBar.js';
+import { MiningProvider } from './mining/MiningProvider.js';
 import { shortPubkey } from '@rpow/shared';
 
 const HEADER = [
@@ -44,6 +45,7 @@ export default function App() {
 
   return (
     <HashRouter>
+      <MiningProvider>
       <div className="app-shell">
         <header>
           <pre style={{ margin: 0 }}>{HEADER}</pre>
@@ -51,7 +53,6 @@ export default function App() {
           <div className="tagline">a modern tribute to a tribute to the original rpow by hal finney</div>
           <nav style={{ marginTop: 8 }}>
             <NavLink to="/">[ wallet ]</NavLink>{' '}
-            <NavLink to="/mine">[ mine ]</NavLink>{' '}
             <NavLink to="/send">[ send ]</NavLink>{' '}
             <NavLink to="/claim">[ claim ]</NavLink>{' '}
             <NavLink to="/activity">[ activity ]</NavLink>{' '}
@@ -81,7 +82,6 @@ export default function App() {
           <Routes>
             <Route path="/" element={<WalletPage />} />
             <Route path="/login" element={<LoginPage />} />
-            <Route path="/mine" element={<MinePage />} />
             <Route path="/send" element={<SendPage />} />
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/ledger" element={<LedgerPage />} />
@@ -98,6 +98,8 @@ export default function App() {
           </Routes>
         </main>
       </div>
+      <MiningBar />
+      </MiningProvider>
     </HashRouter>
   );
 }

@@ -2,16 +2,19 @@
 
 ## Where things live
 
-- **Server**: VPS (Ubuntu, kernel 6.x). Replace `<vps-host>` below with your SSH target (e.g. `ubuntu@<ip>`).
-- **Web SPA**: Netlify, deployed automatically from `main`.
-- **DB**: PostgreSQL 17 on the same VPS, Unix-socket-only at `/var/run/postgresql`.
-- **DNS**: Cloudflare, zone `rpow4.com`. `api.rpow4.com` is DNS-only (proxy off, TTL 60); apex and `www` stay proxied.
-- **Backups**: restic → Backblaze B2 bucket (configured in `/etc/rpow/restic.env`), nightly at 03:00 UTC.
+- **Host**: Ubuntu AWS EC2. Replace `<ec2-host>` below with your SSH target (for example `ubuntu@<ip>`).
+- **Stack**: Docker Compose from `ops/aws-ec2/compose.prod.yaml`.
+- **Web SPA**: Built into an nginx container and served at `https://rpow4.com`.
+- **API**: Fastify/Node container served through `nginx-proxy` at `https://api.rpow4.com`.
+- **DB**: PostgreSQL 17 container on an internal Docker network; data persists in the Compose `pg-data` volume.
+- **TLS**: `nginxproxy/acme-companion` issues and renews Let's Encrypt certs.
+- **Secrets**: `ops/aws-ec2/prod.env` on the server. This file is gitignored; back it up securely.
 
 ## One-page health check
 
 ```bash
-ssh <vps-host> 'sudo /usr/local/bin/rpow-status'
+ssh <ec2-host> 'cd /path/to/rpow && docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml ps'
+curl -fsS https://api.rpow4.com/health
 ```
 
 ## Service recovery
@@ -20,50 +23,42 @@ Three layers (every layer has been tested):
 
 | Failure mode | Recovery |
 |---|---|
-| node process crashes / clean exit | systemd restarts in ~2s (`Restart=always`, `RestartSec=2`, up to 10 starts per 5min before pause) |
-| node process hung but alive (deadlock, infinite loop) | `rpow-healthcheck.timer` probes `/health` every 90s; after 2 consecutive failures, runs `systemctl restart rpow-server`. Logs to `journalctl -t rpow-healthcheck` |
-| nginx / Postgres crash | distro systemd units auto-restart |
-| VPS reboot | all rpow services + nginx + postgresql + ufw + fail2ban + certbot.timer + rpow-backup.timer + rpow-healthcheck.timer are `enabled` — they come back on boot |
-| TLS cert expiry | `certbot.timer` renews 30 days before expiry, fully unattended via Cloudflare DNS-01 |
-| Backup repo corruption | restic does a 5% read-data integrity check on every nightly run; restore drill documented below |
+| node process crashes / clean exit | Docker restarts the `server` container (`restart: unless-stopped`) |
+| nginx proxy / Postgres crash | Docker restarts the affected container (`restart: unless-stopped`) |
+| EC2 reboot | Docker is enabled by the deploy script; containers with `restart: unless-stopped` come back after daemon start |
+| TLS cert expiry | `acme-companion` renews Let's Encrypt certificates automatically |
+| DB volume loss | Restore from a logical `pg_dump` backup |
 
 **Recommended addition (not yet wired)**: an external uptime monitor (e.g. UptimeRobot or healthchecks.io) hitting `https://api.rpow4.com/health` every minute, paging when 3+ consecutive failures. The VPS-internal watchdog can't help if the whole box is dead — only an off-box monitor can.
 
 To inspect the watchdog's recent activity:
 ```bash
-ssh <vps-host> 'sudo journalctl -t rpow-healthcheck --since "1 hour ago"'
+ssh <ec2-host> 'cd /path/to/rpow && ./deploy-aws-ec2.sh --logs'
 ```
 
 ## Logs
 
 ```bash
-ssh <vps-host> 'sudo journalctl -u rpow-server -f'
-ssh <vps-host> 'sudo tail -f /var/log/nginx/api.rpow4.com.access.log'
-ssh <vps-host> 'sudo tail -f /var/log/nginx/api.rpow4.com.error.log'
-ssh <vps-host> 'sudo tail -f /var/log/postgresql/postgresql-17-main.log'
+ssh <ec2-host> 'cd /path/to/rpow && ./deploy-aws-ec2.sh --logs'
+ssh <ec2-host> 'cd /path/to/rpow && docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml logs -f acme-companion'
 ```
 
 ## Deploys
 
 ```bash
-ssh <vps-host> '
-  sudo -u rpow bash -c "cd /opt/rpow/repo && \
-    git pull origin main && \
-    npm ci --workspaces --include-workspace-root --ignore-scripts && \
-    npm run build --workspace @rpow/shared && \
-    npm run build --workspace @rpow/server" && \
-  sudo systemctl restart rpow-server'
+ssh <ec2-host> '
+  cd /path/to/rpow && \
+  git pull origin main && \
+  ./deploy-aws-ec2.sh --email you@example.com'
 ```
 
 ## Secrets / config files
 
 | File | Mode | Owner | Purpose |
 |---|---|---|---|
-| `/etc/rpow/server.env` | 0640 | root:rpow | App env (DATABASE_URL, signing keys, etc.) |
-| `/etc/rpow/restic.env` | 0600 | root:root | B2 creds + restic password |
-| `/etc/letsencrypt/cloudflare.ini` | 0600 | root:root | Cloudflare API token for DNS-01 |
+| `ops/aws-ec2/prod.env` | 0600 recommended | deploy user | App env, DB password, signing keys, TLS email |
 
-After editing `server.env`: `sudo systemctl restart rpow-server`.
+After editing `prod.env`: `./deploy-aws-ec2.sh`.
 
 ## Tokenomics knobs
 
@@ -82,55 +77,57 @@ The RPOW4 schedule is parameterized by env so the operator can adjust dev/stagin
 Lower difficulty for a hands-on test session:
 
 ```bash
-ssh <vps-host> '
-  sudo sed -i "s/^DIFFICULTY_BITS=.*/DIFFICULTY_BITS=20/" /etc/rpow/server.env && \
-  sudo systemctl restart rpow-server'
+ssh <ec2-host> '
+  cd /path/to/rpow && \
+  sed -i "s/^DIFFICULTY_BITS=.*/DIFFICULTY_BITS=20/" ops/aws-ec2/prod.env && \
+  ./deploy-aws-ec2.sh'
 ```
 
 ## Backup operations
 
-- **Nightly**: `rpow-backup.timer` at 03:00 UTC (with up to 5min jitter).
-- **Manual**: `ssh <vps-host> 'sudo /usr/local/bin/rpow-backup'`
-- **Restore drill**: `ssh <vps-host> 'sudo /usr/local/bin/rpow-restore-test'` — restores latest snapshot into a scratch DB and prints row counts. Run weekly to keep restic + creds healthy.
-- **List snapshots**: `ssh <vps-host> 'sudo bash -c "set -a; . /etc/rpow/restic.env; set +a; restic snapshots"'`
-- **Retention**: 7 daily, 4 weekly, 6 monthly. 5% read-data integrity check on each backup.
+Keep logical dumps somewhere off the instance:
+
+```bash
+ssh <ec2-host> 'cd /path/to/rpow && docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml exec -T db pg_dump -U rpow rpow' \
+  > rpow4-$(date +%F).sql
+```
+
+Run restore drills regularly against a scratch Postgres database. Do not rely on
+the Docker volume as the only backup.
 
 ## TLS renewals
 
-Auto-renewing via certbot's systemd timer. No human action needed.
+Auto-renewing via `nginxproxy/acme-companion`. No human action needed when DNS
+still points at the EC2 instance and ports `80`/`443` are reachable.
 
 ```bash
-ssh <vps-host> 'systemctl list-timers certbot.timer'
-ssh <vps-host> 'sudo certbot renew --dry-run'   # exercise the flow
+ssh <ec2-host> 'cd /path/to/rpow && docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml logs -f acme-companion'
 ```
 
 ## Rotating the signing key
 
-Edit `RPOW_SIGNING_PRIVATE_KEY_HEX` and `RPOW_SIGNING_PUBLIC_KEY_HEX` in `/etc/rpow/server.env`, then `sudo systemctl restart rpow-server`. Existing minted tokens become unverifiable if the private key changes — coordinate carefully.
+Edit `RPOW_SIGNING_PRIVATE_KEY_HEX` and `RPOW_SIGNING_PUBLIC_KEY_HEX` in
+`ops/aws-ec2/prod.env`, then run `./deploy-aws-ec2.sh`. Existing minted tokens
+become unverifiable if the private key changes, so coordinate carefully.
 
 ## Database access
 
 ```bash
-# Read-only inspection as ubuntu
-ssh <vps-host> 'sudo -u postgres psql rpow'
-
-# As the rpow_app role over Unix socket (password from .env.vps locally)
-DBPW=$(grep '^RPOW_DB_PASSWORD=' .env.vps | cut -d= -f2-)
-ssh <vps-host> "PGPASSWORD='$DBPW' psql -h /var/run/postgresql -U rpow_app -d rpow"
+ssh <ec2-host> 'cd /path/to/rpow && docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml exec db psql -U rpow rpow'
 ```
 
-## Cloudflare DNS records
+## DNS Records
 
-The operational scripts (`ops/dns-flip.sh`, `ops/cutover.sh`) take zone + record IDs from env. Populate them when you provision the rpow4 zone:
+Point both records at the EC2 public IP before first deploy:
 
-```bash
-export ZONE_ID=<rpow4 zone id>
-export A_REC_ID=<api.rpow4.com A record id>
-export AAAA_REC_ID=<api.rpow4.com AAAA record id>   # or set to a dummy + drop AAAA via VPS_IPV6=NONE
-```
+| Host | Type | Value |
+|---|---|---|
+| `rpow4.com` | `A` / `AAAA` | EC2 public IP |
+| `api.rpow4.com` | `A` / `AAAA` | EC2 public IP |
 
-## Incident: VPS down or compromised
+## Incident: EC2 Down Or Compromised
 
-- Cloudflare DNS will not auto-failover. Existing backups are in B2.
-- Recovery sequence: provision new VPS, replay the host setup steps, then `restic restore` the latest snapshot into a fresh `rpow` DB, then flip DNS A/AAAA via the Cloudflare API.
-- Cert can be re-issued in minutes via DNS-01 (token already in CF; just put it back at `/etc/letsencrypt/cloudflare.ini`).
+- DNS will not auto-failover.
+- Provision a new EC2 instance, clone the repo, restore `ops/aws-ec2/prod.env`,
+  restore the latest Postgres dump, then point DNS at the new public IP.
+- Certificates can be reissued by `acme-companion` once DNS and ports are live.

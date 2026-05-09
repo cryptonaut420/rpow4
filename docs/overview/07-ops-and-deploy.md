@@ -5,6 +5,17 @@ Fastify/Node, Postgres, nginx or another self-hosted reverse proxy, and local
 backup/archive storage. No CDN or third-party runtime dependency is required
 for ledger correctness.
 
+The simplest production path is the Docker-based AWS EC2 deploy:
+
+```bash
+./deploy-aws-ec2.sh --email you@example.com
+```
+
+That script creates `ops/aws-ec2/prod.env` on first run, builds the API and SPA
+images, starts Postgres, publishes ports `80` and `443` through
+`nginxproxy/nginx-proxy`, and uses `nginxproxy/acme-companion` for Let's
+Encrypt certificates. The default hosts are `rpow4.com` and `api.rpow4.com`.
+
 ## Required Env
 
 | Var | Purpose |
@@ -18,6 +29,9 @@ for ledger correctness.
 | `SIGNUP_DIFFICULTY_BITS` | Anti-spam signup PoW |
 | `MINT_MAX_SUPPLY` | Cap counter ceiling in whole RPOW |
 | `WEB_ORIGIN` | CORS origin for the SPA |
+| `WEB_HOST` | Public SPA hostname used by the production proxy |
+| `API_HOST` | Public API hostname used by the production proxy |
+| `LETSENCRYPT_EMAIL` | Contact email for certificate issuance |
 
 ## Scaling Notes
 

@@ -365,7 +365,7 @@ export async function claimRoutes(app: FastifyInstance) {
     app.invalidateAccount(redeemer);
     app.invalidateLedger();
 
-    return { ok: true, transfer_id, ...rest };
+    return { transfer_id, ...rest };
   });
 
   // ---- POST /claim/:id/cancel ------------------------------------------------

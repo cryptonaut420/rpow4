@@ -25,7 +25,8 @@ import { prepareWithSegments, measureLineStats } from '@chenglou/pretext';
 const HEX = '0123456789abcdef';
 const GLITCH = HEX + '!@#$%&*+=<>?/\\|~^';
 
-const RAIN_ROWS = 5;
+const RAIN_ROWS_FULL = 5;
+const RAIN_ROWS_COMPACT = 3;
 const RAIN_FPS = 18;       // chars cycled per second per row position
 const SPINNER = ['◐', '◓', '◑', '◒'];
 
@@ -75,6 +76,12 @@ export interface MiningVisualizerProps {
   target: number;
   /** Imperative handle ref the parent assigns to. */
   handlesRef: React.MutableRefObject<MiningVisualizerHandles | null>;
+  /**
+   * Render in a slimmed-down "docked widget" form: fewer rain rows,
+   * no section headers, tighter padding. Animation, RAF loop, win FX,
+   * and progress meter are otherwise identical to full mode.
+   */
+  compact?: boolean;
 }
 
 interface WinFx {
@@ -122,9 +129,10 @@ function useMonoColCount(containerRef: React.RefObject<HTMLDivElement>): number 
   return cols;
 }
 
-export function MiningVisualizer({ target, handlesRef }: MiningVisualizerProps) {
+export function MiningVisualizer({ target, handlesRef, compact = false }: MiningVisualizerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cols = useMonoColCount(containerRef);
+  const rainRows = compact ? RAIN_ROWS_COMPACT : RAIN_ROWS_FULL;
 
   // Refs hold all high-frequency state so the RAF loop never triggers React
   // re-renders. The parent's handles also write into refs, never into state.
@@ -158,11 +166,11 @@ export function MiningVisualizer({ target, handlesRef }: MiningVisualizerProps) 
   const rainStateRef = useRef<{ chars: string[]; flashes: number[] }[]>([]);
 
   useEffect(() => {
-    rainStateRef.current = Array.from({ length: RAIN_ROWS }, () => ({
+    rainStateRef.current = Array.from({ length: rainRows }, () => ({
       chars: Array.from({ length: cols }, () => HEX[Math.floor(Math.random() * 16)]!),
       flashes: Array.from({ length: cols }, () => Math.random() * RAIN_FPS),
     }));
-  }, [cols]);
+  }, [cols, rainRows]);
 
   // Imperative handle exposed to parent.
   useEffect(() => {
@@ -238,7 +246,8 @@ export function MiningVisualizer({ target, handlesRef }: MiningVisualizerProps) 
           }
           node.textContent = s;
           // Vertical fade: top rows dimmer, bottom row brightest.
-          const baseOpacity = active ? 0.18 + (r / (RAIN_ROWS - 1)) * 0.5 : 0.12;
+          const fadeDenom = Math.max(1, rows.length - 1);
+          const baseOpacity = active ? 0.18 + (r / fadeDenom) * 0.5 : 0.12;
           node.style.opacity = String(baseOpacity);
         }
       }
@@ -385,13 +394,21 @@ export function MiningVisualizer({ target, handlesRef }: MiningVisualizerProps) 
     transition: 'opacity 200ms',
   }), []);
 
+  // Compact mode trims labels and padding but keeps every animated piece —
+  // hash rain, best-candidate row, progress bar, nonce/hps footer, and the
+  // win banner all still render. The user explicitly asked for the docked
+  // strip to look "EXACTLY like before, just condensed a bit."
+  const padding = compact ? '6px 10px' : '10px 12px';
+  const marginTop = compact ? 0 : 12;
+  const rowLineHeight = compact ? 1.15 : 1.25;
+
   return (
     <div
       ref={containerRef}
       style={{
         position: 'relative',
-        marginTop: 12,
-        padding: '10px 12px',
+        marginTop,
+        padding,
         background: 'rgba(0,0,0,0.35)',
         border: '1px solid var(--accent-dim)',
         borderRadius: 3,
@@ -400,26 +417,30 @@ export function MiningVisualizer({ target, handlesRef }: MiningVisualizerProps) 
       }}
     >
       {/* Header label */}
-      <div style={{ fontSize: 10, color: 'var(--dim)', letterSpacing: '0.18em', marginBottom: 6 }}>
-        ▌ HASH STREAM
-      </div>
+      {!compact && (
+        <div style={{ fontSize: 10, color: 'var(--dim)', letterSpacing: '0.18em', marginBottom: 6 }}>
+          ▌ HASH STREAM
+        </div>
+      )}
 
       {/* Rain rows */}
-      <div style={{ position: 'relative', minHeight: 22 * RAIN_ROWS }}>
-        {Array.from({ length: RAIN_ROWS }).map((_, i) => (
+      <div style={{ position: 'relative', minHeight: 22 * rainRows }}>
+        {Array.from({ length: rainRows }).map((_, i) => (
           <pre
             key={i}
             ref={(el) => { rainNodeRefs.current[i] = el; }}
-            style={railStyle}
+            style={{ ...railStyle, lineHeight: rowLineHeight }}
           />
         ))}
       </div>
 
       {/* Best hash + leading-zero count */}
-      <div style={{ marginTop: 8, fontSize: 12 }}>
-        <div style={{ color: 'var(--dim)', fontSize: 10, letterSpacing: '0.18em' }}>
-          ▌ BEST CANDIDATE
-        </div>
+      <div style={{ marginTop: compact ? 4 : 8, fontSize: 12 }}>
+        {!compact && (
+          <div style={{ color: 'var(--dim)', fontSize: 10, letterSpacing: '0.18em' }}>
+            ▌ BEST CANDIDATE
+          </div>
+        )}
         <pre style={{ margin: '2px 0 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.3 }}>
           <span ref={bestHashNodeRef} />
         </pre>
@@ -432,13 +453,15 @@ export function MiningVisualizer({ target, handlesRef }: MiningVisualizerProps) 
             <span ref={progressPctNodeRef} style={{ color: 'var(--accent)' }} />
           </span>
         </div>
-        <div style={{ marginTop: 2, fontSize: 11, color: 'var(--dim)', textAlign: 'right' }}>
-          <span ref={expectedNodeRef} />
-        </div>
+        {!compact && (
+          <div style={{ marginTop: 2, fontSize: 11, color: 'var(--dim)', textAlign: 'right' }}>
+            <span ref={expectedNodeRef} />
+          </div>
+        )}
       </div>
 
       {/* Live status footer */}
-      <div style={{ marginTop: 8, fontSize: 11, color: 'var(--dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ marginTop: compact ? 4 : 8, fontSize: 11, color: 'var(--dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <span>nonce <span ref={nonceNodeRef} style={{ color: 'var(--fg)' }} /></span>
         <span><span ref={hpsNodeRef} style={{ color: 'var(--fg)' }} /> <span ref={spinnerNodeRef} style={{ color: 'var(--accent)' }} /></span>
       </div>

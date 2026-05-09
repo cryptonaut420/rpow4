@@ -22,8 +22,8 @@ modernized:
   persisted alongside the resulting ledger row.
 - **Mining** is hashcash on `SHA-256(nonce_prefix ‖ solution_nonce_LE)`,
   targeting a configurable number of trailing zero bits. The schedule
-  starts at 24 bits and steps up +1 every 164,062 blocks (≈ 21M / 128),
-  capped at 50 bits so it stays mineable on commodity hardware forever.
+  starts at 24 bits and steps up +1 every 50,000 blocks, capped at 50 bits
+  so it stays mineable on commodity hardware forever.
 - **Balances** live in compact Postgres `account_balances` rows. Accepted
   proofs and transfers append `ledger_events` for auditability, while hot
   reads never scan per-coin history.
@@ -49,7 +49,7 @@ modernized:
 
 ```
                                     ┌────────────────────────────┐
-                                    │   apps/web (Netlify)       │
+                                    │   apps/web (Docker/nginx)  │
                                     │   React + Vite SPA         │
                                     │   miner.worker.ts          │
                                     │   WalletProvider:          │
@@ -61,7 +61,7 @@ modernized:
                                                  │ + Ed25519 sig per action
                                                  ▼
             ┌─────────────────────────────────────────────────────────────┐
-            │  api.rpow4.com  (OVH VPS, nginx → :8080)                    │
+           │  api.rpow4.com  (EC2, nginx-proxy → :8080)                  │
             │                                                              │
             │  apps/server  (Fastify, Node 22, TypeScript)                 │
             │  ├─ /auth/{challenge,session,logout}  pubkey handshake       │
@@ -108,7 +108,7 @@ modernized:
   function of the global `block_height` counter (incremented atomically
   on every successful `/mint`). 50 RPOW × 210,000 blocks/halving ×
   geometric sum = **21,000,000 RPOW exact**. Difficulty starts at 24
-  trailing-zero bits and steps +1 every 164,062 blocks (capped at 50).
+  trailing-zero bits and steps +1 every 50,000 blocks (capped at 50).
   Source of truth: [`schedule.ts`](../../apps/server/src/schedule.ts).
 - **No founder allocation.** Every RPOW in circulation was earned by an
   accepted PoW. No premine, no insider mint, no operator wallet.
@@ -118,6 +118,7 @@ modernized:
 - **Balance rows, not spendable token rows.** `/send` uses a conditional debit
   against `account_balances`, so arbitrary base-unit amounts work and hot
   paths do not scan a user's historical token set.
-- **Self-hosted.** The API runs on a single OVH VPS with Postgres 17 over
-  a Unix socket. See [`docs/RUNBOOK.md`](../RUNBOOK.md) and the migration
-  spec.
+- **Self-hosted.** The production stack runs on Docker Compose with Postgres
+  17, the API, the SPA, `nginx-proxy`, and automatic Let's Encrypt certs. See
+  [`ops/aws-ec2/README.md`](../../ops/aws-ec2/README.md) and
+  [`docs/RUNBOOK.md`](../RUNBOOK.md).

@@ -37,7 +37,6 @@ export function LoginPage() {
         </div>
         <div style={{ marginTop: 8 }}>
           <Link to="/">[ wallet ]</Link>{' '}
-          <Link to="/mine">[ mine ]</Link>{' '}
           <Link to="/send">[ send ]</Link>{' '}
           <Link to="/activity">[ activity ]</Link>
         </div>

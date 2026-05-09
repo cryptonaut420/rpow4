@@ -93,12 +93,14 @@ export function WalletPage() {
           <DisplayNameEditor current={me.display_name} onChanged={refresh} />
         </div>
         <div style={{ marginTop: 12 }}>
-          <Link to="/mine">[ MINE ]</Link>{' '}
           <Link to="/send">[ SEND ]</Link>{' '}
           <Link to="/activity">[ ACTIVITY ]</Link>{' '}
           <button onClick={logout} title="end session and lock wallet (encrypted backup is preserved)">
             [ LOGOUT ]
           </button>
+        </div>
+        <div style={{ marginTop: 6, color: 'var(--dim)', fontSize: 11 }}>
+          mining controls are docked at the bottom of every page.
         </div>
       </Panel>
 

@@ -208,3 +208,123 @@ input:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); }
 .panel pre { margin: 0; }
 
 main { margin-top: 4px; }
+
+/* ── Mining bar (sticky bottom widget) ────────────────────────────────────
+ * The bar is fixed to the viewport so it follows the user across every
+ * page. The full <MiningVisualizer> lives inside it and runs continuously,
+ * giving the bar a baseline height of ~190px even when collapsed. App
+ * content gets `padding-bottom` to match so nothing ever sits underneath.
+ */
+.app-shell { padding-bottom: 220px; }
+
+.mining-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(8, 8, 10, 0.94);
+  backdrop-filter: blur(8px);
+  border-top: 1px solid var(--accent-dim);
+  box-shadow: 0 -10px 32px rgba(0, 0, 0, 0.6);
+  z-index: 50;
+}
+
+.mining-bar-inner {
+  max-width: 78ch;
+  margin: 0 auto;
+  padding: 8px 16px 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Top control strip ──────────────────────────────────────────────── */
+.mining-bar-strip {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.mining-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--accent-dim);
+  padding: 3px 10px;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  color: var(--dim);
+  background: rgba(0, 0, 0, 0.35);
+  flex-shrink: 0;
+}
+.mining-status-pill.is-running {
+  color: var(--accent);
+  border-color: var(--accent);
+  text-shadow: 0 0 6px var(--accent-dim);
+}
+
+.mining-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.mining-status-pill.is-running .mining-status-dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: mining-pulse 1.4s ease-in-out infinite;
+}
+@keyframes mining-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.85); }
+  50%      { opacity: 1;    transform: scale(1.15); }
+}
+
+.mining-bar-balance,
+.mining-bar-stat {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  font-size: 12px;
+}
+.mining-bar-balance strong { color: var(--accent); }
+.mining-bar-label-text {
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+
+.mining-bar-spacer { flex: 1 1 auto; }
+
+.mining-bar-action {
+  padding: 3px 12px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+.mining-bar-action.go { color: var(--accent); border-color: var(--accent); }
+.mining-bar-action.stop { color: var(--error); border-color: var(--error); }
+.mining-bar-action.stop:hover { background: rgba(248, 113, 113, 0.12); border-color: var(--error); }
+
+/* ── Visualizer slot ────────────────────────────────────────────────── */
+.mining-bar-viz {
+  /* Visualizer brings its own background/border; we just give it room. */
+  margin-top: 0;
+}
+
+/* ── Expanded panel content (sits ABOVE the strip + visualizer)
+ * The expanded block is the ONLY scrollable region in the bar — strip and
+ * visualizer remain pinned and always visible. Capped at 50vh so on short
+ * viewports the bar still shows its hash stream. */
+.mining-bar[data-expanded='true'] {
+  border-top-color: var(--accent);
+  box-shadow: 0 -14px 40px rgba(0, 0, 0, 0.75);
+}
+.mining-bar-expanded-content {
+  border-bottom: 1px dashed var(--accent-dim);
+  padding: 4px 0 8px;
+  margin-bottom: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+}

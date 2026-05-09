@@ -67,7 +67,7 @@ RPOW4 mirrors Bitcoin's issuance curve, sped up by removing the 10-minute block-
 | Initial block reward           | 50 RPOW (= 50 × 10⁹ base units)        |
 | Reward halving cadence         | every 210,000 blocks                   |
 | Initial difficulty             | 24 trailing-zero bits (`DIFFICULTY_BITS`) |
-| Difficulty step                | +1 bit every 164,062 blocks (≈ 21M / 128) |
+| Difficulty step                | +1 bit every 50,000 blocks                |
 | Difficulty ceiling             | 50 bits                                |
 | Founder allocation / premine   | **none**                                |
 
@@ -75,9 +75,18 @@ RPOW4 mirrors Bitcoin's issuance curve, sped up by removing the 10-minute block-
 
 ## Deploy
 
-The repo's ops/ scripts and nginx config target a hostname (`api.rpow4.com` or whatever you prefer). DNS, certs, and Netlify wiring are operator decisions outside the codebase.
+For a fresh Ubuntu AWS EC2 server:
 
-See `docs/RUNBOOK.md` for operator instructions.
+```bash
+git clone <this repo>
+cd rpow
+./deploy-aws-ec2.sh --email you@example.com
+```
+
+That brings up Postgres, the API, the built SPA, `nginx-proxy`, and automatic
+Let's Encrypt certificates for `rpow4.com` and `api.rpow4.com`. See
+[`ops/aws-ec2/README.md`](./ops/aws-ec2/README.md) and
+[`docs/RUNBOOK.md`](./docs/RUNBOOK.md) for operator instructions.
 
 ## Documentation
 

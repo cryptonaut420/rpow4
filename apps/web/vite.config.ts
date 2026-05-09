@@ -3,7 +3,6 @@ import react from '@vitejs/plugin-react';
 
 const SITEMAP_ROUTES: Array<{ path: string; priority: string; changefreq: string }> = [
   { path: '/', priority: '1.0', changefreq: 'daily' },
-  { path: '/#/mine', priority: '0.9', changefreq: 'daily' },
   { path: '/#/ledger', priority: '0.8', changefreq: 'weekly' },
   { path: '/#/stats', priority: '0.8', changefreq: 'daily' },
   { path: '/#/explorer', priority: '0.8', changefreq: 'daily' },

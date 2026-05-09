@@ -8,8 +8,12 @@ COPY apps/web/package.json ./apps/web/
 RUN npm ci --workspaces --include-workspace-root --ignore-scripts
 COPY packages/shared ./packages/shared
 COPY apps/server ./apps/server
-RUN npm run build --workspace @rpow/shared
-RUN npm run build --workspace @rpow/server
+RUN npm run build --workspace @rpow/shared -- --force
+RUN rm -rf node_modules/@rpow/shared \
+  && mkdir -p node_modules/@rpow/shared \
+  && cp packages/shared/package.json node_modules/@rpow/shared/package.json \
+  && cp -R packages/shared/dist node_modules/@rpow/shared/dist
+RUN npm run build --workspace @rpow/server -- --force
 
 # Runtime stage — compiled artifacts + node_modules from the build stage
 FROM node:22-alpine
