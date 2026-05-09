@@ -156,11 +156,12 @@ export async function mintRoutes(app: FastifyInstance) {
         );
 
         await c.query(
-          `INSERT INTO account_balances(pubkey, spendable_base_units, minted_base_units, updated_at)
-           VALUES($1, $2, $2, now())
+          `INSERT INTO account_balances(pubkey, spendable_base_units, minted_base_units, blocks_mined, updated_at)
+           VALUES($1, $2, $2, 1, now())
            ON CONFLICT (pubkey) DO UPDATE SET
              spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
              minted_base_units = account_balances.minted_base_units + EXCLUDED.minted_base_units,
+             blocks_mined = account_balances.blocks_mined + 1,
              updated_at = now()`,
           [s.pubkey, reward.toString()],
         );

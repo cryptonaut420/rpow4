@@ -65,8 +65,8 @@ export interface AppCaches {
   ledger: TtlCache<'singleton', CachedJsonResponse>;
   /** Public /ledger/events pre-serialized pages, keyed by cursor + limit. */
   ledgerEvents: TtlCache<string, CachedJsonResponse>;
-  /** Public /stats/leaderboard top-100 pre-serialized response. */
-  leaderboard: TtlCache<'singleton', CachedJsonResponse>;
+  /** Public /stats/leaderboard top-100 pre-serialized response, keyed by sort variant. */
+  leaderboard: TtlCache<string, CachedJsonResponse>;
 }
 
 declare module 'fastify' {
@@ -120,8 +120,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     ledger: new TtlCache<'singleton', CachedJsonResponse>({ ttlMs: 5_000, maxSize: 1 }),
     ledgerEvents: new TtlCache<string, CachedJsonResponse>({ ttlMs: 1_500, maxSize: 256 }),
     // Leaderboard moves slowly — the rerank only matters when balances
-    // shift. 10s TTL keeps load tiny while still feeling live.
-    leaderboard: new TtlCache<'singleton', CachedJsonResponse>({ ttlMs: 10_000, maxSize: 1 }),
+    // shift. 10s TTL keeps load tiny while still feeling live. Two sort
+    // variants ('balance' | 'minted') share the same cache, hence
+    // maxSize=2 and a string key.
+    leaderboard: new TtlCache<string, CachedJsonResponse>({ ttlMs: 10_000, maxSize: 2 }),
   };
   app.decorate('caches', caches);
   app.decorate('invalidateAccount', (pubkey: string) => {

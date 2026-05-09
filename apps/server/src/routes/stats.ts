@@ -6,13 +6,33 @@ const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
 const LEADERBOARD_LIMIT = 100;
 
 /**
+ * Two leaderboard variants:
+ *
+ *   sort=balance (default) — order by spendable_base_units DESC, served
+ *     by the partial DESC index added in migration 018.
+ *
+ *   sort=minted           — order by minted_base_units DESC, served by
+ *     the partial DESC index added in migration 019.
+ *
+ * Both share the same response shape and the same `LeaderboardEntry`
+ * fields so the client can render either with a single component.
+ */
+type SortKey = 'balance' | 'minted';
+
+const SORT_COLUMNS: Record<SortKey, string> = {
+  balance: 'b.spendable_base_units',
+  minted: 'b.minted_base_units',
+};
+
+/**
  * Public stats endpoints. Read-only, heavily cached, ETag-aware.
  *
- * /stats/leaderboard returns the top-100 spendable balances. Backed by
- * the partial DESC index added in migration 018, so the query is an
- * index range scan over at most 100 rows regardless of total account
- * count. The result is pre-serialized once per cache window and reused
- * across requests via `If-None-Match` 304s.
+ * /stats/leaderboard returns the top-100 by either spendable balance
+ * (default) or lifetime minted base units. Each variant is backed by a
+ * partial DESC index, so the query is an index range scan over at most
+ * 100 rows regardless of total account count. The result is
+ * pre-serialized once per cache window per sort key and reused across
+ * requests via `If-None-Match` 304s.
  */
 export async function statsRoutes(app: FastifyInstance) {
   function sendCachedJson(
@@ -30,8 +50,10 @@ export async function statsRoutes(app: FastifyInstance) {
     return reply.send(cached.json);
   }
 
-  async function leaderboardCachedResponse(): Promise<CachedJsonResponse> {
-    return app.caches.leaderboard.get('singleton', async () => {
+  async function leaderboardCachedResponse(sort: SortKey): Promise<CachedJsonResponse> {
+    return app.caches.leaderboard.get(sort, async () => {
+      const orderColumn = SORT_COLUMNS[sort];
+      const filterColumn = orderColumn;
       const { rows } = await app.pool.query<{
         rank: string;
         pubkey: string;
@@ -40,6 +62,7 @@ export async function statsRoutes(app: FastifyInstance) {
         minted_base_units: string;
         sent_base_units: string;
         received_base_units: string;
+        blocks_mined: string;
       }>(
         `SELECT
            row_number() OVER ()::text AS rank,
@@ -48,16 +71,18 @@ export async function statsRoutes(app: FastifyInstance) {
            b.spendable_base_units::text AS spendable_base_units,
            b.minted_base_units::text     AS minted_base_units,
            b.sent_base_units::text       AS sent_base_units,
-           b.received_base_units::text   AS received_base_units
+           b.received_base_units::text   AS received_base_units,
+           b.blocks_mined::text          AS blocks_mined
          FROM account_balances b
          JOIN accounts a ON a.pubkey = b.pubkey
-         WHERE b.spendable_base_units > 0
-         ORDER BY b.spendable_base_units DESC, b.pubkey
+         WHERE ${filterColumn} > 0
+         ORDER BY ${orderColumn} DESC, b.pubkey
          LIMIT $1`,
         [LEADERBOARD_LIMIT],
       );
 
       const body = {
+        sort,
         entries: rows.map((r) => ({
           rank: Number(r.rank),
           pubkey: r.pubkey,
@@ -66,6 +91,7 @@ export async function statsRoutes(app: FastifyInstance) {
           minted_base_units: r.minted_base_units,
           sent_base_units: r.sent_base_units,
           received_base_units: r.received_base_units,
+          blocks_mined: r.blocks_mined,
         })),
         generated_at: new Date().toISOString(),
         limit: LEADERBOARD_LIMIT,
@@ -74,8 +100,18 @@ export async function statsRoutes(app: FastifyInstance) {
     });
   }
 
-  app.get('/stats/leaderboard', async (req, reply) => {
-    const cached = await leaderboardCachedResponse();
+  app.get<{ Querystring: { sort?: string } }>('/stats/leaderboard', async (req, reply) => {
+    const sortRaw = req.query.sort;
+    const sort: SortKey =
+      sortRaw === 'minted' ? 'minted' :
+      (sortRaw === undefined || sortRaw === 'balance') ? 'balance' :
+      // Anything else: treat as a 400 so clients get told about typos
+      // rather than silently falling back to a different ordering.
+      'invalid' as SortKey;
+    if ((sort as string) === 'invalid') {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'sort must be balance or minted' });
+    }
+    const cached = await leaderboardCachedResponse(sort);
     return sendCachedJson(
       reply,
       cached,

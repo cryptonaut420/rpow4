@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
-import type { LeaderboardResponse, LedgerResponse } from '@rpow/shared';
+import type {
+  LeaderboardEntry,
+  LeaderboardResponse,
+  LeaderboardSort,
+  LedgerResponse,
+} from '@rpow/shared';
 import { shortPubkey } from '@rpow/shared';
 import { formatRpow } from '../lib/format.js';
 
@@ -22,31 +27,52 @@ function formatRank(rank: number, width: number): string {
   return s.length >= width ? s : ' '.repeat(width - s.length) + s;
 }
 
+const SORT_LABELS: Record<LeaderboardSort, { tab: string; panel: string; primary: string }> = {
+  balance: { tab: 'richest', panel: 'TOP 100 RICHEST', primary: 'BALANCE' },
+  minted:  { tab: 'most mined', panel: 'TOP 100 MINERS', primary: 'MINED' },
+};
+
 export function StatsPage() {
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
-  const [board, setBoard] = useState<LeaderboardResponse | null>(null);
+  // Cache both sort variants once they've been fetched so flipping the
+  // toggle is instant after the first round-trip.
+  const [boards, setBoards] = useState<Partial<Record<LeaderboardSort, LeaderboardResponse>>>({});
+  const [sort, setSort] = useState<LeaderboardSort>('balance');
   const [error, setError] = useState('');
+  const [loadingBoard, setLoadingBoard] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api.ledger(), api.leaderboard()])
-      .then(([l, b]) => {
-        if (cancelled) return;
-        setLedger(l);
-        setBoard(b);
-      })
+    api.ledger()
+      .then((l) => { if (!cancelled) setLedger(l); })
       .catch((e: unknown) => {
         if (cancelled) return;
-        const msg = e instanceof Error ? e.message : 'failed to load stats';
-        setError(msg);
+        setError(e instanceof Error ? e.message : 'failed to load ledger');
       });
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (boards[sort]) return;
+    let cancelled = false;
+    setLoadingBoard(true);
+    api.leaderboard(sort)
+      .then((b) => {
+        if (cancelled) return;
+        setBoards((prev) => ({ ...prev, [sort]: b }));
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'failed to load leaderboard');
+      })
+      .finally(() => { if (!cancelled) setLoadingBoard(false); });
+    return () => { cancelled = true; };
+  }, [sort, boards]);
+
   if (error) {
     return <Panel title="STATS"><div className="error">{error}</div></Panel>;
   }
-  if (!ledger || !board) {
+  if (!ledger) {
     return <Panel title="STATS"><div>loading...</div></Panel>;
   }
 
@@ -56,6 +82,8 @@ export function StatsPage() {
   const reward = formatRpow(ledger.current_reward_base_units);
   const blocksToHalving = formatNumber(ledger.blocks_to_next_halving);
   const blocksToDiffStep = formatNumber(ledger.blocks_to_next_difficulty_step);
+
+  const board = boards[sort];
 
   return (
     <>
@@ -77,57 +105,102 @@ export function StatsPage() {
         </pre>
       </Panel>
 
-      <Panel title={`TOP ${board.limit} BALANCES`}>
-        {board.entries.length === 0 ? (
+      <Panel title={SORT_LABELS[sort].panel}>
+        <div style={{ marginBottom: 10 }}>
+          <SortTab active={sort === 'balance'} onClick={() => setSort('balance')} label={SORT_LABELS.balance.tab} />
+          {' '}
+          <SortTab active={sort === 'minted'}  onClick={() => setSort('minted')}  label={SORT_LABELS.minted.tab} />
+        </div>
+
+        {!board && loadingBoard ? (
+          <div style={{ color: 'var(--dim)' }}>loading {SORT_LABELS[sort].tab}...</div>
+        ) : !board ? (
+          <div style={{ color: 'var(--dim)' }}>(no data)</div>
+        ) : board.entries.length === 0 ? (
           <div style={{ color: 'var(--dim)' }}>(no balances yet — start mining)</div>
         ) : (
-          <>
-            <pre style={{ margin: '0 0 4px 0', color: 'var(--dim)', fontSize: 12 }}>
-{`  RANK   IDENTITY                                        BALANCE (RPOW)`}
-            </pre>
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'auto 1fr auto auto',
-                columnGap: 16,
-                rowGap: 2,
-                alignItems: 'center',
-                fontFamily: 'inherit',
-              }}
-            >
-              {board.entries.map((e) => {
-                const label = e.display_name ?? shortPubkey(e.pubkey);
-                return (
-                  <RowFragment
-                    key={e.pubkey}
-                    rank={formatRank(e.rank, 5)}
-                    label={label}
-                    pubkey={e.pubkey}
-                    balance={formatRpowPadded(e.spendable_base_units, 14)}
-                    minted={formatRpow(e.minted_base_units)}
-                  />
-                );
-              })}
-            </div>
-            <div style={{ marginTop: 12, color: 'var(--dim)', fontSize: 12 }}>
-              snapshot: {board.generated_at.replace('T', ' ').slice(0, 19)} UTC
-              {' · '}refreshes every 10s
-            </div>
-          </>
+          <LeaderboardTable sort={sort} entries={board.entries} generatedAt={board.generated_at} />
         )}
       </Panel>
     </>
   );
 }
 
+function SortTab({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        color: active ? 'var(--fg)' : 'var(--dim)',
+        fontWeight: active ? 'bold' : 'normal',
+      }}
+    >
+      [ {active ? '*' : ' '} {label} ]
+    </button>
+  );
+}
+
+function LeaderboardTable({
+  sort, entries, generatedAt,
+}: {
+  sort: LeaderboardSort;
+  entries: LeaderboardEntry[];
+  generatedAt: string;
+}) {
+  const headerLabel = SORT_LABELS[sort].primary;
+  return (
+    <>
+      <pre style={{ margin: '0 0 4px 0', color: 'var(--dim)', fontSize: 12 }}>
+{sort === 'balance'
+  ? `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (RPOW)   MINED`
+  : `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (RPOW)   BLOCKS`}
+      </pre>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'auto 1fr auto auto',
+          columnGap: 16,
+          rowGap: 2,
+          alignItems: 'center',
+          fontFamily: 'inherit',
+        }}
+      >
+        {entries.map((e) => {
+          const label = e.display_name ?? shortPubkey(e.pubkey);
+          const primary = sort === 'balance'
+            ? formatRpowPadded(e.spendable_base_units, 14)
+            : formatRpowPadded(e.minted_base_units, 14);
+          const secondary = sort === 'balance'
+            ? `(mined ${formatNumber(e.blocks_mined)} blk)`
+            : `${formatNumber(e.blocks_mined)} blocks`;
+          return (
+            <RowFragment
+              key={e.pubkey}
+              rank={formatRank(e.rank, 5)}
+              label={label}
+              pubkey={e.pubkey}
+              primary={primary}
+              secondary={secondary}
+            />
+          );
+        })}
+      </div>
+      <div style={{ marginTop: 12, color: 'var(--dim)', fontSize: 12 }}>
+        snapshot: {generatedAt.replace('T', ' ').slice(0, 19)} UTC
+        {' · '}refreshes every 10s
+      </div>
+    </>
+  );
+}
+
 function RowFragment({
-  rank, label, pubkey, balance, minted,
+  rank, label, pubkey, primary, secondary,
 }: {
   rank: string;
   label: string;
   pubkey: string;
-  balance: string;
-  minted: string;
+  primary: string;
+  secondary: string;
 }) {
   return (
     <>
@@ -136,10 +209,8 @@ function RowFragment({
         <code>{label}</code>{' '}
         <CopyButton text={pubkey} label="copy" />
       </span>
-      <span style={{ textAlign: 'right' }}>{balance}</span>
-      <span style={{ color: 'var(--dim)', fontSize: 12 }} title="lifetime mints">
-        (mined {minted})
-      </span>
+      <span style={{ textAlign: 'right' }}>{primary}</span>
+      <span style={{ color: 'var(--dim)', fontSize: 12 }}>{secondary}</span>
     </>
   );
 }
