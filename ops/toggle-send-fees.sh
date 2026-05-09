@@ -25,15 +25,35 @@ if [[ $# -ne 1 ]]; then
 fi
 ARG="$1"
 
+# On a stock Ubuntu EC2 host the deploying user is usually not in the
+# `docker` group, so `docker …` fails with EACCES on /var/run/docker.sock
+# while `sudo docker …` works. Probe once and prefix every subsequent
+# call accordingly. Suppress only the connectivity-probe output; real
+# errors below remain visible.
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1; then
+    DOCKER=(sudo docker)
+  else
+    echo "docker is not reachable as $(whoami) and 'sudo' is unavailable." >&2
+    echo "fix: add user to the docker group (sudo usermod -aG docker $(whoami) && newgrp docker)" >&2
+    exit 4
+  fi
+fi
+
 if [[ -f ops/aws-ec2/prod.env && -f ops/aws-ec2/compose.prod.yaml ]]; then
-  COMPOSE=(docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml)
+  COMPOSE=("${DOCKER[@]}" compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml)
   MODE=prod
 else
-  COMPOSE=(docker compose)
+  COMPOSE=("${DOCKER[@]}" compose)
   MODE=dev
 fi
 
-if ! "${COMPOSE[@]}" ps --status running --services 2>/dev/null | grep -qx db; then
+# `ps --status running --services` lists service names of running containers.
+# Failure here is a real configuration / permission problem, so let stderr
+# through instead of swallowing it.
+RUNNING=$("${COMPOSE[@]}" ps --status running --services)
+if ! grep -qx db <<<"$RUNNING"; then
   echo "the 'db' service is not running (mode: $MODE). bring the stack up first." >&2
   exit 3
 fi
