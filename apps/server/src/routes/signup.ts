@@ -83,15 +83,7 @@ const SignupBody = z.object({
  * gets 409 NAME_TAKEN.
  */
 export async function signupRoutes(app: FastifyInstance) {
-  app.post(
-    '/signup/challenge',
-    {
-      // /signup/challenge does a single SELECT but is otherwise free —
-      // an attacker could issue thousands of envelopes per second to
-      // probe handle availability. Cap aggressively per IP.
-      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
-    },
-    async (req, reply) => {
+  app.post('/signup/challenge', async (req, reply) => {
     const parsed = ChallengeBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
@@ -132,15 +124,7 @@ export async function signupRoutes(app: FastifyInstance) {
     };
   });
 
-  app.post(
-    '/signup',
-    {
-      // Signup is PoW-gated, but the post-PoW commit costs a real
-      // transaction; cap how many an IP can fire even with valid
-      // solutions.
-      config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
-    },
-    async (req, reply) => {
+  app.post('/signup', async (req, reply) => {
     const parsed = SignupBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });

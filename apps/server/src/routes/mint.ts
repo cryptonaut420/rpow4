@@ -21,15 +21,7 @@ const Body = z.object({
 });
 
 export async function mintRoutes(app: FastifyInstance) {
-  app.post(
-    '/mint',
-    {
-      // Mining is gated by PoW, but the post-PoW commit path is the
-      // expensive piece (advisory lock + transaction). Cap how often a
-      // single IP can spam the commit step regardless of valid solutions.
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-    },
-    async (req, reply) => {
+  app.post('/mint', async (req, reply) => {
     const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
     const parsed = Body.safeParse(req.body);

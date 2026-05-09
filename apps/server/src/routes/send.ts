@@ -26,15 +26,7 @@ const Body = z.object({
 });
 
 export async function sendRoutes(app: FastifyInstance) {
-  app.post(
-    '/send',
-    {
-      // Per-IP cap on the write path. Idempotency-key replays return the
-      // canonical row without doing real work, but malicious senders
-      // walking the keyspace would still hit the DB and lock graph.
-      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
-    },
-    async (req, reply) => {
+  app.post('/send', async (req, reply) => {
     const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
     const parsed = Body.safeParse(req.body);

@@ -105,12 +105,6 @@ export async function accountRoutes(app: FastifyInstance) {
    */
   app.get<{ Params: { name: string } }>(
     '/lookup/:name',
-    {
-      // Looser per-IP limit: this is a hot endpoint hit from autocomplete,
-      // and authenticated users already pay this cost on every keystroke.
-      // Still bounded to stop someone walking the namespace.
-      config: { rateLimit: { max: 240, timeWindow: '1 minute' } },
-    },
     async (req, reply) => {
       const raw = req.params.name ?? '';
       if (raw.length === 0 || raw.length > DISPLAY_NAME_MAX) {

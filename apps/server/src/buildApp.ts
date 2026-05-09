@@ -2,7 +2,6 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import compress from '@fastify/compress';
-import rateLimit from '@fastify/rate-limit';
 import type { Pool } from 'pg';
 import { authRoutes } from './routes/auth.js';
 import { meRoutes } from './routes/me.js';
@@ -85,7 +84,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     disableRequestLogging: !!opts.test,
     bodyLimit: 16 * 1024,
     // Honor X-Forwarded-For only when the connection comes from nginx on
-    // localhost. trustProxy here so per-IP rate limiting sees the real
+    // localhost, so request logs and any IP-based decisions see the real
     // client IP rather than 127.0.0.1.
     trustProxy: '127.0.0.1',
   });
@@ -140,30 +139,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     });
   }
 
-  // Per-IP rate limit. The plugin uses an in-memory bucket store; that's
-  // intentional — we don't want a Redis dep. Limits are conservative
-  // global ceilings; the hot write endpoints set tighter per-route
-  // overrides via { config: { rateLimit: { max, timeWindow } } }.
-  //
-  // Tests skip rate-limit registration entirely so high-fan-out test
-  // suites don't trip 429s on rapid-fire injects.
-  if (!opts.test) {
-    await app.register(rateLimit, {
-      global: true,
-      max: 600,
-      timeWindow: '1 minute',
-      cache: 50_000,
-      // skipOnError keeps the API up if the limiter implementation throws
-      // — degrade open rather than 5xx the world.
-      skipOnError: true,
-      keyGenerator: (req) => req.ip,
-      errorResponseBuilder: (_req, ctx) => ({
-        statusCode: 429,
-        error: 'TOO_MANY_REQUESTS',
-        message: `rate limit exceeded; retry in ${Math.ceil(ctx.ttl / 1000)}s`,
-      }),
-    });
-  }
+  // Rate limiting is intentionally disabled in this codebase. PoW-mining
+  // at the dev difficulty (DIFFICULTY_BITS=14) sustains hundreds of
+  // requests per second per client by design, which doesn't fit a
+  // request-rate-bucket abuse model. When prod abuse protection is
+  // needed, prefer a layer in front of the API (Cloudflare, nginx, or
+  // similar) over re-introducing the in-process plugin.
 
   // Slow-request observability. Logs any request slower than 250ms with
   // route, method, status, and duration so operators can spot regressions

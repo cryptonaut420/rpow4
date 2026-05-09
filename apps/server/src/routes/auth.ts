@@ -50,15 +50,7 @@ export async function authRoutes(app: FastifyInstance) {
    * the 5-minute TTL plus the freshness of the nonce: each /auth/session
    * call independently checks both.
    */
-  app.post(
-    '/auth/challenge',
-    {
-      // Issuing an envelope is just an HMAC + a few bytes of randomness —
-      // cheap, but a flood would still pump the response logger and
-      // egress. Bound at 60/min/IP.
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-    },
-    async (req, reply) => {
+  app.post('/auth/challenge', async (req, reply) => {
     const parsed = ChallengeBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid pubkey' });
@@ -92,15 +84,7 @@ export async function authRoutes(app: FastifyInstance) {
    * just produces the same session, not a privilege escalation. After
    * exp the envelope is rejected outright.
    */
-  app.post(
-    '/auth/session',
-    {
-      // The work here is one INSERT/UPDATE plus a signature verify. A
-      // brute-force loop wouldn't help an attacker (they need a valid
-      // signature) but spamming this would still churn the DB.
-      config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
-    },
-    async (req, reply) => {
+  app.post('/auth/session', async (req, reply) => {
     const parsed = SessionBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });

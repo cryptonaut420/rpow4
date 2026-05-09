@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
@@ -15,7 +15,18 @@ import {
 } from '../lib/hashrate.js';
 import type { LedgerResponse } from '@rpow/shared';
 
-type Status = 'idle' | 'mining' | 'submitting' | 'error';
+type Status = 'idle' | 'mining' | 'error';
+
+// Visible mining stats are repainted at this rate while a run is in
+// flight. At dev difficulty (DIFFICULTY_BITS=14) a CPU mines a coin
+// every ~16 ms, so every per-coin setState would otherwise re-render
+// the whole MinePage tree 60+ times a second. Counters live in refs;
+// the page reads them on each tick.
+const DISPLAY_TICK_MS = 250;
+
+// Throttle background /me + /ledger refreshes during continuous mining
+// to about once per second.
+const REFRESH_THROTTLE_MS = 1000;
 
 export function MinePage() {
   const wallet = useWallet();
@@ -23,27 +34,61 @@ export function MinePage() {
   const nav = useNavigate();
   const [status, setStatus] = useState<Status>('idle');
   const [target, setTarget] = useState<number | null>(null);
-  const [hashes, setHashes] = useState('0');
-  const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState('');
-  const [lastTokenId, setLastTokenId] = useState('');
-  const [sessionMinted, setSessionMinted] = useState(0);
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
   const [bench, setBench] = useState<HashrateEstimate | null>(null);
+
+  // Worker handle + stop signal. Refs (not state) so the recursive
+  // worker callback always sees the latest value without restarting.
   const workerRef = useRef<Worker | null>(null);
-  // Use a ref (not state) so the async worker callback always sees the latest value
-  // without restarting the loop closure.
   const stopRequestedRef = useRef(false);
+
+  // Per-run counters that move every coin. Held in refs and read by the
+  // 250 ms display tick to keep React out of the per-coin write path.
+  const sessionStartedAtRef = useRef(0);
+  const sessionStoppedAtRef = useRef(0);
+  const totalHashesRef = useRef(0n);
+  const currentCycleHashesRef = useRef(0n);
+  const sessionMintedRef = useRef(0);
+  const lastTokenIdRef = useRef('');
+
+  // Single repaint trigger that the display-tick interval calls.
+  const [, forceTick] = useReducer((x: number) => (x + 1) | 0, 0);
+
+  // /me + /ledger background refresh throttle.
+  const lastRefreshAtRef = useRef(0);
 
   useEffect(() => () => {
     stopRequestedRef.current = true;
     workerRef.current?.terminate();
   }, []);
 
-  // Pull halving info on mount and after each successful mint so the
-  // "next halving at" countdown stays roughly current.
+  // Pull halving info on mount and after each successful refresh batch
+  // so the "next halving at" countdown stays roughly current.
   const refreshLedger = () => { api.ledger().then(setLedger).catch(() => {}); };
   useEffect(() => { refreshLedger(); }, []);
+
+  // Combined throttled balance + ledger refresh. Pass `force: true` to
+  // bypass the throttle (e.g. on STOP).
+  const refreshAccount = (opts: { force?: boolean } = {}) => {
+    const now = performance.now();
+    if (!opts.force && now - lastRefreshAtRef.current < REFRESH_THROTTLE_MS) return;
+    lastRefreshAtRef.current = now;
+    void refresh();
+    refreshLedger();
+  };
+
+  // While mining, repaint the stats panel at DISPLAY_TICK_MS. The cleanup
+  // path schedules one final tick so the frozen post-stop totals are the
+  // last thing the user sees.
+  useEffect(() => {
+    if (status !== 'mining') return;
+    const id = window.setInterval(forceTick, DISPLAY_TICK_MS);
+    return () => {
+      clearInterval(id);
+      forceTick();
+    };
+  }, [status]);
 
   // One-shot CPU benchmark on mount so we can show the user how long a
   // typical solve will take at the current difficulty *before* they
@@ -55,34 +100,44 @@ export function MinePage() {
   }, []);
 
   async function startOne() {
-    if (stopRequestedRef.current) { setStatus('idle'); return; }
-    setStatus('mining');
-    setError('');
-    setHashes('0');
-    setElapsed(0);
+    if (stopRequestedRef.current) {
+      sessionStoppedAtRef.current = performance.now();
+      setStatus('idle');
+      return;
+    }
+    // Fresh cycle counter. Session totals roll forward across cycles.
+    currentCycleHashesRef.current = 0n;
 
     let ch;
     try {
       ch = await api.challenge();
     } catch (err: any) {
-      setStatus('error');
+      sessionStoppedAtRef.current = performance.now();
       setError(err?.message ?? 'failed to fetch challenge');
+      setStatus('error');
       return;
     }
+    // setTarget is a no-op when the difficulty hasn't changed (React
+    // bails on identical-state updates) — safe to call every cycle.
     setTarget(ch.difficulty_bits);
 
     const w = new Worker(new URL('../miner.worker.ts', import.meta.url), { type: 'module' });
     workerRef.current = w;
     w.onmessage = async (e: MessageEvent<any>) => {
       const m = e.data;
-      if (m.type === 'progress') { setHashes(m.hashes); setElapsed(m.elapsed_ms); return; }
+      if (m.type === 'progress') {
+        // 250 ms cadence inside the worker; bumps the running cycle
+        // hash count without poking React state.
+        currentCycleHashesRef.current = BigInt(m.hashes);
+        return;
+      }
       if (m.type === 'aborted') {
         w.terminate(); workerRef.current = null;
+        sessionStoppedAtRef.current = performance.now();
         setStatus('idle');
         return;
       }
       if (m.type === 'found') {
-        setStatus('submitting');
         w.terminate(); workerRef.current = null;
         try {
           const mintBody = { challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce };
@@ -96,19 +151,26 @@ export function MinePage() {
             solution_nonce: m.solution_nonce,
             client_signature_base58: wallet.sign('mint', mintBody),
           });
-          setLastTokenId(r.token.id);
-          setSessionMinted(n => n + 1);
-          await refresh();
-          refreshLedger();
-          // Loop: kick off the next challenge unless the user asked to stop.
+          // Roll the cycle's hashes into the running session total.
+          totalHashesRef.current += BigInt(m.hashes);
+          currentCycleHashesRef.current = 0n;
+          sessionMintedRef.current += 1;
+          lastTokenIdRef.current = r.token.id;
+          // Throttled to once / second; sessionMintedRef updates every coin.
+          refreshAccount();
+
           if (!stopRequestedRef.current) {
+            // Status stays 'mining' across the recursion — no flicker.
             startOne();
           } else {
+            sessionStoppedAtRef.current = performance.now();
             setStatus('idle');
+            refreshAccount({ force: true });
           }
         } catch (err: any) {
-          setStatus('error');
+          sessionStoppedAtRef.current = performance.now();
           setError(err?.message ?? 'mint failed');
+          setStatus('error');
         }
       }
     };
@@ -117,25 +179,48 @@ export function MinePage() {
 
   function start() {
     if (wallet.status !== 'unlocked' || !me) { nav('/login'); return; }
+    // Defensive: a second click while a worker or mint is in flight
+    // would spawn a parallel loop that doubles the request rate.
+    if (status === 'mining' || workerRef.current) return;
     stopRequestedRef.current = false;
-    setSessionMinted(0);
-    setLastTokenId('');
+    totalHashesRef.current = 0n;
+    currentCycleHashesRef.current = 0n;
+    sessionMintedRef.current = 0;
+    lastTokenIdRef.current = '';
+    sessionStartedAtRef.current = performance.now();
+    sessionStoppedAtRef.current = 0;
+    lastRefreshAtRef.current = 0;
+    setError('');
+    setStatus('mining');
     startOne();
   }
 
   function stop() {
     stopRequestedRef.current = true;
     workerRef.current?.postMessage({ type: 'abort' });
+    refreshAccount({ force: true });
   }
 
-  function fmtRate() {
-    if (!elapsed) return '0';
-    const h = Number(hashes);
-    const mhs = (h / 1e6) / (elapsed / 1000);
+  // Stats read straight from refs so renders are cheap. While mining,
+  // elapsed pulls from `now`; after stop it freezes at the recorded
+  // sessionStoppedAt so the panel shows the final summary.
+  const totalHashes = totalHashesRef.current + currentCycleHashesRef.current;
+  const endTime = status === 'mining'
+    ? performance.now()
+    : (sessionStoppedAtRef.current || sessionStartedAtRef.current);
+  const sessionElapsedMs = sessionStartedAtRef.current
+    ? Math.max(0, Math.round(endTime - sessionStartedAtRef.current))
+    : 0;
+  const sessionMinted = sessionMintedRef.current;
+  const lastTokenId = lastTokenIdRef.current;
+
+  function fmtRate(): string {
+    if (!sessionElapsedMs) return '0';
+    const mhs = (Number(totalHashes) / 1e6) / (sessionElapsedMs / 1000);
     return mhs.toFixed(2) + ' MH/s';
   }
-  function fmtElapsed() {
-    const s = Math.floor(elapsed / 1000);
+  function fmtElapsed(): string {
+    const s = Math.floor(sessionElapsedMs / 1000);
     const mm = String(Math.floor(s / 60)).padStart(2, '0');
     const ss = String(s % 60).padStart(2, '0');
     return `00:${mm}:${ss}`;
@@ -153,7 +238,7 @@ export function MinePage() {
     );
   }
 
-  const running = status === 'mining' || status === 'submitting';
+  const running = status === 'mining';
 
   // Halving / reward block (when ledger has loaded). Shown above the per-run
   // mining stats so users see what they're actually mining for.
@@ -185,7 +270,7 @@ export function MinePage() {
     <Panel title="MINE">
       <pre style={{ margin: 0 }}>
 {`${rewardBlock}  TARGET           : ${target ?? '--'} trailing zero bits
-  HASHES (current) : ${Number(hashes).toLocaleString()}
+  HASHES (session) : ${Number(totalHashes).toLocaleString()}
   RATE             : ${fmtRate()}
   ELAPSED          : ${fmtElapsed()}
   STATUS           : ${status.toUpperCase()}

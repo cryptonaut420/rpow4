@@ -23,14 +23,7 @@ export async function challengeRoutes(app: FastifyInstance) {
     });
   }
 
-  app.post(
-    '/challenge',
-    {
-      // Issuing a mint challenge is cheap (no DB write) but we still
-      // bound it per IP to keep the response stream lean under attack.
-      config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
-    },
-    async (req, reply) => {
+  app.post('/challenge', async (req, reply) => {
     const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
 
