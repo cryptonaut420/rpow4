@@ -86,6 +86,9 @@ services:
       args:
         VITE_API_BASE_URL: https://${WEB_HOST}
         VITE_API_DOCS_BASE_URL: https://${WEB_HOST}
+        # Vite inlines these at build time — set in ops/aws-ec2/prod.env (not runtime-only).
+        VITE_PUBLIC_POSTHOG_TOKEN: ${VITE_PUBLIC_POSTHOG_TOKEN:-}
+        VITE_PUBLIC_POSTHOG_HOST: ${VITE_PUBLIC_POSTHOG_HOST:-https://us.i.posthog.com}
     restart: unless-stopped
     environment:
       VIRTUAL_HOST: ${WEB_HOST}
