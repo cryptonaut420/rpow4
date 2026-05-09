@@ -13,9 +13,13 @@ describe.skipIf(skip)('db migrations', () => {
     const { rows } = await pool.query(
       `SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY 1`,
     );
-    const names = rows.map(r => r.table_name);
-    for (const t of ['users', 'magic_links', 'challenges', 'tokens', 'transfers', 'schema_migrations']) {
+    const names = rows.map((r) => r.table_name);
+    for (const t of ['accounts', 'account_balances', 'ledger_events', 'ledger_stats', 'challenges', 'tokens', 'transfers', 'schema_migrations']) {
       expect(names).toContain(t);
+    }
+    // Old email-keyed tables should be gone after 011.
+    for (const t of ['users', 'magic_links', 'pending_transfers', 'srpow_wrap_events']) {
+      expect(names).not.toContain(t);
     }
   });
 

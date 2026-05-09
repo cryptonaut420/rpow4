@@ -2,7 +2,7 @@
 //
 //   - Difficulty is fixed at MINT_DIFFICULTY_BITS_DEFAULT (24) trailing-zero bits.
 //   - Reward starts at MINT_BASE_REWARD_BASE_UNITS (= 1/128 RPOW = 7,812,500
-//     base units, where 10^9 base units = 1 RPOW, matching SRPOW's 9 decimals).
+//     base units, where 10^9 base units = 1 RPOW).
 //   - Reward halves every time minted_supply crosses a 1,000,000-RPOW boundary.
 //   - Schedule terminates at the 21M cap or when the reward in base units
 //     drops below 1 (≈22 halvings — the cap terminates first in practice).

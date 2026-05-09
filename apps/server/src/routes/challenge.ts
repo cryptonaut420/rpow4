@@ -2,13 +2,13 @@ import type { FastifyInstance } from 'fastify';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { readSession } from './auth.js';
 import { difficultyBitsForSupply, BASE_UNITS_PER_RPOW } from '../schedule.js';
+import { macMintChallenge, type MintChallengeEnvelope } from '../mint-challenge.js';
 
 // Supply count is checked twice per mining round: here at /challenge
 // (advisory only — used to pick difficulty and fail-fast at cap) and again
-// inside /mint under an advisory lock (authoritative). At 30+ /challenge
-// per second this count(*) was repeatedly scanning a half-million-row
-// tokens table. Cache for 5s; the cap check is harmless to be slightly
-// stale because /mint re-checks under the lock.
+// inside /mint under an advisory lock (authoritative). Cache for 5s; the
+// cap check is harmless to be slightly stale because /mint re-checks
+// under the lock.
 const SUPPLY_CACHE_MS = 5_000;
 
 export async function challengeRoutes(app: FastifyInstance) {
@@ -51,16 +51,23 @@ export async function challengeRoutes(app: FastifyInstance) {
 
     const id = randomUUID();
     const noncePrefix = randomBytes(16);
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    await app.pool.query(
-      'INSERT INTO challenges(id, user_email, nonce_prefix, difficulty_bits, expires_at) VALUES($1,$2,$3,$4,$5)',
-      [id, s.email, noncePrefix, difficulty, expiresAt],
-    );
-    return {
+    const now = Date.now();
+    const envelope: MintChallengeEnvelope = {
       challenge_id: id,
+      user_pubkey: s.pubkey,
       nonce_prefix: noncePrefix.toString('hex'),
       difficulty_bits: difficulty,
-      expires_at: expiresAt.toISOString(),
+      issued_at: new Date(now).toISOString(),
+      expires_at: new Date(now + 5 * 60 * 1000).toISOString(),
+      domain: 'rpow2.mint',
+    };
+    return {
+      challenge_id: envelope.challenge_id,
+      nonce_prefix: envelope.nonce_prefix,
+      difficulty_bits: envelope.difficulty_bits,
+      issued_at: envelope.issued_at,
+      expires_at: envelope.expires_at,
+      challenge_mac: macMintChallenge(envelope, app.config.sessionSecret),
     };
   });
 }

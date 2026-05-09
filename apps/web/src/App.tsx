@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { HashRouter, Route, Routes, NavLink } from 'react-router-dom';
 import { applyTheme, loadTheme, nextTheme, type Theme } from './theme.js';
 import { useMe } from './hooks/useMe.js';
+import { useWallet } from './wallet/WalletProvider.js';
 import { api } from './api.js';
 import { LoginPage } from './pages/Login.js';
 import { WalletPage } from './pages/Wallet.js';
@@ -9,7 +10,8 @@ import { MinePage } from './pages/Mine.js';
 import { SendPage } from './pages/Send.js';
 import { ActivityPage } from './pages/Activity.js';
 import { LedgerPage } from './pages/Ledger.js';
-import { WrapPage } from './pages/WrapPage.js';
+import { CopyButton } from './components/CopyButton.js';
+import { shortPubkey } from '@rpow/shared';
 
 const HEADER = [
   '+======================================================================+',
@@ -20,12 +22,16 @@ const HEADER = [
 export default function App() {
   const [theme, setTheme] = useState<Theme>(loadTheme());
   useEffect(() => { applyTheme(theme); }, [theme]);
+  const wallet = useWallet();
   const { me } = useMe();
 
   async function logout() {
     try { await api.logout(); } catch { /* ignore */ }
+    wallet.lock();
     window.location.href = '/';
   }
+
+  const signedIn = wallet.status === 'unlocked' && !!me;
 
   return (
     <HashRouter>
@@ -39,9 +45,14 @@ export default function App() {
             <NavLink to="/send">[ send ]</NavLink>{' '}
             <NavLink to="/activity">[ activity ]</NavLink>{' '}
             <NavLink to="/ledger">[ ledger ]</NavLink>{' '}
-            {me?.wrap_allowed && (<><NavLink to="/wrap">[ wrap ]</NavLink>{' '}</>)}
-            {me ? (
-              <button onClick={logout} title="end session">[ logout ]</button>
+            {signedIn ? (
+              <>
+                <span style={{ color: 'var(--dim)' }} title={me!.pubkey}>
+                  · <code>{me!.display_name ?? shortPubkey(me!.pubkey)}</code>
+                </span>{' '}
+                <CopyButton text={me!.pubkey} title="copy pubkey" />{' '}
+                <button onClick={logout} title="end session and lock wallet (encrypted backup is preserved)">[ logout ]</button>
+              </>
             ) : (
               <NavLink to="/login">[ login ]</NavLink>
             )}
@@ -57,7 +68,6 @@ export default function App() {
             <Route path="/send" element={<SendPage />} />
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/ledger" element={<LedgerPage />} />
-            <Route path="/wrap" element={<WrapPage />} />
           </Routes>
         </main>
       </div>

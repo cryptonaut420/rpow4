@@ -1,0 +1,7 @@
+RPOW scaling implementation
+
+- [x] Add balance/event/stat schema and remove bridge-only schema from active model.
+- [x] Update mint/send/me/ledger/activity to use account balances and ledger events.
+- [x] Remove SRPOW/Solana wrapping routes, types, UI fields, tests, scripts, and dependencies.
+- [x] Add focused accounting/concurrency tests.
+- [x] Run tests/lints and fix regressions.

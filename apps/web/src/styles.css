@@ -67,6 +67,24 @@ button {
 }
 button:hover { background: var(--accent-dim); border-color: var(--accent); }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.tab.active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button.link-button {
+  background: transparent;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent-dim);
+  cursor: pointer;
+  border-radius: 0;
+}
+button.link-button:hover { background: transparent; border-bottom-color: var(--accent); }
 
 input {
   background: rgba(255,255,255,0.02);

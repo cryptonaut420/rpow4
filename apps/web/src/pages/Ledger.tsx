@@ -52,15 +52,15 @@ export function LedgerPage() {
   cap.
 
   rpow2.com is a modern tribute to the spirit of Finney's original.
-  No IBM 4758 — Ed25519 signatures, magic-link auth, Postgres ledger.
+  No IBM 4758 — Ed25519 signatures, BIP-39 / SLIP-0010 wallets, every
+  state-changing action signed by the user's keypair, Postgres ledger.
   Still centralized — but Bitcoin-flavored where it counts: a fixed
-  21,000,000 supply cap, and a stepped difficulty adjustment that
-  adds one trailing-zero bit for every 1,000,000 coins minted.
+  21,000,000 supply cap and a Bitcoin-style halving issuance curve —
+  difficulty stays constant; the per-solution reward halves every
+  1,000,000 RPOW minted, on down to zero.
 
-  Founder allocation: 1,100,000 SRPOW (5.24% of the 21M cap) was
-  allocated at launch as a "satoshi" tribute, vested linearly over
-  one year via the Streamflow protocol on Solana. 19,900,000 of the
-  21M cap remains mineable by users. No transfer fees on rpow.
+  The 21M cap is enforced by the server ledger. Accepted proofs credit
+  balances directly, and transfers move ledger balances with no fees.
 
   Caveat: this IS a centralized system. The ledger lives in a Postgres
   database operated by one person on rented infrastructure. If that

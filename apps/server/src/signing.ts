@@ -1,8 +1,14 @@
 import { generateKeyPairSync, sign, verify, createPrivateKey, createPublicKey } from 'node:crypto';
 
+/**
+ * Server-side Ed25519 signing of token rows. The server's signature on a
+ * token is what the public ledger uses to attest "this token was minted /
+ * reissued under our supply schedule." It is independent of the user's
+ * client signature (which authorizes specific mint/transfer events).
+ */
 export interface TokenPayload {
   id: string;
-  owner_email_hash: string;
+  owner_pubkey: string;     // base58 Ed25519 public key
   value: bigint;
   issued_at: string;
 }
@@ -28,7 +34,7 @@ function pubKeyFromHex(hex: string) {
 function canonical(payload: TokenPayload): Buffer {
   const ordered = JSON.stringify(
     {
-      id: payload.id, owner_email_hash: payload.owner_email_hash, value: payload.value, issued_at: payload.issued_at,
+      id: payload.id, owner_pubkey: payload.owner_pubkey, value: payload.value, issued_at: payload.issued_at,
     },
     (_, v) => (typeof v === 'bigint' ? v.toString() : v),
   );

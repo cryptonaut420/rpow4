@@ -1,19 +1,21 @@
 import { createPool, runMigrations } from '../src/db.js';
 import type { Pool } from 'pg';
 import { randomBytes } from 'node:crypto';
-import { FakeMailer } from '../src/mailer.js';
 import { buildApp } from '../src/buildApp.js';
-import { FakeBridgeClient } from '@rpow/solana-bridge';
+import {
+  generateMnemonic,
+  mnemonicToKeypair,
+  signCanonical,
+  type CanonicalAction,
+  type RpowKeypair,
+} from '@rpow/shared';
 import pg from 'pg';
 
 export async function makeTestApp(opts: {
-  bridgeClient?: FakeBridgeClient;
-  wrapAllowlistCsv?: string;
+  signupDifficultyBits?: number;
 } = {}): Promise<{
   app: Awaited<ReturnType<typeof buildApp>>;
   pool: Pool;
-  mailer: FakeMailer;
-  bridgeClient: FakeBridgeClient;
   cleanup: () => Promise<void>;
 }> {
   const url = process.env.TEST_DATABASE_URL;
@@ -34,19 +36,14 @@ export async function makeTestApp(opts: {
   });
 
   await runMigrations(pool);
-  const mailer = new FakeMailer();
-  const bridgeClient = opts.bridgeClient ?? new FakeBridgeClient();
   const app = await buildApp({
     pool,
-    mailer,
-    bridgeClient,
-    wrapAllowlistCsv: opts.wrapAllowlistCsv ?? '',
     test: true,
     config: {
       sessionSecret: 'x'.repeat(32),
-      magicLinkBaseUrl: 'http://test',
       difficultyBits: 8,
       difficultyFloor: 4,
+      signupDifficultyBits: opts.signupDifficultyBits ?? 8,
       mintMaxSupply: 21,
       signingPrivateKeyHex: '11'.repeat(32),
       signingPublicKeyHex: '22'.repeat(32),
@@ -55,7 +52,7 @@ export async function makeTestApp(opts: {
     },
   });
   return {
-    app, pool, mailer, bridgeClient,
+    app, pool,
     cleanup: async () => {
       await app.close();
       // Use a fresh pool to drop the schema since main pool may be closed
@@ -64,5 +61,56 @@ export async function makeTestApp(opts: {
       await cleanPool.end();
       await pool.end();
     },
+  };
+}
+
+export interface TestWallet extends RpowKeypair {
+  cookie: string;
+  /** Sign a canonical body with this wallet's secret key. */
+  sign(action: CanonicalAction, body: unknown): string;
+}
+
+/**
+ * Generate a fresh wallet, run the /auth/challenge → /auth/session flow,
+ * and return the keypair + the resulting session cookie. Tests use the
+ * cookie to authenticate subsequent calls and the sign() helper to
+ * authorize per-event bodies.
+ */
+export async function loginAsRandomWallet(
+  app: Awaited<ReturnType<typeof buildApp>>,
+): Promise<TestWallet> {
+  const kp = mnemonicToKeypair(generateMnemonic());
+  return loginAsWallet(app, kp);
+}
+
+export async function loginAsWallet(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  kp: RpowKeypair,
+): Promise<TestWallet> {
+  const challengeRes = await app.inject({
+    method: 'POST',
+    url: '/auth/challenge',
+    headers: { 'content-type': 'application/json' },
+    payload: { pubkey: kp.publicKeyBase58 },
+  });
+  if (challengeRes.statusCode !== 200) {
+    throw new Error(`/auth/challenge failed: ${challengeRes.statusCode} ${challengeRes.body}`);
+  }
+  const { envelope, envelope_mac } = challengeRes.json();
+  const sig = signCanonical('auth.session', envelope, kp.secretKey);
+  const sessionRes = await app.inject({
+    method: 'POST',
+    url: '/auth/session',
+    headers: { 'content-type': 'application/json' },
+    payload: { envelope, envelope_mac, signature_base58: sig },
+  });
+  if (sessionRes.statusCode !== 200) {
+    throw new Error(`/auth/session failed: ${sessionRes.statusCode} ${sessionRes.body}`);
+  }
+  const cookie = sessionRes.headers['set-cookie'] as string;
+  return {
+    ...kp,
+    cookie,
+    sign: (action, body) => signCanonical(action, body, kp.secretKey),
   };
 }

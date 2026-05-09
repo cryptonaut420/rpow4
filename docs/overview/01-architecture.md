@@ -14,14 +14,11 @@ shape of each component.
   apps/web (React + Vite)            HTTPS         nginx :443  (Let's Encrypt)
   HashRouter SPA                  ─────────►       │
   miner.worker.ts (WASM SHA-256)                   ▼
-                                                   rpow-server.service
+  BIP-39 wallet (browser)                          rpow-server.service
                                                    ▼ Node 22 + Fastify on :8080
                                                    ▼
                                                    PostgreSQL 17 (Unix socket)
                                                    /var/run/postgresql
-                                                   ▼ outbound
-                                                   Resend / Postmark / SMTP
-                                                   Solana mainnet (Helius/etc.)
 ```
 
 Concretely, as of 2026-05-08:
@@ -36,13 +33,12 @@ Concretely, as of 2026-05-08:
   (see [`db.ts`](../../apps/server/src/db.ts)).
 - **DNS / TLS** — Cloudflare DNS (DNS-only for `api.*`, proxied for apex).
   Certbot via DNS-01 (Cloudflare API token), auto-renewing.
-- **Email** — Resend in prod (with throttling, see below), Postmark and SMTP
-  fallbacks compiled in. `FakeMailer` is used in dev when
-  `RPOW_TEST_INBOX=true` and prints magic links to stdout.
+- **No email.** Auth is purely wallet-based; the server never issues
+  outbound email. The browser's `WalletProvider` holds the user's secret
+  key (optionally encrypted via PBKDF2 → AES-GCM in IndexedDB), and every
+  state-changing API call is signed by it. See `apps/web/src/wallet/`.
 - **Backups** — restic → Backblaze B2, nightly via
   [`rpow-backup.timer`](../../ops/systemd/rpow-backup.timer).
-- **SRPOW** — Optional. Lit up only when `SOLANA_RPC_URL`,
-  `SRPOW_MINT_ADDRESS`, and `BRIDGE_KEYPAIR_BASE58` are all set.
 
 A `fly.toml` and `apps/server/Dockerfile` still exist from the previous
 Fly.io + Neon deployment but are no longer the production target. The
@@ -55,65 +51,50 @@ rpow/
 ├── apps/
 │   ├── server/                    @rpow/server — Fastify API
 │   │   ├── src/
-│   │   │   ├── server.ts          process entry: env → pool → migrations → mailer → bridge → app.listen
+│   │   │   ├── server.ts          process entry: env → pool → migrations → app.listen
 │   │   │   ├── buildApp.ts        Fastify wiring + decorators + plugin registration
-│   │   │   ├── env.ts             zod schema for the env, refined by mailer choice
+│   │   │   ├── env.ts             zod schema for the env
 │   │   │   ├── db.ts              pg Pool factory, withTx/withClient helpers, runMigrations
-│   │   │   ├── magic.ts           magic-link issue + sha256 hashing
-│   │   │   ├── session.ts         HMAC-signed `email|exp` cookie
+│   │   │   ├── session.ts         HMAC-signed `pubkey|exp` cookie
 │   │   │   ├── pow.ts             trailing-zero-bits SHA-256 verifier
 │   │   │   ├── schedule.ts        halving math, BASE_UNITS_PER_RPOW, supply-aware reward
-│   │   │   ├── signing.ts         Ed25519 token sign/verify (raw 32-byte keys)
-│   │   │   ├── mailer.ts          Resend/Postmark/SMTP/Throttled/Fake mailers
-│   │   │   ├── unsub.ts           HMAC unsubscribe tokens + email_unsubscribes table I/O
-│   │   │   ├── bridge-keys.ts     decode BRIDGE_KEYPAIR_BASE58 → Keypair
-│   │   │   ├── srpow-reconcile.ts boot-time scan of PENDING wrap events
-│   │   │   ├── wrap-allowlist.ts  parse WRAP_ALLOWED_EMAILS CSV
+│   │   │   ├── signing.ts         Ed25519 server token sign/verify
 │   │   │   └── routes/
-│   │   │       ├── auth.ts        /auth/{request,verify,logout}
-│   │   │       ├── me.ts          /me (balances + wrap state)
-│   │   │       ├── challenge.ts   /challenge (with cached supply read)
-│   │   │       ├── mint.ts        /mint (advisory-locked supply increment)
-│   │   │       ├── send.ts        /send (exact-sum reissuance + pending email path)
-│   │   │       ├── claim.ts       /claim?token=…
+│   │   │       ├── auth.ts        /auth/{challenge,session,logout}
+│   │   │       ├── me.ts          /me (maintained account balance row)
+│   │   │       ├── challenge.ts   /challenge (stateless HMAC challenge)
+│   │   │       ├── mint.ts        /mint (verifies sig + credits balance)
+│   │   │       ├── send.ts        /send (signed conditional debit/credit)
 │   │   │       ├── activity.ts    /activity (mint/send/receive feed)
-│   │   │       ├── ledger.ts      /ledger (cached aggregates + halving info)
-│   │   │       ├── phantom.ts     /phantom/{challenge,bind}
-│   │   │       ├── srpow.ts       /srpow/{wrap,events,events/:id}
-│   │   │       └── unsubscribe.ts /unsubscribe (RFC 8058 one-click + GET)
-│   │   ├── migrations/            001..010 — see 04-data-model.md
-│   │   ├── scripts/               one-shot Solana scripts (mint, allocation, metadata)
-│   │   └── tests/                 Vitest, real Postgres on :55432 in dev/CI
+│   │   │       └── ledger.ts      /ledger + /ledger/events
+│   │   ├── migrations/            SQL migrations — see 04-data-model.md
+│   │   └── tests/                 Vitest, real Postgres in dev/CI
 │   │
 │   └── web/                       @rpow/web — Vite + React 18 + HashRouter SPA
 │       ├── src/
-│       │   ├── main.tsx, App.tsx  routes: /, /login, /mine, /send, /activity, /ledger, /wrap
+│       │   ├── main.tsx, App.tsx  routes: /, /login, /mine, /send, /activity, /ledger
 │       │   ├── miner.worker.ts    WASM SHA-256 mining loop in a Web Worker
 │       │   ├── api.ts             typed fetch wrapper, credentials: include
+│       │   ├── wallet/            BIP-39 mnemonic + SLIP-0010 Ed25519 + IndexedDB store
+│       │   │   ├── crypto.ts          PBKDF2 → AES-GCM helpers (WebCrypto)
+│       │   │   ├── store.ts           encrypted-blob CRUD over IndexedDB
+│       │   │   └── WalletProvider.tsx React context: status machine + sign/unlock/forget
 │       │   ├── pages/             one .tsx per route
-│       │   ├── components/        Panel, ConnectPhantom, WrapForm, WrapHistory
-│       │   ├── hooks/             useMe, usePhantom, useSrpow
+│       │   ├── components/        Panel and wallet/display helpers
+│       │   ├── hooks/             useMe
 │       │   ├── lib/format.ts      formatRpow / parseRpowToBaseUnits (9-decimal)
 │       │   ├── theme.ts           amber/green/light themes
 │       │   └── styles.css         retro-terminal CSS
-│       ├── public/
-│       │   ├── stats.html         standalone "live network stats" page (HashRouter-bypassed via netlify redirect /stats → /stats.html)
-│       │   ├── srpow-logo.{png,svg}
-│       │   └── srpow-token-metadata.template.json
-│       └── e2e/happy-path.spec.ts Playwright
+│       └── public/
+│           └── stats.html         standalone "live network stats" page
 │
 ├── packages/
-│   ├── shared/                    @rpow/shared — wire types + difficulty math
+│   ├── shared/                    @rpow/shared — wire types + crypto + difficulty math
 │   │   └── src/
 │   │       ├── protocol.ts        all request/response interfaces (the wire schema)
+│   │       ├── canonical.ts       domain-separated, sorted-key JSON for signed actions
+│   │       ├── wallet.ts          BIP-39 + SLIP-0010 Ed25519 + signCanonical/verifyCanonical
 │   │       └── difficulty.ts      trailingZeroBits, hex/u64 helpers (used by server + worker)
-│   │
-│   └── solana-bridge/             @rpow/solana-bridge — Solana SPL adapter
-│       └── src/
-│           ├── constants.ts       SRPOW_DECIMALS=9, SRPOW_BASE_UNITS_PER_RPOW=10^9
-│           ├── wallet-verify.ts   nacl ed25519 verify of Phantom signMessage
-│           ├── bridge-client.ts   SolanaBridgeClient (real) + FakeBridgeClient (test)
-│           └── index.ts
 │
 ├── ops/                           VPS-side ops surface
 │   ├── nginx/api.rpow2.com.conf
@@ -140,45 +121,36 @@ rpow/
 2. Create the pg pool (`max=30`).
 3. Run migrations (idempotent, table-locked via
    `schema_migrations(filename PK)`; see [`db.ts`](../../apps/server/src/db.ts)).
-4. Choose a `BridgeClient`: real `SolanaBridgeClient` if `SOLANA_RPC_URL` +
-   `SRPOW_MINT_ADDRESS` + `BRIDGE_KEYPAIR_BASE58` are all set, else
-   `FakeBridgeClient` (wrap is effectively disabled).
-5. Run [`reconcilePendingWraps`](../../apps/server/src/srpow-reconcile.ts)
-   once — recover any wrap events that were `PENDING` when the previous
-   process exited.
-6. Choose a `Mailer`. In production it is wrapped in `ThrottledMailer`
-   (default 4 req/s, queue cap 200) so we never blow Resend's per-second cap.
-7. Build the Fastify app via `buildApp({ pool, mailer, bridgeClient, … })`
-   and `app.listen({ host: '0.0.0.0', port: PORT })`.
+4. Build the Fastify app via `buildApp({ pool, config })` and
+   `app.listen({ host: '0.0.0.0', port: PORT })`.
 
-`buildApp` decorates the Fastify instance with `pool`, `mailer`, `config`,
-`bridgeClient`, and the parsed `wrapAllowlist`, registers `cookie`, `cors`
+`buildApp` decorates the Fastify instance with `pool` and `config`, registers `cookie`, `cors`
 (`origin: WEB_ORIGIN`, `credentials: true`), then registers each route plugin.
 
 ## Trust & cookies
 
 - Sessions are an HMAC-signed cookie (`rpow_session`) with 30-day TTL. Body
-  is `{ email, exp }` base64url-encoded; signature is
+  is `{ pubkey, exp }` base64url-encoded; signature is
   `HMAC-SHA256(SESSION_SECRET, body)`. See [`session.ts`](../../apps/server/src/session.ts).
 - The cookie is `httpOnly`, `sameSite=lax`, `secure` in production, scoped
   to `/`. CORS is locked to a single `WEB_ORIGIN`.
 - `trustProxy: '127.0.0.1'` — `req.ip` is taken from `X-Forwarded-For` only
-  when the connection comes from nginx on localhost. This is what makes the
-  per-IP rate limit on `/auth/request` actually meaningful behind the proxy.
+  when the connection comes from nginx on localhost.
+- `/auth/challenge` is stateless: the server returns an HMAC-MAC'd envelope
+  containing `pubkey`, `nonce`, and `exp`; `/auth/session` then verifies the
+  client's Ed25519 signature over the canonical envelope and sets the cookie.
 
 ## Cross-cutting concerns
 
 | Concern | Where it lives |
 |---|---|
 | Migration runner | [`db.runMigrations`](../../apps/server/src/db.ts), invoked once on boot |
-| Auth context | `readSession(req, secret)` in [`routes/auth.ts`](../../apps/server/src/routes/auth.ts), used by every protected route |
-| Idempotency | UNIQUE indexes on `transfers.idempotency_key`, `pending_transfers.idempotency_key`, `srpow_wrap_events.idempotency_key`; route handlers detect 23505 conflicts and return the original outcome |
-| Hot-path caching | `/challenge` caches `app_counters.minted_supply` for 5s; `/ledger` caches its full aggregate for 5s, with single-flight in-flight de-dup |
+| Auth context | `readSession(req, secret)` in [`session.ts`](../../apps/server/src/session.ts), used by every protected route |
+| Per-action signature verification | `verifyCanonical(action, body, pubkey, sig)` from `@rpow/shared`, called by `/mint` and `/send` |
+| Idempotency | Partial UNIQUE index on `ledger_events.idempotency_key` for transfers; route handlers detect 23505 conflicts and return the original outcome |
+| Hot-path caching | `/challenge` caches `app_counters.minted_supply` for 5s; `/ledger` reads maintained stats and caches the response for 5s |
 | Cap enforcement | `pg_advisory_xact_lock(hashtext('rpow_mint_supply'))` + atomic `UPDATE … WHERE value + reward <= cap` in [`mint.ts`](../../apps/server/src/routes/mint.ts) |
-| Per-user wrap serialization | `pg_advisory_xact_lock(hashtext('rpow_srpow_wrap'), hashtext(email))` in [`srpow.ts`](../../apps/server/src/routes/srpow.ts) |
-| Outbound mail throttle | `ThrottledMailer` in [`mailer.ts`](../../apps/server/src/mailer.ts) — monotonic-next-slot scheduler, throws `ThrottleQueueFullError` over `maxQueue` |
-| Email unsubscribe | RFC 8058 one-click POST + GET at `/unsubscribe`, HMAC-signed token (no DB lookup); see [`unsub.ts`](../../apps/server/src/unsub.ts) |
-| Public key | Served at `/.well-known/rpow-pubkey.pem` (DER → PEM-wrapped Ed25519 SubjectPublicKeyInfo) |
+| Public token-issuer key | Served at `/.well-known/rpow-pubkey.pem` (DER → PEM-wrapped Ed25519 SubjectPublicKeyInfo) |
 
 ## Failure modes (high level)
 
@@ -189,7 +161,7 @@ rpow/
 | nginx / Postgres | distro systemd units |
 | Whole VPS | All units `enabled` — they come back on boot |
 | TLS expiry | `certbot.timer` (DNS-01 via Cloudflare) |
-| In-flight SRPOW wrap | `reconcilePendingWraps()` on next boot uses persisted `solana_signature` |
+| Lost client wallet | Recovery is the user's responsibility — mnemonic must be backed up. The server cannot reset accounts. |
 | Backup repo | Nightly 5% read-data integrity check; `rpow-restore-test` runs weekly |
 
 External uptime monitoring is *not* yet wired (noted as a follow-up in the

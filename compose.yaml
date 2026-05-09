@@ -7,14 +7,13 @@
 #
 # Services:
 #   db        — Postgres 17 (data persisted in the rpow-pg-data volume)
-#   install   — one-shot: npm ci + builds @rpow/shared and @rpow/solana-bridge
+#   install   — one-shot: npm ci + builds @rpow/shared
 #   server    — Fastify API with `tsx watch` hot reload (default :8080)
 #   web       — Vite dev server for the React SPA      (default :5173)
 #
 # Host ports and the matching base URLs are overridable via a sibling .env
 # file written by ./up.sh (or set yourself before running compose).
-# Per-user secrets (Resend, Solana) belong in the optional, gitignored
-# docker/dev.env.local — see docker/README.md.
+# Per-user secrets belong in the optional, gitignored docker/dev.env.local.
 
 name: rpow2-dev
 
@@ -58,14 +57,12 @@ services:
     command: ["bash", "/app/docker/server-entrypoint.sh"]
     env_file:
       - docker/dev.env
-      # Optional, gitignored override layer for personal secrets like
-      # RESEND_API_KEY or the SRPOW_* + BRIDGE_KEYPAIR_BASE58 trio. The
+      # Optional, gitignored override layer for local secrets. The
       # `required: false` flag means it's silently skipped when missing.
       - path: docker/dev.env.local
         required: false
     environment:
       DATABASE_URL: postgres://rpow:rpow_dev@db:5432/rpow
-      MAGIC_LINK_BASE_URL: ${RPOW_API_BASE_URL:-http://localhost:8080}
       WEB_ORIGIN: ${RPOW_WEB_BASE_URL:-http://localhost:5173}
       PGHOST: db
       PGUSER: rpow

@@ -41,21 +41,31 @@ describe('GET /ledger', () => {
     });
   });
 
+  it('serves ledger stats with ETag validators', async () => {
+    const ctx = await makeTestApp(); cleanup = ctx.cleanup;
+    const first = await ctx.app.inject({ method: 'GET', url: '/ledger/stats' });
+    expect(first.statusCode).toBe(200);
+    expect(first.headers.etag).toBeTruthy();
+
+    const second = await ctx.app.inject({
+      method: 'GET',
+      url: '/ledger/stats',
+      headers: { 'if-none-match': first.headers.etag as string },
+    });
+    expect(second.statusCode).toBe(304);
+    expect(second.body).toBe('');
+  });
+
   it('reports growing supply as tokens + counter are seeded', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const { randomUUID } = await import('node:crypto');
-    // Seed 12 root tokens at 1 RPOW each (= 12 * 1e9 base units of supply).
-    for (let i = 0; i < 12; i++) {
-      await ctx.pool.query(
-        `INSERT INTO tokens(id, owner_email, value, state, server_sig)
-         VALUES ($1, $2, $3, 'VALID', '\\x00')`,
-        [randomUUID(), `seed-${i}@x.com`, RPOW.toString()],
-      );
-    }
-    // Keep the maintained counter in sync with the seeded supply (server's
-    // /mint path increments this; tests inject directly so we mirror it).
+    // Keep maintained stats in sync with the seeded supply (server's /mint
+    // path updates both; tests inject directly so we mirror it).
     await ctx.pool.query(
       `UPDATE app_counters SET value = $1 WHERE name = 'minted_supply'`,
+      [(12n * RPOW).toString()],
+    );
+    await ctx.pool.query(
+      `UPDATE ledger_stats SET value = $1 WHERE name = 'circulating_supply'`,
       [(12n * RPOW).toString()],
     );
 
@@ -75,16 +85,12 @@ describe('GET /ledger', () => {
 
   it('reports is_capped at maxSupply', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const { randomUUID } = await import('node:crypto');
-    for (let i = 0; i < 21; i++) {
-      await ctx.pool.query(
-        `INSERT INTO tokens(id, owner_email, value, state, server_sig)
-         VALUES ($1, $2, $3, 'VALID', '\\x00')`,
-        [randomUUID(), `seed-${i}@x.com`, RPOW.toString()],
-      );
-    }
     await ctx.pool.query(
       `UPDATE app_counters SET value = $1 WHERE name = 'minted_supply'`,
+      [MAX_SUPPLY_BU.toString()],
+    );
+    await ctx.pool.query(
+      `UPDATE ledger_stats SET value = $1 WHERE name = 'circulating_supply'`,
       [MAX_SUPPLY_BU.toString()],
     );
 

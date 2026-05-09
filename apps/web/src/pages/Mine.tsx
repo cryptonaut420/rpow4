@@ -1,14 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
+import { CopyButton } from '../components/CopyButton.js';
 import { useMe } from '../hooks/useMe.js';
+import { useWallet } from '../wallet/WalletProvider.js';
 import { api } from '../api.js';
 import { formatRpow } from '../lib/format.js';
+import {
+  estimateHashrate,
+  expectedSecondsAt,
+  formatDuration,
+  formatHashrate,
+  type HashrateEstimate,
+} from '../lib/hashrate.js';
 import type { LedgerResponse } from '@rpow/shared';
 
 type Status = 'idle' | 'mining' | 'submitting' | 'error';
 
 export function MinePage() {
+  const wallet = useWallet();
   const { me, loading, refresh } = useMe();
   const nav = useNavigate();
   const [status, setStatus] = useState<Status>('idle');
@@ -19,6 +29,7 @@ export function MinePage() {
   const [lastTokenId, setLastTokenId] = useState('');
   const [sessionMinted, setSessionMinted] = useState(0);
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
+  const [bench, setBench] = useState<HashrateEstimate | null>(null);
   const workerRef = useRef<Worker | null>(null);
   // Use a ref (not state) so the async worker callback always sees the latest value
   // without restarting the loop closure.
@@ -33,6 +44,15 @@ export function MinePage() {
   // "next halving at" countdown stays roughly current.
   const refreshLedger = () => { api.ledger().then(setLedger).catch(() => {}); };
   useEffect(() => { refreshLedger(); }, []);
+
+  // One-shot CPU benchmark on mount so we can show the user how long a
+  // typical solve will take at the current difficulty *before* they
+  // start. Not wired into the actual mining loop — purely informational.
+  useEffect(() => {
+    let cancelled = false;
+    estimateHashrate({ duration_ms: 1200 }).then((r) => { if (!cancelled) setBench(r); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   async function startOne() {
     if (stopRequestedRef.current) { setStatus('idle'); return; }
@@ -65,7 +85,17 @@ export function MinePage() {
         setStatus('submitting');
         w.terminate(); workerRef.current = null;
         try {
-          const r = await api.mint({ challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce });
+          const mintBody = { challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce };
+          const r = await api.mint({
+            challenge_id: ch.challenge_id,
+            nonce_prefix: ch.nonce_prefix,
+            difficulty_bits: ch.difficulty_bits,
+            issued_at: ch.issued_at,
+            expires_at: ch.expires_at,
+            challenge_mac: ch.challenge_mac,
+            solution_nonce: m.solution_nonce,
+            client_signature_base58: wallet.sign('mint', mintBody),
+          });
           setLastTokenId(r.token.id);
           setSessionMinted(n => n + 1);
           await refresh();
@@ -86,7 +116,7 @@ export function MinePage() {
   }
 
   function start() {
-    if (!me) { nav('/login'); return; }
+    if (wallet.status !== 'unlocked' || !me) { nav('/login'); return; }
     stopRequestedRef.current = false;
     setSessionMinted(0);
     setLastTokenId('');
@@ -111,8 +141,17 @@ export function MinePage() {
     return `00:${mm}:${ss}`;
   }
 
-  if (loading) return <Panel><div>loading...</div></Panel>;
-  if (!me) return <Panel title="MINE"><div>not signed in.</div></Panel>;
+  if (loading || wallet.status === 'loading') return <Panel><div>loading...</div></Panel>;
+  if (wallet.status !== 'unlocked' || !me) {
+    return (
+      <Panel title="MINE">
+        <div>not signed in.</div>
+        <div style={{ marginTop: 8 }}>
+          <Link to="/login">[ {wallet.status === 'locked' ? 'unlock wallet' : 'create or import wallet'} ]</Link>
+        </div>
+      </Panel>
+    );
+  }
 
   const running = status === 'mining' || status === 'submitting';
 
@@ -129,8 +168,13 @@ export function MinePage() {
     const baseDenom = 128;
     const rewardFrac = `1/${baseDenom * 2 ** ledger.halving_index}`;
     const nextRewardFrac = ledger.is_capped ? '—' : `1/${baseDenom * 2 ** (ledger.halving_index + 1)}`;
+    const yourRate = bench ? formatHashrate(bench.hps) : 'measuring…';
+    const eta = bench
+      ? formatDuration(expectedSecondsAt(ledger.current_difficulty_bits, bench.hps))
+      : '—';
     rewardBlock = `  CURRENT REWARD   : ${currentReward} RPOW (${rewardFrac}) per solution
   CURRENT DIFFICULTY: ${ledger.current_difficulty_bits} trailing zero bits
+  YOUR HASHRATE    : ${yourRate}  (~${eta} per solution on this CPU)
   NEXT HALVING AT  : ${nextHalvingAt} RPOW total minted (${toGo} RPOW to go)
   NEXT REWARD      : ${ledger.is_capped ? 'CAPPED' : `${nextReward} RPOW (${nextRewardFrac})`}
 
@@ -145,9 +189,14 @@ export function MinePage() {
   RATE             : ${fmtRate()}
   ELAPSED          : ${fmtElapsed()}
   STATUS           : ${status.toUpperCase()}
-  MINED THIS RUN   : ${sessionMinted}${lastTokenId ? `\n  LAST TOKEN       : ${lastTokenId}` : ''}${error ? `\n  ERROR            : ${error}` : ''}
+  MINED THIS RUN   : ${sessionMinted}${error ? `\n  ERROR            : ${error}` : ''}
 `}
       </pre>
+      {lastTokenId && (
+        <div style={{ marginTop: 4, color: 'var(--dim)', fontSize: 12 }}>
+          last token: <code>{lastTokenId}</code> <CopyButton text={lastTokenId} />
+        </div>
+      )}
       <div style={{ marginTop: 8 }}>
         {running ? (
           <button onClick={stop}>[ STOP ]</button>

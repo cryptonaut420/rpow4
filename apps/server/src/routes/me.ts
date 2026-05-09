@@ -6,48 +6,33 @@ export async function meRoutes(app: FastifyInstance) {
     const s = readSession(req as any, app.config.sessionSecret);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
 
-    const email = s.email;
-    const [
-      { rows: bal },
-      { rows: minted },
-      { rows: sent },
-      { rows: recv },
-      { rows: userRow },
-      { rows: wrappedRow },
-    ] = await Promise.all([
-      app.pool.query<{ n: string }>(
-        `SELECT coalesce(sum(value),0)::text AS n FROM tokens WHERE owner_email=$1 AND state='VALID'`,
-        [email],
-      ),
-      app.pool.query<{ n: string }>(
-        `SELECT coalesce(sum(value),0)::text AS n FROM tokens WHERE owner_email=$1 AND parent_token_id IS NULL`,
-        [email],
-      ),
-      app.pool.query<{ n: string }>(
-        `SELECT coalesce(sum(amount),0)::text AS n FROM transfers WHERE sender_email=$1`,
-        [email],
-      ),
-      app.pool.query<{ n: string }>(
-        `SELECT coalesce(sum(amount),0)::text AS n FROM transfers WHERE recipient_email=$1`,
-        [email],
-      ),
-      app.pool.query<{ solana_wallet: string | null }>(
-        'SELECT solana_wallet FROM users WHERE email=$1', [email],
-      ),
-      app.pool.query<{ n: string }>(
-        `SELECT coalesce(sum(value),0)::text AS n FROM tokens WHERE owner_email=$1 AND state='WRAPPED'`,
-        [email],
-      ),
-    ]);
+    const pubkey = s.pubkey;
+    const { rows } = await app.pool.query<{
+      display_name: string | null;
+      spendable: string;
+      minted: string;
+      sent: string;
+      received: string;
+    }>(
+      `SELECT a.display_name,
+              coalesce(b.spendable_base_units,0)::text AS spendable,
+              coalesce(b.minted_base_units,0)::text AS minted,
+              coalesce(b.sent_base_units,0)::text AS sent,
+              coalesce(b.received_base_units,0)::text AS received
+       FROM accounts a
+       LEFT JOIN account_balances b ON b.pubkey = a.pubkey
+       WHERE a.pubkey=$1`,
+      [pubkey],
+    );
+    const account = rows[0];
+    if (!account) return reply.code(404).send({ error: 'NOT_FOUND', message: 'account not found' });
     return {
-      email,
-      balance_base_units: bal[0]!.n,
-      minted_base_units: minted[0]!.n,
-      sent_base_units: sent[0]!.n,
-      received_base_units: recv[0]!.n,
-      wrap_allowed: app.wrapAllowlist.has(email.toLowerCase()),
-      solana_wallet: userRow[0]?.solana_wallet ?? null,
-      srpow_supply_owned_base_units: wrappedRow[0]?.n ?? '0',
+      pubkey,
+      display_name: account.display_name,
+      balance_base_units: account.spendable,
+      minted_base_units: account.minted,
+      sent_base_units: account.sent,
+      received_base_units: account.received,
     };
   });
 }

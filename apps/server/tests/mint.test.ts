@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { makeTestApp } from './helpers.js';
+import { loginAsRandomWallet, makeTestApp, type TestWallet } from './helpers.js';
 import { findSolutionForTest } from '../src/pow.js';
 
 // In the halving schedule with test config (mintMaxSupply=21 RPOW), one mint
@@ -7,18 +7,45 @@ import { findSolutionForTest } from '../src/pow.js';
 // reached far before the first 1M-RPOW halving boundary).
 const REWARD_BASE_UNITS = 7_812_500n;
 const ONE_RPOW = 1_000_000_000n;
-const CAP_BASE_UNITS = 21n * ONE_RPOW;            // = 21,000,000,000
+const CAP_BASE_UNITS = 21n * ONE_RPOW;
 
-async function loginAndChallenge(ctx: Awaited<ReturnType<typeof makeTestApp>>) {
-  await ctx.app.inject({ method: 'POST', url: '/auth/request', payload: { email: 'a@b.com' }, headers: { 'content-type': 'application/json' } });
-  const tok = ctx.mailer.outbox.at(-1)!.text.match(/token=([\w-]+)/)![1];
-  const r = await ctx.app.inject({ method: 'GET', url: `/auth/verify?token=${tok}` });
-  const cookie = r.headers['set-cookie'] as string;
-  const ch = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie } })).json();
-  return { cookie, ch };
+async function getChallenge(ctx: Awaited<ReturnType<typeof makeTestApp>>, w: TestWallet) {
+  const ch = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } })).json();
+  return ch as {
+    challenge_id: string;
+    nonce_prefix: string;
+    difficulty_bits: number;
+    issued_at: string;
+    expires_at: string;
+    challenge_mac: string;
+  };
 }
 
-// Set app_counters.minted_supply directly to a base-unit value.
+function mintBody(
+  w: TestWallet,
+  ch: {
+    challenge_id: string;
+    nonce_prefix: string;
+    difficulty_bits: number;
+    issued_at: string;
+    expires_at: string;
+    challenge_mac: string;
+  },
+  nonce: bigint,
+) {
+  const body = { challenge_id: ch.challenge_id, solution_nonce: nonce.toString() };
+  return {
+    challenge_id: ch.challenge_id,
+    nonce_prefix: ch.nonce_prefix,
+    difficulty_bits: ch.difficulty_bits,
+    issued_at: ch.issued_at,
+    expires_at: ch.expires_at,
+    challenge_mac: ch.challenge_mac,
+    solution_nonce: nonce.toString(),
+    client_signature_base58: w.sign('mint', body),
+  };
+}
+
 async function setMintedSupplyBaseUnits(
   ctx: Awaited<ReturnType<typeof makeTestApp>>,
   baseUnits: bigint,
@@ -35,54 +62,73 @@ describe('POST /mint', () => {
 
   it('credits a token on a valid solution', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const { cookie, ch } = await loginAndChallenge(ctx);
+    const w = await loginAsRandomWallet(ctx.app);
+    const ch = await getChallenge(ctx, w);
     const nonce = findSolutionForTest(Buffer.from(ch.nonce_prefix, 'hex'), ch.difficulty_bits);
     const res = await ctx.app.inject({
       method: 'POST', url: '/mint',
-      headers: { cookie, 'content-type': 'application/json' },
-      payload: { challenge_id: ch.challenge_id, solution_nonce: nonce.toString() },
+      headers: { cookie: w.cookie, 'content-type': 'application/json' },
+      payload: mintBody(w, ch, nonce),
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().token.value_base_units).toBe(REWARD_BASE_UNITS.toString());
-    const me = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie } })).json();
+    const me = (await ctx.app.inject({ method: 'GET', url: '/me', headers: { cookie: w.cookie } })).json();
     expect(me.balance_base_units).toBe(REWARD_BASE_UNITS.toString());
     expect(me.minted_base_units).toBe(REWARD_BASE_UNITS.toString());
   });
 
   it('rejects invalid solution', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const { cookie, ch } = await loginAndChallenge(ctx);
+    const w = await loginAsRandomWallet(ctx.app);
+    const ch = await getChallenge(ctx, w);
     const res = await ctx.app.inject({
       method: 'POST', url: '/mint',
-      headers: { cookie, 'content-type': 'application/json' },
-      payload: { challenge_id: ch.challenge_id, solution_nonce: '0' },
+      headers: { cookie: w.cookie, 'content-type': 'application/json' },
+      payload: mintBody(w, ch, 0n),
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe('INVALID_SOLUTION');
   });
 
+  it('rejects a missing/invalid client signature', async () => {
+    const ctx = await makeTestApp(); cleanup = ctx.cleanup;
+    const w = await loginAsRandomWallet(ctx.app);
+    const ch = await getChallenge(ctx, w);
+    const nonce = findSolutionForTest(Buffer.from(ch.nonce_prefix, 'hex'), ch.difficulty_bits);
+    const goodBody = mintBody(w, ch, nonce);
+    // Tamper with the signature.
+    const res = await ctx.app.inject({
+      method: 'POST', url: '/mint',
+      headers: { cookie: w.cookie, 'content-type': 'application/json' },
+      payload: { ...goodBody, client_signature_base58: '1'.repeat(88) },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe('INVALID_SIGNATURE');
+  });
+
   it('rejects double-claim of same challenge', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const { cookie, ch } = await loginAndChallenge(ctx);
+    const w = await loginAsRandomWallet(ctx.app);
+    const ch = await getChallenge(ctx, w);
     const nonce = findSolutionForTest(Buffer.from(ch.nonce_prefix, 'hex'), ch.difficulty_bits);
-    const first = await ctx.app.inject({ method: 'POST', url: '/mint', headers: { cookie, 'content-type': 'application/json' }, payload: { challenge_id: ch.challenge_id, solution_nonce: nonce.toString() } });
+    const body = mintBody(w, ch, nonce);
+    const first = await ctx.app.inject({ method: 'POST', url: '/mint', headers: { cookie: w.cookie, 'content-type': 'application/json' }, payload: body });
     expect(first.statusCode).toBe(200);
-    const second = await ctx.app.inject({ method: 'POST', url: '/mint', headers: { cookie, 'content-type': 'application/json' }, payload: { challenge_id: ch.challenge_id, solution_nonce: nonce.toString() } });
+    const second = await ctx.app.inject({ method: 'POST', url: '/mint', headers: { cookie: w.cookie, 'content-type': 'application/json' }, payload: body });
     expect(second.statusCode).toBe(400);
     expect(second.json().error).toBe('CHALLENGE_ALREADY_CLAIMED');
   });
 
   it('refuses with 410 SUPPLY_EXHAUSTED when cap is reached between challenge and mint', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const { cookie, ch } = await loginAndChallenge(ctx);
-    // Challenge was issued at supply=0. Now race the cap by setting minted_supply
-    // straight to the test cap (21 RPOW = 21 * 10^9 base units).
+    const w = await loginAsRandomWallet(ctx.app);
+    const ch = await getChallenge(ctx, w);
     await setMintedSupplyBaseUnits(ctx, CAP_BASE_UNITS);
     const nonce = findSolutionForTest(Buffer.from(ch.nonce_prefix, 'hex'), ch.difficulty_bits);
     const res = await ctx.app.inject({
       method: 'POST', url: '/mint',
-      headers: { cookie, 'content-type': 'application/json' },
-      payload: { challenge_id: ch.challenge_id, solution_nonce: nonce.toString() },
+      headers: { cookie: w.cookie, 'content-type': 'application/json' },
+      payload: mintBody(w, ch, nonce),
     });
     expect(res.statusCode).toBe(410);
     expect(res.json().error).toBe('SUPPLY_EXHAUSTED');
@@ -90,42 +136,32 @@ describe('POST /mint', () => {
 
   it('serializes concurrent mints at the cap boundary so only one succeeds', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    // Pre-set minted_supply to (cap - 1 reward) base units so exactly one mint
-    // can fit before the cap is hit. Fire 5 concurrent mints; expect 1 success
-    // and 4 SUPPLY_EXHAUSTED.
     await setMintedSupplyBaseUnits(ctx, CAP_BASE_UNITS - REWARD_BASE_UNITS);
 
-    const cookies: string[] = [];
+    const wallets: TestWallet[] = [];
     const challenges: Array<{ challenge_id: string; nonce_prefix: string; difficulty_bits: number }> = [];
     for (let i = 0; i < 5; i++) {
-      const email = `racer-${i}@x.com`;
-      await ctx.app.inject({ method: 'POST', url: '/auth/request', payload: { email }, headers: { 'content-type': 'application/json' } });
-      const tok = ctx.mailer.outbox.at(-1)!.text.match(/token=([\w-]+)/)![1];
-      const r = await ctx.app.inject({ method: 'GET', url: `/auth/verify?token=${tok}` });
-      const cookie = r.headers['set-cookie'] as string;
-      cookies.push(cookie);
-      const ch = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie } })).json();
-      challenges.push(ch);
+      const w = await loginAsRandomWallet(ctx.app);
+      wallets.push(w);
+      challenges.push(await getChallenge(ctx, w));
     }
 
-    // Pre-mine all 5 nonces (all challenges were stamped at the same difficulty
-    // since difficulty is fixed in the halving model, so all are valid).
-    const nonces = challenges.map(ch =>
-      findSolutionForTest(Buffer.from(ch.nonce_prefix, 'hex'), ch.difficulty_bits)
+    const nonces = challenges.map((ch) =>
+      findSolutionForTest(Buffer.from(ch.nonce_prefix, 'hex'), ch.difficulty_bits),
     );
 
     const results = await Promise.all(
       challenges.map((ch, i) =>
         ctx.app.inject({
           method: 'POST', url: '/mint',
-          headers: { cookie: cookies[i], 'content-type': 'application/json' },
-          payload: { challenge_id: ch.challenge_id, solution_nonce: nonces[i].toString() },
+          headers: { cookie: wallets[i]!.cookie, 'content-type': 'application/json' },
+          payload: mintBody(wallets[i]!, ch, nonces[i]!),
         }),
       ),
     );
 
-    const successes = results.filter(r => r.statusCode === 200);
-    const exhausted = results.filter(r => r.statusCode === 410 && r.json().error === 'SUPPLY_EXHAUSTED');
+    const successes = results.filter((r) => r.statusCode === 200);
+    const exhausted = results.filter((r) => r.statusCode === 410 && r.json().error === 'SUPPLY_EXHAUSTED');
     expect(successes.length).toBe(1);
     expect(exhausted.length).toBe(4);
   });

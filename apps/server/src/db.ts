@@ -5,11 +5,24 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-export function createPool(databaseUrl: string): Pool {
+export interface PoolOptions {
+  max?: number;
+  statementTimeoutMs?: number;
+  connectionTimeoutMs?: number;
+  idleTimeoutMs?: number;
+}
+
+export function createPool(databaseUrl: string, opts: PoolOptions = {}): Pool {
   // Postgres default max_connections is 100; 30 leaves plenty of headroom
   // for backups (pg_dump uses 1) and the postgres role's own sessions.
   // 10 was bottlenecking under thousands of concurrent users.
-  return new Pool({ connectionString: databaseUrl, max: 30 });
+  return new Pool({
+    connectionString: databaseUrl,
+    max: opts.max ?? 30,
+    statement_timeout: opts.statementTimeoutMs ?? 5_000,
+    connectionTimeoutMillis: opts.connectionTimeoutMs ?? 2_000,
+    idleTimeoutMillis: opts.idleTimeoutMs ?? 30_000,
+  });
 }
 
 export async function withClient<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Promise<T> {
@@ -42,6 +55,7 @@ export async function runMigrations(pool: Pool): Promise<void> {
     if (rows.length) continue;
     const sql = await readFile(join(dir, f), 'utf8');
     await withTx(pool, async (c) => {
+      await c.query('SET LOCAL statement_timeout = 0');
       await c.query(sql);
       await c.query('INSERT INTO schema_migrations(filename) VALUES($1)', [f]);
     });

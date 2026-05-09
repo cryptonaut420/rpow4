@@ -12,68 +12,73 @@ specs in [`docs/superpowers/specs/`](../superpowers/specs).
 A faithful, deliberately centralized re-creation of Finney's RPOW protocol,
 modernized:
 
-- **Identity** is an email address. Auth is a 15-minute single-use magic link.
+- **Identity** is a base58-encoded Ed25519 public key derived in the
+  browser from a BIP-39 mnemonic (SLIP-0010 path `m/44'/501'/0'/0'`, the
+  same Solana derivation path). The server never sees the private key,
+  the mnemonic, or any email — auth is a stateless challenge → signed
+  envelope → cookie handshake.
+- **Per-action signatures.** Every state-changing call (`/auth/session`,
+  `/mint`, `/send`) is signed by the user's keypair over
+  a domain-separated, sorted-key canonical message and the signature is
+  persisted alongside the resulting ledger row.
 - **Mining** is hashcash on `SHA-256(nonce_prefix ‖ solution_nonce_LE)`,
   targeting a configurable number of trailing zero bits (currently 24).
   ~30 s for one solution on a modern laptop.
-- **Tokens** are rows in a Postgres ledger, signed by a server-side Ed25519
-  key. The public key is published at `/.well-known/rpow-pubkey.pem`.
-- **Transfers** invalidate the sender's tokens and reissue fresh ones to the
-  recipient — Finney's "reissuance" pattern. Sends to non-users mint a
-  one-time email-claim link.
+- **Balances** live in compact Postgres `account_balances` rows. Accepted
+  proofs and transfers append `ledger_events` for auditability, while hot
+  reads never scan per-coin history.
+- **Transfers** debit and credit account balances directly. The sender names
+  the recipient by their RPOW pubkey (no email, no claim links).
 - **Issuance** follows a Bitcoin-style halving curve (no difficulty change,
-  reward halves every 1,000,000 RPOW minted) up to a hard cap of **21,000,000
-  RPOW** total supply.
-- **SRPOW** is an optional Solana SPL token (9 decimals) that allowlisted
-  users can wrap into. Each wrapped rpow row locks 1:1 against on-chain
-  SRPOW so the combined rpow + SRPOW supply never exceeds 21M.
+  reward halves every 1,000,000 RPOW minted) up to a hard cap of
+  **21,000,000 RPOW** total supply.
 
 ## Reading order
 
 | # | Doc | What it covers |
 |---|---|---|
 | 1 | [`01-architecture.md`](./01-architecture.md) | Topology, services, deploy targets, repo layout |
-| 2 | [`02-protocol.md`](./02-protocol.md) | End-to-end flows: auth → mine → mint → send → claim |
+| 2 | [`02-protocol.md`](./02-protocol.md) | End-to-end flows: wallet → challenge → mine → mint → send |
 | 3 | [`03-mining-and-halving.md`](./03-mining-and-halving.md) | PoW spec, difficulty, halving schedule, 21M cap, base units |
-| 4 | [`04-data-model.md`](./04-data-model.md) | Postgres schema, state machines, key invariants |
-| 5 | [`05-srpow-bridge.md`](./05-srpow-bridge.md) | Phantom binding, wrap flow, reconcile worker, bridge keypair |
-| 6 | [`06-api.md`](./06-api.md) | HTTP endpoint reference |
-| 7 | [`07-ops-and-deploy.md`](./07-ops-and-deploy.md) | Hosting, secrets, backups, recovery (pointer-heavy) |
+| 4 | [`04-data-model.md`](./04-data-model.md) | Postgres schema (post 011_pubkey_identity), state machines, key invariants |
+| 5 | [`06-api.md`](./06-api.md) | HTTP endpoint reference |
+| 6 | [`07-ops-and-deploy.md`](./07-ops-and-deploy.md) | Hosting, secrets, backups, recovery (pointer-heavy) |
 
 ## One-screen mental model
 
 ```
-                                    ┌────────────────────────┐
-                                    │   apps/web (Netlify)   │
-                                    │   React + Vite SPA     │
-                                    │   miner.worker.ts      │
-                                    └───────────┬────────────┘
-                                                │ HTTPS, cookie auth
-                                                ▼
+                                    ┌────────────────────────────┐
+                                    │   apps/web (Netlify)       │
+                                    │   React + Vite SPA         │
+                                    │   miner.worker.ts          │
+                                    │   WalletProvider:          │
+                                    │     BIP-39 mnemonic        │
+                                    │     SLIP-0010 Ed25519      │
+                                    │     PBKDF2+AES-GCM in IDB  │
+                                    └────────────┬───────────────┘
+                                                 │ HTTPS, cookie auth
+                                                 │ + Ed25519 sig per action
+                                                 ▼
             ┌─────────────────────────────────────────────────────────────┐
             │  api.rpow2.com  (OVH VPS, nginx → :8080)                    │
             │                                                              │
             │  apps/server  (Fastify, Node 22, TypeScript)                 │
-            │  ├─ /auth/{request,verify,logout}     magic-link auth        │
-            │  ├─ /challenge, /mint                 hashcash + halving     │
-            │  ├─ /send, /claim                     reissuance + email     │
+            │  ├─ /auth/{challenge,session,logout}  pubkey handshake       │
+            │  ├─ /challenge, /mint                 stateless hashcash     │
+            │  ├─ /send                             signed balance move    │
             │  ├─ /me, /activity, /ledger           views                  │
-            │  ├─ /phantom/{challenge,bind}         Solana wallet binding  │
-            │  ├─ /srpow/{wrap,events,events/:id}   wrap to SPL token      │
-            │  └─ /unsubscribe, /.well-known/...    misc                   │
+            │  └─ /.well-known/rpow-pubkey.pem      token-issuer key       │
             │                                                              │
-            │  Postgres 17 (Unix-socket only)  │  Resend / Postmark / SMTP │
+            │  Postgres 17 (Unix-socket only)                              │
             └────────────┬───────────────────────────────┬─────────────────┘
                          │                               │
-                         │ ed25519-signed                │ Solana mainnet
-                         │ mintTo (SPL)                  │ getSignatureStatus
-                         ▼                               ▼
-                ┌────────────────────┐         ┌────────────────────┐
-                │  SRPOW SPL mint     │         │  Phantom (user)    │
-                │  decimals=9         │         │  signs bind nonce  │
-                │  freeze auth=null   │         │  custodies SRPOW   │
-                │  mint auth=bridge   │         └────────────────────┘
-                └────────────────────┘
+                         │ maintained balances + append-only events
+                         ▼
+                ┌────────────────────────────────────────┐
+                │  Postgres ledger                       │
+                │  account_balances, ledger_events,      │
+                │  ledger_stats, app_counters            │
+                └────────────────────────────────────────┘
 ```
 
 ## Key source-of-truth files
@@ -82,12 +87,14 @@ modernized:
 - App wiring: [`apps/server/src/buildApp.ts`](../../apps/server/src/buildApp.ts)
 - PoW verifier: [`apps/server/src/pow.ts`](../../apps/server/src/pow.ts)
 - Halving schedule: [`apps/server/src/schedule.ts`](../../apps/server/src/schedule.ts)
-- Token signing: [`apps/server/src/signing.ts`](../../apps/server/src/signing.ts)
+- Token signing (server): [`apps/server/src/signing.ts`](../../apps/server/src/signing.ts)
+- Session HMAC: [`apps/server/src/session.ts`](../../apps/server/src/session.ts)
 - Migrations: [`apps/server/migrations/`](../../apps/server/migrations)
 - Routes: [`apps/server/src/routes/`](../../apps/server/src/routes)
-- Bridge client: [`packages/solana-bridge/src/bridge-client.ts`](../../packages/solana-bridge/src/bridge-client.ts)
+- Wallet (client): [`apps/web/src/wallet/WalletProvider.tsx`](../../apps/web/src/wallet/WalletProvider.tsx)
 - Web miner: [`apps/web/src/miner.worker.ts`](../../apps/web/src/miner.worker.ts)
 - Wire types: [`packages/shared/src/protocol.ts`](../../packages/shared/src/protocol.ts)
+- Canonical JSON + sign/verify: [`packages/shared/src/canonical.ts`](../../packages/shared/src/canonical.ts), [`wallet.ts`](../../packages/shared/src/wallet.ts)
 
 ## Design decisions worth knowing up front
 
@@ -102,14 +109,11 @@ modernized:
   references "stepped difficulty" in one paragraph — that paragraph is
   outdated; `schedule.ts` is the source of truth.
 - **Base units everywhere.** Internal accounting is BIGINT base units where
-  10⁹ base units = 1 RPOW (matching SRPOW's 9 decimals). All amount-bearing
-  fields on the wire use the `_base_units` suffix.
-- **Exact-sum spend.** Tokens are not splittable. `/send` and `/srpow/wrap`
-  greedy-pick existing token rows whose values sum *exactly* to the target;
-  if no exact-sum subset exists the request errors with `EXACT_SUM_REQUIRED`.
-- **Synchronous wrap.** `/srpow/wrap` blocks until Solana confirms (or times
-  out and refunds). No background workers. Crash recovery is a one-shot
-  reconcile pass at server boot.
+  10⁹ base units = 1 RPOW. All amount-bearing fields on the wire use the
+  `_base_units` suffix.
+- **Balance rows, not spendable token rows.** `/send` uses a conditional debit
+  against `account_balances`, so arbitrary base-unit amounts work and hot
+  paths do not scan a user's historical token set.
 - **Self-hosted.** As of 2026-05-08 the API runs on a single OVH VPS with
   Postgres 17 over a Unix socket, after migrating off Fly.io + Neon. See
   [`docs/RUNBOOK.md`](../RUNBOOK.md) and the migration spec.

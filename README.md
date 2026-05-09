@@ -2,7 +2,7 @@
 
 > A tribute to the original RPOW by Hal Finney.
 
-A faithful modern recreation of Hal Finney's [Reusable Proofs of Work](https://nakamotoinstitute.org/finney/rpow/) (2004). Magic-link auth, hashcash mining (~30s on a modern MacBook), Ed25519-signed tokens, email-keyed transfers, public ledger.
+A faithful modern recreation of Hal Finney's [Reusable Proofs of Work](https://nakamotoinstitute.org/finney/rpow/) (2004). BIP-39/SLIP-0010 wallet auth (no email), hashcash mining, maintained balance rows, per-action client signatures persisted on the ledger, public statistics.
 
 ## Quickstart
 
@@ -20,7 +20,7 @@ cd rpow
 - API: <http://localhost:8080>
 - Postgres: `postgres://rpow:rpow_dev@localhost:55432/rpow`
 
-Magic links print to the server logs (`docker compose logs -f server`) so you can sign in without configuring an email provider. SRPOW (the optional Solana wrap) is disabled by default — the server boots with the in-process fake bridge client.
+Auth is purely wallet-based: open the SPA, hit `/login`, and choose **Create new wallet** to generate a fresh BIP-39 mnemonic (or paste an existing one / a raw private key). The browser holds the secret key; the server only ever sees your public key and your signatures. Optionally encrypt the wallet to IndexedDB with a passphrase if you want it to survive a tab close.
 
 ```bash
 ./up.sh --down     # stop everything (volumes preserved)
@@ -29,7 +29,7 @@ Magic links print to the server logs (`docker compose logs -f server`) so you ca
 ./up.sh --help     # inline usage
 ```
 
-To light up real external services (Resend for email delivery, Solana RPC for SRPOW wrap), drop a `docker/dev.env.local` (gitignored) and re-run `./up.sh`. See [`docker/README.md`](./docker/README.md) for the full reference: service graph, secret layering, hot-reload notes, and SRPOW dev setup.
+See [`docker/README.md`](./docker/README.md) for the full reference: service graph, secret layering, and hot-reload notes.
 
 ## Local dev (without Docker)
 
@@ -47,11 +47,9 @@ To run the stack with low difficulty for hands-on testing:
 ```bash
 # In one terminal
 DATABASE_URL=postgres://postgres:p@localhost:55432/postgres \
-RESEND_API_KEY=re_test EMAIL_FROM='rpow2 <no-reply@rpow2.com>' \
 SESSION_SECRET=$(openssl rand -hex 32) \
-MAGIC_LINK_BASE_URL=http://localhost:8080 WEB_ORIGIN=http://localhost:5173 \
+WEB_ORIGIN=http://localhost:5173 \
 DIFFICULTY_BITS=20 DIFFICULTY_FLOOR=8 \
-RPOW_TEST_INBOX=true \
 $(node -e 'import("./apps/server/dist/signing.js").then(({generateKeypair})=>{const k=generateKeypair(); console.log("RPOW_SIGNING_PRIVATE_KEY_HEX="+k.privateHex+" RPOW_SIGNING_PUBLIC_KEY_HEX="+k.publicHex);})') \
 npm --workspace @rpow/server run dev
 
@@ -61,16 +59,15 @@ npm --workspace @rpow/web run dev
 
 ## Deploy
 
-- Server: Fly.io (`api.rpow2.com`)
+- Server: OVH VPS (`api.rpow2.com`), systemd-managed Node 22 behind nginx
 - Web: Netlify (`rpow2.com`)
-- DB: Neon Postgres (serverless)
-- Email: Resend
-- DNS: GoDaddy (registrar)
+- DB: Postgres 17 on the same VPS, Unix-socket only
+- DNS: Cloudflare
 
 See `docs/RUNBOOK.md` for operator instructions.
 
 ## Documentation
 
-- High-level system docs: [`docs/overview/`](./docs/overview/README.md) — architecture, protocol, data model, mining/halving, SRPOW bridge, API reference, ops.
+- High-level system docs: [`docs/overview/`](./docs/overview/README.md) — architecture, protocol, data model, mining/halving, API reference, ops.
 - Operator runbook: [`docs/RUNBOOK.md`](./docs/RUNBOOK.md).
 - Canonical design specs: [`docs/superpowers/specs/`](./docs/superpowers/specs).

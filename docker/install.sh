@@ -11,9 +11,8 @@ cd /app
 
 SENTINEL=node_modules/.dev-installed
 SHARED_BUILT=packages/shared/dist/index.js
-BRIDGE_BUILT=packages/solana-bridge/dist/index.js
 
-if [ -f "$SENTINEL" ] && [ -f "$SHARED_BUILT" ] && [ -f "$BRIDGE_BUILT" ]; then
+if [ -f "$SENTINEL" ] && [ -f "$SHARED_BUILT" ]; then
   echo "[install] node_modules + workspace builds already present (skip)"
   echo "[install] to force a rebuild: docker compose run --rm install rm -f $SENTINEL"
   exit 0
@@ -24,9 +23,6 @@ npm ci --workspaces --include-workspace-root --ignore-scripts
 
 echo "[install] building @rpow/shared..."
 npm run build --workspace @rpow/shared
-
-echo "[install] building @rpow/solana-bridge..."
-npm run build --workspace @rpow/solana-bridge
 
 touch "$SENTINEL"
 echo "[install] done"

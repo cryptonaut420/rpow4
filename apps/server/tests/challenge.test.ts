@@ -1,12 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { makeTestApp } from './helpers.js';
-
-async function login(ctx: Awaited<ReturnType<typeof makeTestApp>>, email = 'a@b.com'): Promise<string> {
-  await ctx.app.inject({ method: 'POST', url: '/auth/request', payload: { email }, headers: { 'content-type': 'application/json' } });
-  const tok = ctx.mailer.outbox.at(-1)!.text.match(/token=([\w-]+)/)![1];
-  const r = await ctx.app.inject({ method: 'GET', url: `/auth/verify?token=${tok}` });
-  return r.headers['set-cookie'] as string;
-}
+import { loginAsRandomWallet, makeTestApp } from './helpers.js';
 
 // In test config, mintMaxSupply = 21 RPOW => cap in base units = 21 * 10^9.
 const ONE_RPOW = 1_000_000_000n;
@@ -28,15 +21,20 @@ describe('POST /challenge', () => {
   let cleanup: (() => Promise<void>) | null = null;
   afterEach(async () => { if (cleanup) await cleanup(); cleanup = null; });
 
-  it('issues a challenge to a logged-in user', async () => {
+  it('issues a challenge to a logged-in wallet', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const cookie = await login(ctx);
-    const res = await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie } });
+    const w = await loginAsRandomWallet(ctx.app);
+    const res = await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.challenge_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.nonce_prefix).toMatch(/^[0-9a-f]+$/);
     expect(body.difficulty_bits).toBe(8);
+    expect(body.issued_at).toBeTruthy();
+    expect(body.expires_at).toBeTruthy();
+    expect(body.challenge_mac).toMatch(/^[0-9a-f]{64}$/);
+    const { rows } = await ctx.pool.query('SELECT count(*)::int AS n FROM challenges');
+    expect(rows[0].n).toBe(0);
   });
 
   it('rejects unauthenticated', async () => {
@@ -47,22 +45,19 @@ describe('POST /challenge', () => {
 
   it('stamps the configured difficulty regardless of supply (halving model has fixed difficulty)', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const cookie = await login(ctx);
-    // Try at supply=0, then at supply=10 RPOW. Difficulty is constant in the
-    // halving schedule.
-    const a = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie } })).json();
+    const w = await loginAsRandomWallet(ctx.app);
+    const a = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } })).json();
     expect(a.difficulty_bits).toBe(8);
     await setMintedSupplyBaseUnits(ctx, 10n * ONE_RPOW);
-    const b = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie } })).json();
+    const b = (await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } })).json();
     expect(b.difficulty_bits).toBe(8);
   });
 
   it('refuses with 410 SUPPLY_EXHAUSTED at cap', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
-    const cookie = await login(ctx);
-    // Set minted_supply to the test cap (21 RPOW = 21 * 10^9 base units).
+    const w = await loginAsRandomWallet(ctx.app);
     await setMintedSupplyBaseUnits(ctx, CAP_BASE_UNITS);
-    const res = await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie } });
+    const res = await ctx.app.inject({ method: 'POST', url: '/challenge', headers: { cookie: w.cookie } });
     expect(res.statusCode).toBe(410);
     expect(res.json().error).toBe('SUPPLY_EXHAUSTED');
   });
