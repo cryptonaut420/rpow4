@@ -57,7 +57,13 @@ export const api = {
 
   // Read endpoints
   me: () => call<MeResponse>('GET', '/me'),
-  activity: () => call<ActivityResponse>('GET', '/activity'),
+  activity: (cursor?: string, limit?: number) => {
+    const qs = new URLSearchParams();
+    if (cursor) qs.set('cursor', cursor);
+    if (limit) qs.set('limit', String(limit));
+    const suffix = qs.toString();
+    return call<ActivityResponse>('GET', `/activity${suffix ? `?${suffix}` : ''}`);
+  },
   ledger: () => call<LedgerResponse>('GET', '/ledger'),
   ledgerStats: () => call<LedgerResponse>('GET', '/ledger/stats'),
   ledgerEvents: (cursor?: string, limit?: number) => {

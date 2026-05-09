@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { scheduleInfoForBlock, BASE_UNITS_PER_RPOW } from '../schedule.js';
 import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
+import { TREASURY_PUBKEY } from '@rpow/shared';
 
 const MAX_LEDGER_EVENTS_LIMIT = 100;
 
@@ -59,6 +60,8 @@ export async function ledgerRoutes(app: FastifyInstance) {
         minted_supply: string;
         block_height: string;
         transfer_count: string;
+        total_fees_collected: string;
+        treasury_balance: string;
         circulating_supply: string;
         user_count: string;
         total_transferred: string;
@@ -67,15 +70,20 @@ export async function ledgerRoutes(app: FastifyInstance) {
            COALESCE((SELECT value FROM app_counters WHERE name='minted_supply'), 0)::text AS minted_supply,
            COALESCE((SELECT value FROM app_counters WHERE name='block_height'), 0)::text AS block_height,
            COALESCE((SELECT value FROM app_counters WHERE name='transfer_count'), 0)::text AS transfer_count,
+           COALESCE((SELECT value FROM app_counters WHERE name='total_fees_collected'), 0)::text AS total_fees_collected,
+           COALESCE((SELECT spendable_base_units FROM account_balances WHERE pubkey=$1), 0)::text AS treasury_balance,
            COALESCE((SELECT value FROM ledger_stats WHERE name='circulating_supply'), 0)::text AS circulating_supply,
            COALESCE((SELECT value FROM ledger_stats WHERE name='user_count'), 0)::text AS user_count,
            COALESCE((SELECT sum(value) FROM ledger_stat_shards WHERE name='total_transferred'), 0)::text AS total_transferred`,
+        [TREASURY_PUBKEY],
       );
 
       const stats = rows[0]!;
       const counterBaseUnits = BigInt(stats.minted_supply);
       const blockHeight = BigInt(stats.block_height);
       const transferCount = BigInt(stats.transfer_count);
+      const totalFeesCollected = BigInt(stats.total_fees_collected);
+      const treasuryBalance = BigInt(stats.treasury_balance);
       const totalTransferredBaseUnits = BigInt(stats.total_transferred);
       const circulatingBaseUnits = BigInt(stats.circulating_supply);
       const userCount = Number(stats.user_count);
@@ -90,6 +98,12 @@ export async function ledgerRoutes(app: FastifyInstance) {
         maxSupplyRpow: app.config.mintMaxSupply,
       });
 
+      // Current fee = base fee >> halving_index (halves with every reward halving).
+      const currentFeeBaseUnits =
+        info.halvingIndex <= 0
+          ? app.config.sendBaseFeeBaseUnits
+          : app.config.sendBaseFeeBaseUnits >> BigInt(info.halvingIndex);
+
       const body = {
         total_minted_base_units: counterBaseUnits.toString(),
         total_transferred_base_units: totalTransferredBaseUnits.toString(),
@@ -100,6 +114,9 @@ export async function ledgerRoutes(app: FastifyInstance) {
 
         block_height: blockHeight.toString(),
         transfer_count: transferCount.toString(),
+        treasury_balance_base_units: treasuryBalance.toString(),
+        total_fees_collected_base_units: totalFeesCollected.toString(),
+        current_fee_base_units: currentFeeBaseUnits.toString(),
         halving_interval_blocks: app.config.halvingIntervalBlocks,
         difficulty_step_blocks: app.config.difficultyStepBlocks,
         difficulty_max_bits: app.config.difficultyMaxBits,

@@ -149,9 +149,14 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'security', 'team', 'staff', 'mod', 'moderator',
   // brand
   'rpow', 'rpow2', 'rpow3', 'rpow4', 'srpow', 'finney', 'satoshi',
+  // system accounts
+  'treasury',
   // language placeholders
   'null', 'undefined', 'none', 'true', 'false', 'self', 'you',
 ]);
+
+/** Base58 pubkey of the system treasury account (all-zero bytes). No keypair exists. */
+export const TREASURY_PUBKEY = '11111111111111111111111111111111';
 
 export function validateDisplayName(raw: string): { ok: true; normalized: string } | { ok: false; message: string } {
   const v = raw.trim();
@@ -227,10 +232,12 @@ export interface SendRequestBody {
   amount_base_units: string;
   idempotency_key: string;
   client_signature_base58: string;
+  memo?: string; // optional, max 64 chars, included in the signed body when present
 }
 export interface SendResponse {
   ok: true;
   transferred_base_units: string;
+  fee_base_units: string;
   recipient_pubkey: string;
   transfer_id: string;
 }
@@ -259,15 +266,26 @@ export interface ApiError { error: ApiErrorCode; message: string; retry_after?: 
 // ---- activity / ledger ------------------------------------------------------
 
 export interface ActivityEntry {
+  id?: string; // event UUID, present for all new events
   type: 'mint' | 'send' | 'receive';
   amount_base_units: string;
+  fee_base_units?: string; // only present on 'send' events with a non-zero fee
+  memo?: string;
   counterparty_pubkey?: string;
   /** Counterparty's current display name, if they have one set. */
   counterparty_display_name?: string;
   client_signature_base58?: string;
+  event_seq: string;
   at: string; // iso8601
 }
-export type ActivityResponse = ActivityEntry[];
+
+export interface ActivityResponse {
+  balance_base_units: string;
+  total_count: number;
+  items: ActivityEntry[];
+  /** Cursor to pass as ?cursor= to fetch the next page (absent on last page). */
+  next_cursor?: string;
+}
 
 export interface LedgerResponse {
   total_minted_base_units: string;
@@ -281,6 +299,12 @@ export interface LedgerResponse {
   block_height: string;
   /** Total number of TRANSFER events ever recorded on the ledger. */
   transfer_count: string;
+  /** Current spendable balance of the system treasury account. */
+  treasury_balance_base_units: string;
+  /** Lifetime aggregate of all fees collected by the treasury. */
+  total_fees_collected_base_units: string;
+  /** Current fee charged per send (halves with the block reward). */
+  current_fee_base_units: string;
   halving_interval_blocks: number;
   difficulty_step_blocks: number;
   difficulty_max_bits: number;

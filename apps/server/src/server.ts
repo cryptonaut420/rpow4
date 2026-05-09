@@ -20,6 +20,7 @@ const app = await buildApp({
     mintMaxSupply: env.MINT_MAX_SUPPLY,
     baseRewardBaseUnits: env.MINT_BASE_REWARD_BASE_UNITS,
     halvingIntervalBlocks: env.HALVING_INTERVAL_BLOCKS,
+    sendBaseFeeBaseUnits: env.SEND_BASE_FEE_BASE_UNITS,
     signingPrivateKeyHex: env.RPOW_SIGNING_PRIVATE_KEY_HEX,
     signingPublicKeyHex: env.RPOW_SIGNING_PUBLIC_KEY_HEX,
     webOrigin: env.WEB_ORIGIN,

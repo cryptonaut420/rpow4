@@ -156,12 +156,13 @@ export async function mintRoutes(app: FastifyInstance) {
         );
 
         await c.query(
-          `INSERT INTO account_balances(pubkey, spendable_base_units, minted_base_units, blocks_mined, updated_at)
-           VALUES($1, $2, $2, 1, now())
+          `INSERT INTO account_balances(pubkey, spendable_base_units, minted_base_units, blocks_mined, events_count, updated_at)
+           VALUES($1, $2, $2, 1, 1, now())
            ON CONFLICT (pubkey) DO UPDATE SET
              spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
              minted_base_units = account_balances.minted_base_units + EXCLUDED.minted_base_units,
              blocks_mined = account_balances.blocks_mined + 1,
+             events_count = account_balances.events_count + 1,
              updated_at = now()`,
           [s.pubkey, reward.toString()],
         );
@@ -183,7 +184,8 @@ export async function mintRoutes(app: FastifyInstance) {
              )
              VALUES($1, 'MINT', $2, $3, $4, $5, $6, $7, $8)
              RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-                       amount, challenge_id, solution_nonce, idempotency_key,
+                       amount, fee_base_units, memo,
+                       challenge_id, solution_nonce, idempotency_key,
                        client_signature_base58, server_sig, created_at
            ),
            upd_event_id AS (
@@ -199,7 +201,8 @@ export async function mintRoutes(app: FastifyInstance) {
              WHERE c.challenge_id = i.challenge_id
            )
            SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-                  amount::text AS amount, challenge_id, solution_nonce, idempotency_key,
+                  amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
+                  challenge_id, solution_nonce, idempotency_key,
                   client_signature_base58, server_sig, created_at
            FROM inserted`,
           [

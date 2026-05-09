@@ -33,6 +33,8 @@ export interface AppConfig {
   baseRewardBaseUnits: bigint;
   /** Blocks between reward halvings. 210,000 in production (Bitcoin-exact). */
   halvingIntervalBlocks: number;
+  /** Per-send fee in base units at halving 0. Halves with every reward halving. */
+  sendBaseFeeBaseUnits: bigint;
   signingPrivateKeyHex: string;
   signingPublicKeyHex: string;
   webOrigin: string;

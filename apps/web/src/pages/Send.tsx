@@ -7,6 +7,7 @@ import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { formatRpow, parseRpowToBaseUnits } from '../lib/format.js';
 import { isValidPubkeyBase58, shortPubkey, validateDisplayName } from '@rpow/shared';
+import type { LedgerResponse, SendRequestBody } from '@rpow/shared';
 
 type Resolution =
   | { kind: 'idle' }
@@ -19,15 +20,24 @@ type Resolution =
 export function SendPage() {
   const wallet = useWallet();
   const { me, refresh } = useMe();
+  const [ledger, setLedger] = useState<LedgerResponse | null>(null);
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('1');
+  const [memo, setMemo] = useState('');
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [error, setError] = useState('');
   const [transferId, setTransferId] = useState('');
+  const [sentFee, setSentFee] = useState('');
   const [sentTo, setSentTo] = useState<{ pubkey: string; display_name: string | null } | null>(null);
   const [sentAmt, setSentAmt] = useState('');
   const [resolution, setResolution] = useState<Resolution>({ kind: 'idle' });
   const lookupAbort = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.ledger().then((l) => { if (!cancelled) setLedger(l); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Debounced resolution: if the user types a pubkey we can use it directly;
   // if they type something that looks like a handle we hit /lookup/:name.
@@ -115,20 +125,30 @@ export function SendPage() {
     }
 
     const idempotency_key = crypto.randomUUID();
-    const body = { recipient_pubkey: resolvedPubkey, amount_base_units, idempotency_key };
+    const trimmedMemo = memo.trim();
+    if (trimmedMemo.length > 64) {
+      setStatus('error');
+      setError('memo must be 64 characters or fewer');
+      return;
+    }
+    // Build the signable body (the part the wallet signs, before the sig field).
+    const sigBody: Record<string, string> = { recipient_pubkey: resolvedPubkey, amount_base_units, idempotency_key };
+    if (trimmedMemo) sigBody.memo = trimmedMemo;
 
     try {
       const r = await api.send({
-        ...body,
-        client_signature_base58: wallet.sign('transfer', body),
-      });
+        ...sigBody,
+        client_signature_base58: wallet.sign('transfer', sigBody),
+      } as SendRequestBody);
       setStatus('sent');
       setTransferId(r.transfer_id);
+      setSentFee(r.fee_base_units);
       setSentTo({
         pubkey: r.recipient_pubkey,
         display_name: resolution.kind === 'handle' ? resolution.display_name : null,
       });
       setSentAmt(formatRpow(r.transferred_base_units));
+      setMemo('');
       await refresh();
     } catch (err: any) {
       setStatus('error');
@@ -151,9 +171,11 @@ export function SendPage() {
         <div style={{ marginBottom: 12, color: 'var(--dim)', fontSize: 12 }}>
           your balance is{' '}
           <strong style={{ color: 'var(--fg)' }}>{balanceDisplay} RPOW</strong>.
-          you can address the recipient by their full pubkey or by their
-          handle (set on /wallet). rpow transfers are exact-sum: the server
-          picks token rows that sum to the requested amount.
+          you can address the recipient by their full pubkey or by their handle.
+          {ledger && (
+            <> a <strong style={{ color: 'var(--fg)' }}>{formatRpow(ledger.current_fee_base_units)} RPOW</strong> network
+            fee is deducted from your balance in addition to the amount.</>
+          )}
         </div>
         <form onSubmit={submit}>
           <div>
@@ -182,6 +204,23 @@ export function SendPage() {
               style={{ width: '14ch' }}
             /> RPOW
           </div>
+          <div style={{ marginTop: 6 }}>
+            MEMO   : <input
+              type="text"
+              value={memo}
+              onChange={(e) => setMemo(e.target.value)}
+              placeholder="optional, up to 64 characters"
+              style={{ width: '50ch', fontFamily: 'inherit' }}
+              maxLength={64}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            {memo.length > 0 && (
+              <span style={{ color: memo.length > 60 ? 'var(--accent)' : 'var(--dim)', fontSize: 11, marginLeft: 8 }}>
+                {memo.length}/64
+              </span>
+            )}
+          </div>
           <div style={{ marginTop: 12 }}>
             <button type="submit" disabled={status === 'sending' || resolution.kind === 'looking-up'}>
               [ {status === 'sending' ? 'sending...' : 'SEND'} ]
@@ -191,10 +230,11 @@ export function SendPage() {
         {status === 'sent' && sentTo && (
           <div style={{ marginTop: 12 }}>
             <div style={{ color: 'var(--accent)' }}>
-              + sent {sentAmt} RPOW → <code>{sentTo.display_name ?? sentTo.pubkey}</code>
+              sent {sentAmt} RPOW → <code>{sentTo.display_name ?? sentTo.pubkey}</code>
             </div>
             <div style={{ color: 'var(--dim)', fontSize: 12, marginTop: 4 }}>
               {sentTo.display_name && <>recipient pubkey: <code>{sentTo.pubkey}</code><br /></>}
+              {sentFee !== '0' && <>fee: {formatRpow(sentFee)} RPOW<br /></>}
               transfer id: <code>{transferId}</code>{' '}
               <CopyButton text={transferId} />
             </div>

@@ -55,9 +55,13 @@ describe('GET /activity', () => {
     });
     expect(r.statusCode).toBe(200);
 
-    const aAct = (await ctx.app.inject({ method: 'GET', url: '/activity', headers: { cookie: a.cookie } })).json() as Array<any>;
-    const bAct = (await ctx.app.inject({ method: 'GET', url: '/activity', headers: { cookie: b.cookie } })).json() as Array<any>;
+    const aResp = (await ctx.app.inject({ method: 'GET', url: '/activity', headers: { cookie: a.cookie } })).json() as { items: Array<any>; balance_base_units: string; total_count: number };
+    const bResp = (await ctx.app.inject({ method: 'GET', url: '/activity', headers: { cookie: b.cookie } })).json() as { items: Array<any> };
+    const aAct = aResp.items;
+    const bAct = bResp.items;
 
+    expect(aResp.balance_base_units).toBeDefined();
+    expect(aResp.total_count).toBeGreaterThan(0);
     expect(aAct.find((e) => e.type === 'mint')).toBeTruthy();
     const sent = aAct.find((e) => e.type === 'send' && e.counterparty_pubkey === b.publicKeyBase58);
     expect(sent).toBeTruthy();
@@ -103,9 +107,10 @@ describe('GET /activity', () => {
       [w.publicKeyBase58, hotEvent.rows[0]!.event_seq],
     );
 
-    const activity = (
+    const resp = (
       await ctx.app.inject({ method: 'GET', url: '/activity', headers: { cookie: w.cookie } })
-    ).json() as Array<any>;
+    ).json() as { items: Array<any>; balance_base_units: string; total_count: number };
+    const activity = resp.items;
 
     expect(activity.map((e) => e.amount_base_units)).toEqual(['22', '11']);
     expect(activity.length).toBe(2);

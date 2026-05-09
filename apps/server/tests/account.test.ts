@@ -214,8 +214,8 @@ describe('GET /activity counterparty_display_name', () => {
 
     const senderActivity = (
       await ctx.app.inject({ method: 'GET', url: '/activity', headers: { cookie: sender.cookie } })
-    ).json() as Array<any>;
-    const sendEvent = senderActivity.find((e) => e.type === 'send');
+    ).json() as { items: Array<any> };
+    const sendEvent = senderActivity.items.find((e) => e.type === 'send');
     expect(sendEvent.counterparty_pubkey).toBe(recipient.publicKeyBase58);
     expect(sendEvent.counterparty_display_name).toBe('BoB');
 
@@ -224,7 +224,7 @@ describe('GET /activity counterparty_display_name', () => {
     await setName(ctx, recipient, 'Roberto');
     const senderActivity2 = (
       await ctx.app.inject({ method: 'GET', url: '/activity', headers: { cookie: sender.cookie } })
-    ).json() as Array<any>;
-    expect(senderActivity2.find((e) => e.type === 'send').counterparty_display_name).toBe('Roberto');
+    ).json() as { items: Array<any> };
+    expect(senderActivity2.items.find((e) => e.type === 'send').counterparty_display_name).toBe('Roberto');
   });
 });

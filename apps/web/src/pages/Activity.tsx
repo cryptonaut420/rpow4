@@ -1,29 +1,71 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
 import { useWallet } from '../wallet/WalletProvider.js';
-import type { ActivityEntry } from '@rpow/shared';
+import type { ActivityEntry, ActivityResponse } from '@rpow/shared';
 import { shortPubkey } from '@rpow/shared';
 import { formatRpow } from '../lib/format.js';
 
+/** Format an ISO timestamp as a short human-readable relative time or date. */
+function formatTs(iso: string): string {
+  const date = new Date(iso);
+  const now = Date.now();
+  const diff = now - date.getTime();
+  const secs = Math.floor(diff / 1000);
+  if (secs < 60) return 'just now';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 7) return `${days}d ago`;
+  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+const PAGE_SIZE = 50;
+
 export function ActivityPage() {
   const wallet = useWallet();
-  const [items, setItems] = useState<ActivityEntry[] | null>(null);
-  const [error, setError] = useState('');
+  const [items, setItems] = useState<ActivityEntry[]>([]);
+  const [balance, setBalance] = useState<string | null>(null);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState('');
+  const loadedOnce = useRef(false);
 
-  useEffect(() => {
+  const loadFirst = useCallback(() => {
     if (wallet.status !== 'unlocked') { setLoading(false); return; }
-    let cancelled = false;
     setLoading(true);
-    api.activity()
-      .then((r) => { if (!cancelled) setItems(r); })
-      .catch((e: any) => { if (!cancelled) setError(e?.message ?? 'failed'); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    setError('');
+    api.activity(undefined, PAGE_SIZE)
+      .then((r: ActivityResponse) => {
+        setItems(r.items);
+        setBalance(r.balance_base_units);
+        setTotalCount(r.total_count);
+        setNextCursor(r.next_cursor);
+        loadedOnce.current = true;
+      })
+      .catch((e: any) => setError(e?.message ?? 'failed to load activity'))
+      .finally(() => setLoading(false));
   }, [wallet.status]);
+
+  useEffect(() => { loadFirst(); }, [loadFirst]);
+
+  const loadMore = () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    api.activity(nextCursor, PAGE_SIZE)
+      .then((r: ActivityResponse) => {
+        setItems((prev) => [...prev, ...r.items]);
+        setNextCursor(r.next_cursor);
+      })
+      .catch((e: any) => setError(e?.message ?? 'failed to load more'))
+      .finally(() => setLoadingMore(false));
+  };
 
   if (wallet.status === 'loading') return <Panel title="ACTIVITY"><div>loading...</div></Panel>;
 
@@ -40,65 +82,100 @@ export function ActivityPage() {
 
   if (loading) return <Panel title="ACTIVITY"><div>loading...</div></Panel>;
   if (error) return <Panel title="ACTIVITY"><div className="error">{error}</div></Panel>;
-  if (!items || items.length === 0) {
-    return (
-      <Panel title="ACTIVITY">
-        <div style={{ color: 'var(--dim)' }}>(no activity yet — try mining or sending)</div>
-      </Panel>
-    );
-  }
 
   return (
     <Panel title="ACTIVITY">
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto auto auto 1fr auto', columnGap: 12, rowGap: 4, alignItems: 'center' }}>
-        {items.map((e, idx) => {
-          const when = e.at.replace('T', ' ').slice(0, 19);
-          const tag = e.type.toUpperCase();
-          const sign = e.type === 'send' ? '-' : '+';
-          const amt = `${sign}${formatRpow(e.amount_base_units)}`;
-          return (
-            <RowFragment
-              key={idx}
-              when={when}
-              tag={tag}
-              amt={amt}
-              counterparty={e.counterparty_pubkey ?? null}
-              counterpartyName={e.counterparty_display_name ?? null}
-              sigSnippet={e.client_signature_base58 ?? null}
-            />
-          );
-        })}
-      </div>
+      {/* Balance + count header */}
+      {balance !== null && (
+        <div style={{ display: 'flex', gap: 24, marginBottom: 12, flexWrap: 'wrap' }}>
+          <span>
+            <span style={{ color: 'var(--dim)', fontSize: 12 }}>BALANCE  </span>
+            <strong>{formatRpow(balance)} RPOW</strong>
+          </span>
+          {totalCount !== null && (
+            <span style={{ color: 'var(--dim)', fontSize: 12 }}>
+              {totalCount} transaction{totalCount !== 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+      )}
+
+      {items.length === 0 ? (
+        <div style={{ color: 'var(--dim)' }}>(no activity yet — try mining or sending)</div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {items.map((e, idx) => (
+              <ActivityRow key={e.id ?? `${e.event_seq}-${idx}`} entry={e} />
+            ))}
+          </div>
+
+          {nextCursor && (
+            <div style={{ marginTop: 12 }}>
+              <button onClick={loadMore} disabled={loadingMore} style={{ fontSize: 12 }}>
+                [ {loadingMore ? 'loading...' : 'load more'} ]
+              </button>
+            </div>
+          )}
+        </>
+      )}
     </Panel>
   );
 }
 
-function RowFragment({
-  when, tag, amt, counterparty, counterpartyName, sigSnippet,
-}: {
-  when: string;
-  tag: string;
-  amt: string;
-  counterparty: string | null;
-  counterpartyName: string | null;
-  sigSnippet: string | null;
-}) {
+function ActivityRow({ entry: e }: { entry: ActivityEntry }) {
+  const tag = e.type.toUpperCase();
+  const sign = e.type === 'send' ? '-' : '+';
+  const amt = `${sign}${formatRpow(e.amount_base_units)}`;
+  const tagColor =
+    e.type === 'send' ? 'var(--dim)' :
+    e.type === 'receive' ? 'var(--accent)' : 'var(--fg)';
+
   return (
-    <>
-      <span style={{ color: 'var(--dim)' }}>{when}</span>
-      <span style={{ color: 'var(--accent)' }}>{tag}</span>
-      <span style={{ textAlign: 'right' }}>{amt}</span>
-      <span style={{ color: 'var(--dim)' }}>
-        {counterparty ? (
-          <span title={counterparty}>
-            <code>{counterpartyName ?? shortPubkey(counterparty)}</code>{' '}
-            <CopyButton text={counterparty} label="copy" />
+    <div style={{
+      borderBottom: '1px solid var(--dim)',
+      paddingBottom: 6,
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 2,
+    }}>
+      {/* Row 1: timestamp · type · amount */}
+      <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <span style={{ color: 'var(--dim)', fontSize: 11 }}>{formatTs(e.at)}</span>
+        <span style={{ color: tagColor, fontWeight: 'bold' }}>{tag}</span>
+        <span style={{ fontWeight: 'bold' }}>{amt} RPOW</span>
+        {e.fee_base_units && e.fee_base_units !== '0' && (
+          <span style={{ color: 'var(--dim)', fontSize: 11 }}>
+            fee: {formatRpow(e.fee_base_units)} RPOW
           </span>
-        ) : ''}
-      </span>
-      <span style={{ color: 'var(--dim)', fontSize: 12 }}>
-        {sigSnippet ? <span title={sigSnippet}>sig:{sigSnippet.slice(0, 8)}…</span> : ''}
-      </span>
-    </>
+        )}
+      </div>
+
+      {/* Row 2: counterparty */}
+      {e.counterparty_pubkey && (
+        <div style={{ color: 'var(--dim)', fontSize: 12 }}>
+          {e.type === 'send' ? 'to' : 'from'}{': '}
+          <span title={e.counterparty_pubkey}>
+            <code>{e.counterparty_display_name ?? shortPubkey(e.counterparty_pubkey)}</code>
+          </span>
+          {' '}<CopyButton text={e.counterparty_pubkey} label="copy" />
+        </div>
+      )}
+
+      {/* Row 3: memo */}
+      {e.memo && (
+        <div style={{ color: 'var(--fg)', fontSize: 12 }}>
+          memo: <em>{e.memo}</em>
+        </div>
+      )}
+
+      {/* Row 4: tx ID */}
+      {e.id && (
+        <div style={{ color: 'var(--dim)', fontSize: 11 }}>
+          tx: <code title={e.id}>{e.id.slice(0, 8)}…</code>{' '}
+          <CopyButton text={e.id} label="copy" />
+        </div>
+      )}
+    </div>
   );
 }

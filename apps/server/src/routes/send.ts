@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { isValidPubkeyBase58, verifyCanonical } from '@rpow/shared';
+import { isValidPubkeyBase58, verifyCanonical, TREASURY_PUBKEY } from '@rpow/shared';
 import { withTxRetry } from '../db.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
 
@@ -23,7 +23,16 @@ const Body = z.object({
     ),
   idempotency_key: z.string().min(8).max(80),
   client_signature_base58: z.string().min(64).max(128),
+  memo: z.string().max(64).optional(),
 });
+
+/** Derive the current send fee at a given halving index. Fee halves with the reward. */
+function computeFee(baseFeeBaseUnits: bigint, halvingIndex: number): bigint {
+  if (halvingIndex <= 0) return baseFeeBaseUnits;
+  // Bit-shift right by halvingIndex (floor division by 2^n). Cap at 0.
+  const shifted = baseFeeBaseUnits >> BigInt(halvingIndex);
+  return shifted < 0n ? 0n : shifted;
+}
 
 export async function sendRoutes(app: FastifyInstance) {
   app.post('/send', async (req, reply) => {
@@ -33,7 +42,13 @@ export async function sendRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
 
     const sender = s.pubkey;
-    const { recipient_pubkey: recipient, amount_base_units, idempotency_key: idem, client_signature_base58 } = parsed.data;
+    const {
+      recipient_pubkey: recipient,
+      amount_base_units,
+      idempotency_key: idem,
+      client_signature_base58,
+      memo,
+    } = parsed.data;
     const target = BigInt(amount_base_units);
 
     if (recipient === sender) {
@@ -41,20 +56,16 @@ export async function sendRoutes(app: FastifyInstance) {
     }
 
     // Per-event client signature: sender signs over the canonical body
-    // (excluding the signature field itself). Persisted on the transfer
-    // row so the public ledger exposes verifiable per-event sender auth.
-    const sigOk = verifyCanonical(
-      'transfer',
-      { recipient_pubkey: recipient, amount_base_units, idempotency_key: idem },
-      client_signature_base58,
-      sender,
-    );
+    // (excluding the signature field itself). Memo is included when present.
+    const sigBody: Record<string, string> = { recipient_pubkey: recipient, amount_base_units, idempotency_key: idem };
+    if (memo) sigBody.memo = memo;
+    const sigOk = verifyCanonical('transfer', sigBody, client_signature_base58, sender);
     if (!sigOk) {
       return reply.code(401).send({ error: 'INVALID_SIGNATURE', message: 'transfer signature does not verify' });
     }
 
     type SendResult =
-      | { ok: true; transferred_base_units: string; recipient_pubkey: string; transfer_id: string }
+      | { ok: true; transferred_base_units: string; fee_base_units: string; recipient_pubkey: string; transfer_id: string }
       | { error: 'BAD_REQUEST' | 'INSUFFICIENT_BALANCE'; message: string; status: number };
 
     let out!: SendResult;
@@ -63,8 +74,8 @@ export async function sendRoutes(app: FastifyInstance) {
         app.pool,
         async (c) => {
           // Idempotency.
-          const dup = await c.query<{ id: string; recipient_pubkey: string; amount: string }>(
-            `SELECT event_id AS id, recipient_pubkey, amount::text AS amount
+          const dup = await c.query<{ id: string; recipient_pubkey: string; amount: string; fee: string }>(
+            `SELECT event_id AS id, recipient_pubkey, amount::text AS amount, fee_base_units::text AS fee
              FROM ledger_transfer_idempotency
              WHERE idempotency_key=$1`,
             [idem],
@@ -76,10 +87,23 @@ export async function sendRoutes(app: FastifyInstance) {
             return {
               ok: true as const,
               transferred_base_units: dup.rows[0].amount,
+              fee_base_units: dup.rows[0].fee ?? '0',
               recipient_pubkey: dup.rows[0].recipient_pubkey,
               transfer_id: dup.rows[0].id,
             };
           }
+
+          // Read block_height to compute the current halving index and fee.
+          // This read happens inside the transaction but before the advisory
+          // locks, which is safe: block_height only moves up, so a slightly
+          // stale read only means a slightly generous fee tier (never wrong).
+          const heightRow = await c.query<{ value: string }>(
+            `SELECT value::text FROM app_counters WHERE name='block_height'`,
+          );
+          const blockHeight = BigInt(heightRow.rows[0]?.value ?? '0');
+          const halvingIndex = Math.floor(Number(blockHeight) / app.config.halvingIntervalBlocks);
+          const fee = computeFee(app.config.sendBaseFeeBaseUnits, halvingIndex);
+          const totalDebit = target + fee;
 
           for (const pubkey of [sender, recipient].sort()) {
             await c.query(
@@ -96,28 +120,27 @@ export async function sendRoutes(app: FastifyInstance) {
 
           await c.query(
             `INSERT INTO ledger_transfer_idempotency(
-               idempotency_key, event_id, sender_pubkey, recipient_pubkey, amount
+               idempotency_key, event_id, sender_pubkey, recipient_pubkey, amount, fee_base_units
              )
-             VALUES($1,$2,$3,$4,$5)`,
-            [idem, transferId, sender, recipient, target.toString()],
+             VALUES($1,$2,$3,$4,$5,$6)`,
+            [idem, transferId, sender, recipient, target.toString(), fee.toString()],
           );
 
+          // Debit amount + fee from sender. events_count +1 for the send event.
           const debit = await c.query(
             `UPDATE account_balances
              SET spendable_base_units = spendable_base_units - $2::bigint,
-                 sent_base_units = sent_base_units + $2::bigint,
+                 sent_base_units = sent_base_units + $3::bigint,
+                 events_count = events_count + 1,
                  updated_at = now()
              WHERE pubkey=$1 AND spendable_base_units >= $2::bigint`,
-            [sender, target.toString()],
+            [sender, totalDebit.toString(), target.toString()],
           );
           if (debit.rowCount === 0) {
-            return { error: 'INSUFFICIENT_BALANCE' as const, message: 'not enough tokens', status: 400 };
+            return { error: 'INSUFFICIENT_BALANCE' as const, message: 'not enough tokens (including fee)', status: 400 };
           }
 
           // Lazily create the recipient account so /me works on first sign-in.
-          // No "pending" flow: a pubkey is self-issued, so any address is a
-          // valid recipient — they just have to sign in once to see their
-          // tokens.
           const recipientInsert = await c.query<{ pubkey: string }>(
             `INSERT INTO accounts(pubkey) VALUES($1)
              ON CONFLICT (pubkey) DO NOTHING
@@ -133,15 +156,29 @@ export async function sendRoutes(app: FastifyInstance) {
 
           const createdAt = new Date();
 
+          // Credit amount to recipient + bump their events_count.
           await c.query(
-            `INSERT INTO account_balances(pubkey, spendable_base_units, received_base_units, updated_at)
-             VALUES($1, $2, $2, now())
+            `INSERT INTO account_balances(pubkey, spendable_base_units, received_base_units, events_count, updated_at)
+             VALUES($1, $2, $2, 1, now())
              ON CONFLICT (pubkey) DO UPDATE SET
                spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
                received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
+               events_count = account_balances.events_count + 1,
                updated_at = now()`,
             [recipient, target.toString()],
           );
+
+          // Credit fee to treasury. No events_count on treasury (no activity feed).
+          if (fee > 0n) {
+            await c.query(
+              `INSERT INTO account_balances(pubkey, spendable_base_units, updated_at)
+               VALUES($1, $2, now())
+               ON CONFLICT (pubkey) DO UPDATE SET
+                 spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+                 updated_at = now()`,
+              [TREASURY_PUBKEY, fee.toString()],
+            );
+          }
 
           await c.query(
             `UPDATE ledger_stat_shards
@@ -151,18 +188,19 @@ export async function sendRoutes(app: FastifyInstance) {
             [target.toString(), idem],
           );
 
-          // INSERT ledger_events + propagate event_seq to the two sidecar
-          // tables + bump the global transfer counter, all in a single
-          // round-trip. See mint.ts for the CTE-pattern explanation.
+          // Single CTE: insert ledger_events + propagate event_seq to
+          // sidecar tables + bump transfer_count + bump total_fees_collected.
           const insertedEvent = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
                  id, event_type, actor_pubkey, counterparty_pubkey, amount,
+                 fee_base_units, memo,
                  idempotency_key, client_signature_base58, created_at
                )
-               VALUES($1,'TRANSFER',$2,$3,$4,$5,$6,$7)
+               VALUES($1,'TRANSFER',$2,$3,$4,$5,$6,$7,$8,$9)
                RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-                         amount, challenge_id, solution_nonce, idempotency_key,
+                         amount, fee_base_units, memo,
+                         challenge_id, solution_nonce, idempotency_key,
                          client_signature_base58, server_sig, created_at
              ),
              upd_event_id AS (
@@ -181,12 +219,18 @@ export async function sendRoutes(app: FastifyInstance) {
                UPDATE app_counters
                SET value = value + 1
                WHERE name='transfer_count'
+             ),
+             upd_fees AS (
+               UPDATE app_counters
+               SET value = value + $5::bigint
+               WHERE name='total_fees_collected' AND $5::bigint > 0
              )
              SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-                    amount::text AS amount, challenge_id, solution_nonce, idempotency_key,
+                    amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
+                    challenge_id, solution_nonce, idempotency_key,
                     client_signature_base58, server_sig, created_at
              FROM inserted`,
-            [transferId, sender, recipient, target.toString(), idem, client_signature_base58, createdAt],
+            [transferId, sender, recipient, target.toString(), fee.toString(), memo ?? null, idem, client_signature_base58, createdAt],
           );
           const event = insertedEvent.rows[0]!;
           await mirrorLedgerEventHot(c, event);
@@ -194,6 +238,7 @@ export async function sendRoutes(app: FastifyInstance) {
           return {
             ok: true as const,
             transferred_base_units: target.toString(),
+            fee_base_units: fee.toString(),
             recipient_pubkey: recipient,
             transfer_id: transferId,
           };
@@ -204,8 +249,8 @@ export async function sendRoutes(app: FastifyInstance) {
       // Concurrent duplicate-idempotency-key inserts: re-read and return
       // the canonical row.
       if (e?.code === '23505') {
-        const tx = await app.pool.query<{ id: string; recipient_pubkey: string; amount: string }>(
-          `SELECT event_id AS id, recipient_pubkey, amount::text AS amount
+        const tx = await app.pool.query<{ id: string; recipient_pubkey: string; amount: string; fee: string }>(
+          `SELECT event_id AS id, recipient_pubkey, amount::text AS amount, fee_base_units::text AS fee
            FROM ledger_transfer_idempotency
            WHERE idempotency_key=$1`,
           [idem],
@@ -220,6 +265,7 @@ export async function sendRoutes(app: FastifyInstance) {
           return reply.send({
             ok: true,
             transferred_base_units: tx.rows[0].amount,
+            fee_base_units: tx.rows[0].fee ?? '0',
             recipient_pubkey: tx.rows[0].recipient_pubkey,
             transfer_id: tx.rows[0].id,
           });

@@ -53,6 +53,7 @@ export async function makeTestApp(opts: {
       mintMaxSupply: 21,
       baseRewardBaseUnits: 7_812_500n,
       halvingIntervalBlocks: 1_000_000,
+      sendBaseFeeBaseUnits: 0n,
       signingPrivateKeyHex: '11'.repeat(32),
       signingPublicKeyHex: '22'.repeat(32),
       webOrigin: 'http://web.test',

@@ -7,6 +7,8 @@ export interface LedgerEventRow {
   actor_pubkey: string;
   counterparty_pubkey: string | null;
   amount: string;
+  fee_base_units: string;
+  memo: string | null;
   challenge_id: string | null;
   solution_nonce: string | null;
   idempotency_key: string | null;
@@ -33,10 +35,11 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
   await c.query(
     `INSERT INTO ledger_recent_events(
        event_seq, id, event_type, actor_pubkey, counterparty_pubkey, amount,
+       fee_base_units, memo,
        challenge_id, solution_nonce, idempotency_key, client_signature_base58,
        server_sig, created_at
      )
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      ON CONFLICT (event_seq) DO NOTHING`,
     [
       event.event_seq,
@@ -45,6 +48,8 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
       event.actor_pubkey,
       event.counterparty_pubkey,
       event.amount,
+      event.fee_base_units,
+      event.memo,
       event.challenge_id,
       event.solution_nonce,
       event.idempotency_key,
@@ -57,10 +62,13 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
   if (event.event_type === 'MINT') {
     await insertAccountRecentRows(c, [
       {
+        id: event.id,
         pubkey: event.actor_pubkey,
         eventSeq: event.event_seq,
         type: 'mint',
         amount: event.amount,
+        feeBaseUnits: '0',
+        memo: null,
         counterpartyPubkey: null,
         clientSignatureBase58: null,
         createdAt: event.created_at,
@@ -68,14 +76,18 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
     ]);
     if (shouldTrimAccount) await trimAccountRecent(c, event.actor_pubkey);
   } else {
-    // Sender + (optional) recipient mirrored in a single multi-row INSERT
-    // so the transfer write path pays for one round-trip instead of two.
+    // Sender + recipient mirrored in a single multi-row INSERT. Treasury
+    // fees go to the treasury account_balances balance directly; we do NOT
+    // mirror a hot activity row for the treasury (it has no activity feed).
     const rows: AccountRecentRow[] = [
       {
+        id: event.id,
         pubkey: event.actor_pubkey,
         eventSeq: event.event_seq,
         type: 'send',
         amount: event.amount,
+        feeBaseUnits: event.fee_base_units,
+        memo: event.memo,
         counterpartyPubkey: event.counterparty_pubkey,
         clientSignatureBase58: event.client_signature_base58,
         createdAt: event.created_at,
@@ -83,10 +95,13 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
     ];
     if (event.counterparty_pubkey) {
       rows.push({
+        id: event.id,
         pubkey: event.counterparty_pubkey,
         eventSeq: event.event_seq,
         type: 'receive',
         amount: event.amount,
+        feeBaseUnits: '0',
+        memo: event.memo,
         counterpartyPubkey: event.actor_pubkey,
         clientSignatureBase58: event.client_signature_base58,
         createdAt: event.created_at,
@@ -118,10 +133,13 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
 }
 
 interface AccountRecentRow {
+  id: string;
   pubkey: string;
   eventSeq: string;
   type: 'mint' | 'send' | 'receive';
   amount: string;
+  feeBaseUnits: string;
+  memo: string | null;
   counterpartyPubkey: string | null;
   clientSignatureBase58: string | null;
   createdAt: Date;
@@ -136,12 +154,15 @@ async function insertAccountRecentRows(
   const valuesSql: string[] = [];
   for (const row of rows) {
     const i = params.length;
-    valuesSql.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 5},$${i + 6},$${i + 7})`);
+    valuesSql.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 5},$${i + 6},$${i + 7},$${i + 8},$${i + 9},$${i + 10})`);
     params.push(
+      row.id,
       row.pubkey,
       row.eventSeq,
       row.type,
       row.amount,
+      row.feeBaseUnits,
+      row.memo,
       row.counterpartyPubkey,
       row.clientSignatureBase58,
       row.createdAt,
@@ -149,8 +170,8 @@ async function insertAccountRecentRows(
   }
   await c.query(
     `INSERT INTO account_recent_events(
-       pubkey, event_seq, type, amount, counterparty_pubkey,
-       client_signature_base58, created_at
+       id, pubkey, event_seq, type, amount, fee_base_units, memo,
+       counterparty_pubkey, client_signature_base58, created_at
      )
      VALUES ${valuesSql.join(',')}
      ON CONFLICT (pubkey, event_seq, type) DO NOTHING`,

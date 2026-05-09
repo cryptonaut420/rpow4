@@ -51,6 +51,19 @@ const Schema = z.object({
   HALVING_INTERVAL_BLOCKS: z.coerce.number().int().positive().default(210_000),
   MINT_MAX_SUPPLY: z.coerce.number().int().positive().default(21_000_000),
 
+  // Per-send fee charged to the sender on top of the transfer amount.
+  // Credited to the treasury account. Halves at every reward halving.
+  // Default: 1 RPOW (1_000_000_000 base units). Set to 0 to disable.
+  SEND_BASE_FEE_BASE_UNITS: z
+    .union([z.string(), z.bigint(), z.number()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined || v === '') return 1_000_000_000n;
+      const s = typeof v === 'string' ? v.trim() : v.toString();
+      if (!/^[0-9]+$/.test(s)) throw new Error('must be a non-negative integer string');
+      return BigInt(s);
+    }),
+
   WEB_ORIGIN: z.string().url().default('http://localhost:5173'),
   TURNSTILE_SECRET: z.string().optional(),
 });

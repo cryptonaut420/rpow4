@@ -82,6 +82,9 @@ export function StatsPage() {
   const reward = formatRpow(ledger.current_reward_base_units);
   const blocksToHalving = formatNumber(ledger.blocks_to_next_halving);
   const blocksToDiffStep = formatNumber(ledger.blocks_to_next_difficulty_step);
+  const treasuryBalance = formatRpow(ledger.treasury_balance_base_units ?? '0');
+  const totalFees = formatRpow(ledger.total_fees_collected_base_units ?? '0');
+  const currentFee = formatRpow(ledger.current_fee_base_units ?? '0');
 
   const board = boards[sort];
 
@@ -101,6 +104,10 @@ export function StatsPage() {
   CURRENT DIFFICULTY  : ${ledger.current_difficulty_bits} trailing zero bits
   NEXT HALVING        : in ${blocksToHalving} blocks
   NEXT DIFFICULTY +1  : in ${blocksToDiffStep} blocks (cap ${ledger.difficulty_max_bits})
+
+  SEND FEE            : ${currentFee} RPOW per transfer
+  TOTAL FEES EARNED   : ${totalFees} RPOW
+  TREASURY BALANCE    : ${treasuryBalance} RPOW
 `}
         </pre>
       </Panel>
