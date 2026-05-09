@@ -104,7 +104,7 @@ detect_public_ipv4() {
 
 dns_ipv4s() {
   local host="$1"
-  getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' '
+  getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true
 }
 
 preflight_dns() {
