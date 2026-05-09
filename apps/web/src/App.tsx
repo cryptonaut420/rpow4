@@ -13,6 +13,7 @@ import { LedgerPage } from './pages/Ledger.js';
 import { StatsPage } from './pages/Stats.js';
 import { ExplorerPage } from './pages/Explorer.js';
 import { CopyButton } from './components/CopyButton.js';
+import { SupplyBar } from './components/SupplyBar.js';
 import { shortPubkey } from '@rpow/shared';
 
 const HEADER = [
@@ -40,6 +41,7 @@ export default function App() {
       <div className="app-shell">
         <header>
           <pre style={{ margin: 0 }}>{HEADER}</pre>
+          <SupplyBar />
           <div className="tagline">a modern tribute to a tribute to the original rpow by hal finney</div>
           <nav style={{ marginTop: 8 }}>
             <NavLink to="/">[ wallet ]</NavLink>{' '}
