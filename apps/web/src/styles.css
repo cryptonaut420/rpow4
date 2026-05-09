@@ -323,8 +323,36 @@ main { margin-top: 4px; }
 }
 .mining-bar-expanded-content {
   border-bottom: 1px dashed var(--accent-dim);
-  padding: 4px 0 8px;
+  padding: 4px 12px 8px 0;
   margin-bottom: 8px;
   max-height: 50vh;
   overflow-y: auto;
+
+  /* Themed scrollbar — keep the cypherpunk terminal feel.
+   * Firefox uses the standard scrollbar-* properties. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent-dim) transparent;
+}
+
+/* WebKit / Chromium scrollbar — Firefox ignores these and falls back to
+ * the standard properties above. */
+.mining-bar-expanded-content::-webkit-scrollbar {
+  width: 8px;
+}
+.mining-bar-expanded-content::-webkit-scrollbar-track {
+  background: transparent;
+  border-left: 1px dashed var(--accent-dim);
+}
+.mining-bar-expanded-content::-webkit-scrollbar-thumb {
+  background: var(--accent-dim);
+  border-radius: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.mining-bar-expanded-content::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4),
+              0 0 6px var(--accent-dim);
+}
+.mining-bar-expanded-content::-webkit-scrollbar-thumb:active {
+  background: var(--accent);
 }
