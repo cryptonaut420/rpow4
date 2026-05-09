@@ -5,14 +5,14 @@ do over HTTP — read network state, mine, send, manage your wallet, explore
 accounts and transactions.
 
 > **Live, browsable version:** open the `/docs` page in the web app
-> (e.g. https://rpow2.com/#/docs) for the same content with copy-paste
+> (e.g. https://rpow4.com/#/docs) for the same content with copy-paste
 > code blocks and section anchors.
 
 ---
 
 ## Conventions
 
-**Base URL.** Production: `https://api.rpow2.com`. Local dev: `http://localhost:8081`.
+**Base URL.** Production: `https://rpow4.com`. Local dev: `http://localhost:8081`.
 
 **Content type.** `application/json` in both directions, except
 `/.well-known/rpow-pubkey.pem` (text/plain).
@@ -135,7 +135,7 @@ the event log.
 ```
 
 ```bash
-curl https://api.rpow2.com/ledger
+curl https://rpow4.com/ledger
 ```
 
 `/ledger/stats` is an alias of `/ledger`.
@@ -214,7 +214,7 @@ Public account view: balance, lifetime stats, and event history.
 Resolve a display name (handle) to a pubkey. Case-insensitive.
 
 ```bash
-curl https://api.rpow2.com/lookup/alice
+curl https://rpow4.com/lookup/alice
 # { "pubkey": "9aXt...", "display_name": "alice" }
 ```
 

@@ -80,7 +80,7 @@ For a fresh Ubuntu AWS EC2 server:
 ```bash
 git clone <this repo>
 cd rpow
-./deploy-aws-ec2.sh --email you@example.com
+./deploy-aws-ec2.sh
 ```
 
 That brings up Postgres, the API, the built SPA, `nginx-proxy`, and automatic

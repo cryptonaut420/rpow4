@@ -7,9 +7,9 @@
 
 ## Goal
 
-Move the rpow API (currently `api.rpow2.com` on Fly.io, iad) and its Postgres database (currently Neon Free) onto a single self-hosted Ubuntu VPS, with a near-zero-downtime cutover so the ~500 active users see at most a few seconds of read-only behavior. Address the perceived slowness on Fly (most likely Neon serverless cold-starts) by collocating Postgres with the app over a Unix socket.
+Move the rpow API (currently `api.rpow4.com` on Fly.io, iad) and its Postgres database (currently Neon Free) onto a single self-hosted Ubuntu VPS, with a near-zero-downtime cutover so the ~500 active users see at most a few seconds of read-only behavior. Address the perceived slowness on Fly (most likely Neon serverless cold-starts) by collocating Postgres with the app over a Unix socket.
 
-**Out of scope:** the web SPA (`rpow2.com`) stays on Netlify; Resend stays as the email provider; GoDaddy stays as the registrar.
+**Out of scope:** the web SPA (`rpow4.com`) stays on Netlify; Resend stays as the email provider; GoDaddy stays as the registrar.
 
 ## Target architecture
 
@@ -17,10 +17,10 @@ Move the rpow API (currently `api.rpow2.com` on Fly.io, iad) and its Postgres da
                   Internet (HTTPS)
                         │
                         ▼
-              [Netlify CDN]                    rpow2.com  (web SPA, unchanged)
+              [Netlify CDN]                    rpow4.com  (web SPA, unchanged)
                         │
                         ▼ XHR
-              api.rpow2.com  ──►  [VPS @ 15.204.254.192]
+              api.rpow4.com  ──►  [VPS @ 15.204.254.192]
                                        ├─ nginx (TLS via Let's Encrypt, reverse proxy :443→127.0.0.1:8080)
                                        ├─ rpow-server.service  (Node 22, Fastify, systemd)
                                        └─ postgresql-16  (local, listens on Unix socket only)
@@ -41,7 +41,7 @@ Move the rpow API (currently `api.rpow2.com` on Fly.io, iad) and its Postgres da
 | TLS | Let's Encrypt via certbot | Free, auto-renewing |
 | Backups | restic → Backblaze B2 | Cheap (~$6/TB/mo), encrypted, S3-compatible |
 | Cutover | Single path: pg_dump/pg_restore at low-traffic hour | DB is only 294 MB → dump+restore is ~60–90s of write-paused time. Far simpler than logical replication; sequences carry over automatically; eliminates Neon-tier dependency |
-| DNS / TLS | Cloudflare DNS (already migrated); LE cert via DNS-01 with Cloudflare API token | Auto-renewing certs forever; scriptable cutover; api.rpow2.com is **DNS-only** (proxy off), apex stays proxied |
+| DNS / TLS | Cloudflare DNS (already migrated); LE cert via DNS-01 with Cloudflare API token | Auto-renewing certs forever; scriptable cutover; api.rpow4.com is **DNS-only** (proxy off), apex stays proxied |
 | Process supervisor | systemd | Native, no extra dep |
 | Secrets | `/etc/rpow/server.env`, mode 0640, root:rpow | Standard pattern, readable only by app user |
 | Postgres bind | localhost / Unix socket only | No external port; eliminates an attack surface |
@@ -88,7 +88,7 @@ Hardening that is **not** in v1 (intentional): port-knocking, custom SSH port, I
 /etc/systemd/system/
   rpow-server.service
 /etc/nginx/sites-enabled/
-  api.rpow2.com.conf
+  api.rpow4.com.conf
 ```
 
 ### systemd unit (sketch)
@@ -123,10 +123,10 @@ WantedBy=multi-user.target
 ```nginx
 server {
     listen 443 ssl http2;
-    server_name api.rpow2.com;
+    server_name api.rpow4.com;
 
-    ssl_certificate     /etc/letsencrypt/live/api.rpow2.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.rpow2.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/api.rpow4.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.rpow4.com/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     client_max_body_size 1m;          # rpow request bodies are tiny
@@ -144,7 +144,7 @@ server {
 
 server {
     listen 80;
-    server_name api.rpow2.com;
+    server_name api.rpow4.com;
     return 301 https://$host$request_uri;
 }
 ```
@@ -161,7 +161,7 @@ Required (per `apps/server/src/env.ts`):
 - `RESEND_API_KEY`, `EMAIL_FROM`
 - `DIFFICULTY_BITS`, `DIFFICULTY_FLOOR`
 - `MINT_EPOCH_SIZE`, `MINT_MAX_SUPPLY`
-- `MAGIC_LINK_BASE_URL=https://api.rpow2.com`, `WEB_ORIGIN=https://rpow2.com`
+- `MAGIC_LINK_BASE_URL=https://api.rpow4.com`, `WEB_ORIGIN=https://rpow4.com`
 - `NODE_ENV=production`, `PORT=8080`
 
 Capture via `flyctl ssh console --app rpow2-server` then `env | grep ...`, or `flyctl secrets list` + the original generation site for any opaque ones. **Never commit these to git.**
@@ -173,10 +173,10 @@ Single-path cutover. DB size is 294 MB → dump+restore in ~60–90s. Logical-re
 ### Pre-cutover (T-24h to T-1h)
 
 - VPS fully built: hardening done, Postgres + nginx + rpow-server installed, env vars in `/etc/rpow/server.env`.
-- LE cert for `api.rpow2.com` already issued via DNS-01 + Cloudflare API token (works because the cert request only needs a TXT record, not actual A-record routing).
+- LE cert for `api.rpow4.com` already issued via DNS-01 + Cloudflare API token (works because the cert request only needs a TXT record, not actual A-record routing).
 - Local Postgres has the schema applied (from `apps/server/migrations/`) and is empty.
-- rpow-server running on VPS, smoke-tested via `curl --resolve api.rpow2.com:443:<vps-ip> ...` against an empty DB.
-- Cloudflare A-record TTL for `api.rpow2.com` lowered to 60s (already DNS-only after this design).
+- rpow-server running on VPS, smoke-tested via `curl --resolve api.rpow4.com:443:<vps-ip> ...` against an empty DB.
+- Cloudflare A-record TTL for `api.rpow4.com` lowered to 60s (already DNS-only after this design).
 - Pre-cutover **safety dump**: `pg_dump -Fc <neon> > /opt/rpow/safety-dump-<utc>.dump` archived to B2 immediately. This is the rollback artifact if anything goes sideways.
 
 ### Cutover sequence (target ~120s user-visible interruption)
@@ -211,7 +211,7 @@ T+100s  Smoke test via --resolve:
 T+120s  VERIFICATION GATE — all smoke tests pass?
         Any failure → ABORT (rollback below).
 
-T+125s  Cloudflare API: PATCH api.rpow2.com A-record content → VPS IP,
+T+125s  Cloudflare API: PATCH api.rpow4.com A-record content → VPS IP,
         AND AAAA → VPS IPv6 (or DELETE AAAA if no IPv6 on VPS).
         Both records as a single batch. With 60s TTL + DNS-only,
         resolvers catch up in ~30–60s; browser DNS cache extends
@@ -317,7 +317,7 @@ Migrations: the existing `apps/server/migrations/` directory holds the SQL. The 
 
 ## Success criteria
 
-- `https://api.rpow2.com/health` returns 200 from VPS, with valid Let's Encrypt cert.
+- `https://api.rpow4.com/health` returns 200 from VPS, with valid Let's Encrypt cert.
 - A magic-link login → mint → transfer flow works end-to-end against the VPS.
 - Existing tokens minted before cutover still verify (proves signing key was carried correctly).
 - p50 `/health` round-trip < 50 ms from a US client (down from whatever Fly+Neon was doing).
@@ -329,13 +329,13 @@ Migrations: the existing `apps/server/migrations/` directory holds the SQL. The 
 - **Data size on Neon:** ~294 MB (project `rpow2`, AWS us-east-1). Small enough that `pg_dump` over the wire is ~10s.
 - **Fly cron / extra machines:** none. Single app machine; cutover doesn't coordinate with anything else.
 - **Cutover path:** committed to **dump/restore** (single path). Logical replication dropped from the plan — the complexity isn't justified at 294 MB.
-- **Staging hostname:** none. Smoke-test via `curl --resolve api.rpow2.com:443:<vps-ip> https://api.rpow2.com/...`.
+- **Staging hostname:** none. Smoke-test via `curl --resolve api.rpow4.com:443:<vps-ip> https://api.rpow4.com/...`.
 - **DNS:** already on Cloudflare. Registrar (GoDaddy) NS = mira/trey.ns.cloudflare.com; zone status active; propagation in progress (Google's resolver already updated). All email records (DMARC, DKIM, SPF, MX) imported correctly.
-- **Cloudflare proxy mode:** `api.rpow2.com` is **DNS-only** (proxy off, both A and AAAA — flipped via API on 2026-05-07). Apex `rpow2.com` and `www.rpow2.com` stay proxied — they're for the Netlify-hosted SPA which benefits from edge caching.
-- **Cloudflare API token:** scoped to `rpow2.com` zone, perms `Zone:Read + Zone:DNS:Edit`, never expires. Stored locally in `rpow/.env` as `CLOUDFLARE_API_TOKEN`. Will live on the VPS at `/etc/letsencrypt/cloudflare.ini` (mode 0600) for cert renewals.
+- **Cloudflare proxy mode:** `api.rpow4.com` is **DNS-only** (proxy off, both A and AAAA — flipped via API on 2026-05-07). Apex `rpow4.com` and `www.rpow4.com` stay proxied — they're for the Netlify-hosted SPA which benefits from edge caching.
+- **Cloudflare API token:** scoped to `rpow4.com` zone, perms `Zone:Read + Zone:DNS:Edit`, never expires. Stored locally in `rpow/.env` as `CLOUDFLARE_API_TOKEN`. Will live on the VPS at `/etc/letsencrypt/cloudflare.ini` (mode 0600) for cert renewals.
 - **TLS issuance:** DNS-01 challenge via certbot-dns-cloudflare. Cert provisioned **before** any DNS flip (DNS-01 only needs a TXT record, not the A-record we're cutting over). Auto-renewal via cron/systemd-timer thereafter.
 - **Cloudflare zone ID:** `685720286628e21c9b43f260ac6b63bf` (cached for cutover script). DNS record IDs: A=`34daa777f0dbbdbd1e3c97d6c12e9837`, AAAA=`1cfb2458cc028a8f95bea16a439bff6c`.
-- **TTL:** set to 60s on `api.rpow2.com` A and AAAA records on 2026-05-07 (Cloudflare Free's minimum). Bounds the propagation tail at cutover to ≤2 minutes for ~all clients.
-- **Cutover style:** **Style A — single-hostname DNS flip.** PATCH `api.rpow2.com` A-record content from Fly IP to VPS IP via Cloudflare API at T+125s. One hostname, simplest, ~2-min bounded propagation. Style B (Netlify-led with `api2.rpow2.com`) considered and rejected — added complexity for marginal gain on this site's user behavior.
+- **TTL:** set to 60s on `api.rpow4.com` A and AAAA records on 2026-05-07 (Cloudflare Free's minimum). Bounds the propagation tail at cutover to ≤2 minutes for ~all clients.
+- **Cutover style:** **Style A — single-hostname DNS flip.** PATCH `api.rpow4.com` A-record content from Fly IP to VPS IP via Cloudflare API at T+125s. One hostname, simplest, ~2-min bounded propagation. Style B (Netlify-led with `api2.rpow4.com`) considered and rejected — added complexity for marginal gain on this site's user behavior.
 - **IPv6:** OVH typically assigns a /128 to each VPS. During VPS setup, capture the assigned IPv6 with `ip -6 addr show`. At cutover, PATCH the AAAA record alongside the A record. (If the VPS turns out to have no IPv6 — unlikely — DELETE the AAAA record at cutover instead. This avoids split-brain where IPv6-preferring clients hit dead Fly.)
-- **Netlify:** no changes. SPA's `VITE_API_BASE_URL=https://api.rpow2.com` is hostname-only; the IP it resolves to changes but the URL doesn't. No rebuild required.
+- **Netlify:** no changes. SPA's `VITE_API_BASE_URL=https://api.rpow4.com` is hostname-only; the IP it resolves to changes but the URL doesn't. No rebuild required.

@@ -49,7 +49,7 @@ ssh <ec2-host> 'cd /path/to/rpow && docker compose --env-file ops/aws-ec2/prod.e
 ssh <ec2-host> '
   cd /path/to/rpow && \
   git pull origin main && \
-  ./deploy-aws-ec2.sh --email you@example.com'
+  ./deploy-aws-ec2.sh'
 ```
 
 ## Secrets / config files

@@ -20,7 +20,7 @@ The EC2 security group must allow inbound TCP `80` and `443` for the site, plus
 From the repo root on the EC2 host:
 
 ```bash
-./deploy-aws-ec2.sh --email you@example.com
+./deploy-aws-ec2.sh
 ```
 
 The script installs Docker on Ubuntu when needed, creates
@@ -28,8 +28,15 @@ The script installs Docker on Ubuntu when needed, creates
 app images, starts Postgres, the API, the SPA, `nginx-proxy`, and the ACME
 companion.
 
-It never overwrites an existing `prod.env`. Edit that file directly if you need
-to change domains, email, difficulty settings, or other production values.
+It never overwrites existing secrets in `prod.env`. On redeploy, it also appends
+any newly introduced default env vars that are missing, then rebuilds and
+restarts the stack. Edit `prod.env` directly only if you want to change domains,
+email, difficulty settings, or other production values.
+
+On EC2, the script also tries to detect the instance public IPv4 and warns if
+`rpow4.com` or `api.rpow4.com` do not point at it yet. DNS or security group
+mistakes will not corrupt the deploy, but Let's Encrypt cannot issue certs until
+ports `80` and `443` are publicly reachable.
 
 ## Daily Commands
 
@@ -41,7 +48,7 @@ docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml 
 docker compose --env-file ops/aws-ec2/prod.env -f ops/aws-ec2/compose.prod.yaml logs -f acme-companion
 ```
 
-To deploy a new git revision, pull it on the server and run the deploy script
+To deploy a new git revision, pull it on the server and run the same script
 again. Compose rebuilds the app images and keeps the Postgres volume intact.
 
 ## Backups

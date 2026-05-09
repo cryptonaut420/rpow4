@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship rpow2.com end-to-end as a working web product: Fastify+Postgres server + React+Vite web client. Magic-link login, hashcash mining (~30 s on a modern MacBook), server-issued Ed25519-signed RPOW tokens, email-keyed transfers that fail fast on unknown recipients, public ledger.
+**Goal:** Ship rpow4.com end-to-end as a working web product: Fastify+Postgres server + React+Vite web client. Magic-link login, hashcash mining (~30 s on a modern MacBook), server-issued Ed25519-signed RPOW tokens, email-keyed transfers that fail fast on unknown recipients, public ledger.
 
 **Architecture:** npm workspaces monorepo with `apps/server`, `apps/web`, `packages/shared`. Server is a single Fastify process talking to Neon Postgres, signing tokens with Ed25519, sending magic-links via Resend. Web is a Vite+React SPA with a retro terminal UI; mining runs in a Web Worker with WASM SHA-256.
 
 **Tech Stack:** TypeScript 5, Node 22, Fastify 4, Postgres (Neon), Resend, Vite 5, React 18, Web Workers + WASM SHA-256 (`hash-wasm`), Vitest, Playwright, Fly.io, Cloudflare Pages.
 
-**Scope note:** Mobile app (Expo + native miner + Expo Push) is intentionally a separate follow-up plan that depends on this one being deployed and reachable at rpow2.com.
+**Scope note:** Mobile app (Expo + native miner + Expo Push) is intentionally a separate follow-up plan that depends on this one being deployed and reachable at rpow4.com.
 
 ---
 
@@ -553,7 +553,7 @@ describe('parseEnv', () => {
     const env = parseEnv({
       DATABASE_URL: 'postgres://u:p@h/db',
       RESEND_API_KEY: 'rk_test',
-      EMAIL_FROM: 'no-reply@rpow2.com',
+      EMAIL_FROM: 'no-reply@rpow4.com',
       SESSION_SECRET: 'a'.repeat(32),
       MAGIC_LINK_BASE_URL: 'http://localhost:8080',
       RPOW_SIGNING_PRIVATE_KEY_HEX: '00'.repeat(32),
@@ -620,7 +620,7 @@ NODE_ENV=development
 PORT=8080
 DATABASE_URL=postgres://localhost:5432/rpow_dev
 RESEND_API_KEY=re_xxx
-EMAIL_FROM="rpow2 <no-reply@rpow2.com>"
+EMAIL_FROM="rpow4 <no-reply@rpow4.com>"
 SESSION_SECRET=replace-with-32-plus-bytes-of-randomness
 MAGIC_LINK_BASE_URL=http://localhost:8080
 RPOW_SIGNING_PRIVATE_KEY_HEX=...
@@ -3099,7 +3099,7 @@ node -e 'const {generateKeypair}=require("./apps/server/dist/signing.js"); const
 npm run build --workspace @rpow/server
 # Now start with low difficulty to actually feel mining at desk speed
 DATABASE_URL=postgres://postgres:p@localhost:55432/postgres \
-RESEND_API_KEY=re_test EMAIL_FROM='rpow2 <no-reply@rpow2.com>' \
+RESEND_API_KEY=re_test EMAIL_FROM='rpow4 <no-reply@rpow4.com>' \
 SESSION_SECRET=$(openssl rand -hex 32) \
 MAGIC_LINK_BASE_URL=http://localhost:8080 \
 DIFFICULTY_BITS=20 DIFFICULTY_FLOOR=8 \
@@ -3455,8 +3455,8 @@ primary_region = "iad"
 
 [env]
   PORT = "8080"
-  WEB_ORIGIN = "https://rpow2.com"
-  MAGIC_LINK_BASE_URL = "https://api.rpow2.com"
+  WEB_ORIGIN = "https://rpow4.com"
+  MAGIC_LINK_BASE_URL = "https://api.rpow4.com"
 
 [http_service]
   internal_port = 8080
@@ -3498,7 +3498,7 @@ This task has shell steps the operator runs once. There's no application code in
 ```bash
 # Manually:
 # 1. Sign up at resend.com.
-# 2. Verify domain rpow2.com (add SPF/DKIM/DMARC records to Cloudflare DNS as Resend prompts).
+# 2. Verify domain rpow4.com (add SPF/DKIM/DMARC records to Cloudflare DNS as Resend prompts).
 # 3. Create API key. Save as $RESEND_KEY.
 ```
 
@@ -3518,7 +3518,7 @@ flyctl apps create rpow2-server
 flyctl secrets set \
   DATABASE_URL="$NEON_URL" \
   RESEND_API_KEY="$RESEND_KEY" \
-  EMAIL_FROM='rpow2 <no-reply@rpow2.com>' \
+  EMAIL_FROM='rpow4 <no-reply@rpow4.com>' \
   SESSION_SECRET=$(openssl rand -hex 32) \
   RPOW_SIGNING_PRIVATE_KEY_HEX="$PRIV" \
   RPOW_SIGNING_PUBLIC_KEY_HEX="$PUB" \
@@ -3531,11 +3531,11 @@ flyctl status --app rpow2-server
 
 Expected: `flyctl status` shows the machine running. `curl https://rpow2-server.fly.dev/health` returns `{"ok":true}`.
 
-- [ ] **Step 5: Map api.rpow2.com to Fly**
+- [ ] **Step 5: Map api.rpow4.com to Fly**
 
 ```bash
 # In Cloudflare DNS, add CNAME api → rpow2-server.fly.dev (proxied off, "DNS only" for Fly TLS).
-flyctl certs create api.rpow2.com --app rpow2-server
+flyctl certs create api.rpow4.com --app rpow2-server
 ```
 
 ### Task 12.3: Cloudflare Pages for the web app
@@ -3545,12 +3545,12 @@ flyctl certs create api.rpow2.com --app rpow2-server
 - New Pages project → Connect to GitHub repo.
 - Build command: `npm install && npm run build --workspace @rpow/shared && npm run build --workspace @rpow/web`
 - Output directory: `apps/web/dist`
-- Environment variables: `VITE_API_BASE_URL=https://api.rpow2.com`
+- Environment variables: `VITE_API_BASE_URL=https://api.rpow4.com`
 - Production branch: `main`
 
 - [ ] **Step 2: Custom domain**
 
-- Add `rpow2.com` and `www.rpow2.com` to the Pages project.
+- Add `rpow4.com` and `www.rpow4.com` to the Pages project.
 - Cloudflare provisions TLS automatically.
 
 - [ ] **Step 3: Commit a CI helper README note**
@@ -3564,8 +3564,8 @@ A tribute to Hal Finney's RPOW (2004), modernized.
 
 ## Deploy
 
-- Server: Fly.io app `rpow2-server` (api.rpow2.com)
-- Web: Cloudflare Pages (rpow2.com)
+- Server: Fly.io app `rpow2-server` (api.rpow4.com)
+- Web: Cloudflare Pages (rpow4.com)
 - DB: Neon Postgres
 - Email: Resend
 ```
@@ -3665,7 +3665,7 @@ To run the stack with low difficulty for hands-on testing:
 ```bash
 # In one terminal
 DATABASE_URL=postgres://postgres:p@localhost:55432/postgres \
-RESEND_API_KEY=re_test EMAIL_FROM='rpow2 <no-reply@rpow2.com>' \
+RESEND_API_KEY=re_test EMAIL_FROM='rpow4 <no-reply@rpow4.com>' \
 SESSION_SECRET=$(openssl rand -hex 32) \
 MAGIC_LINK_BASE_URL=http://localhost:8080 WEB_ORIGIN=http://localhost:5173 \
 DIFFICULTY_BITS=20 DIFFICULTY_FLOOR=8 \
@@ -3679,8 +3679,8 @@ npm --workspace @rpow/web run dev
 
 ## Deploy
 
-- Server: Fly.io (`api.rpow2.com`)
-- Web: Cloudflare Pages (`rpow2.com`)
+- Server: Fly.io (`api.rpow4.com`)
+- Web: Cloudflare Pages (`rpow4.com`)
 - DB: Neon Postgres
 - Email: Resend
 
@@ -3728,7 +3728,7 @@ git commit -m "docs: README + operator runbook"
 
 ### Task 13.2: Final manual smoke against production
 
-- [ ] **Step 1: Open https://rpow2.com**, request a magic link to your real email
+- [ ] **Step 1: Open https://rpow4.com**, request a magic link to your real email
 - [ ] **Step 2: Click the email link, land on /#/wallet**
 - [ ] **Step 3: Mine one token (will take ~30s at DIFFICULTY_BITS=28)**
 - [ ] **Step 4: Send 1 RPOW to a friend's email; confirm fail-fast if they have no account**

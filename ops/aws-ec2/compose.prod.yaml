@@ -83,7 +83,8 @@ services:
       context: ../..
       dockerfile: apps/web/Dockerfile
       args:
-        VITE_API_BASE_URL: https://${API_HOST}
+        VITE_API_BASE_URL: https://${WEB_HOST}
+        VITE_API_DOCS_BASE_URL: https://${WEB_HOST}
     restart: unless-stopped
     environment:
       VIRTUAL_HOST: ${WEB_HOST}
@@ -95,6 +96,7 @@ services:
     depends_on:
       - server
     networks:
+      - internal
       - proxy
 
 networks:

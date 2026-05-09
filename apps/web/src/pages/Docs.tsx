@@ -1197,14 +1197,16 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
 
 // ---------------------------------------------------------------------------
 // Page entry: assembles conventions + per-section endpoint blocks. Reads the
-// API base URL from VITE_API_BASE so curl/JS examples in dev point at the
-// local server, not the production host.
+// API base URL for curl/JS examples. Production docs should point at the
+// apex domain; local/dev builds can still override via VITE_API_BASE_URL.
 // ---------------------------------------------------------------------------
 export function DocsPage() {
   usePageMeta('API Docs', 'Complete REST API reference for RPOW4. Learn how to integrate, sign transactions, and interact with the network programmatically.');
   const apiBase = useMemo(() => {
-    const fromEnv = (import.meta as ImportMeta & { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE;
-    return (fromEnv ?? 'https://api.rpow2.com').replace(/\/$/, '');
+    const env = (import.meta as ImportMeta & {
+      env?: { VITE_API_DOCS_BASE_URL?: string; VITE_API_BASE_URL?: string };
+    }).env;
+    return (env?.VITE_API_DOCS_BASE_URL ?? env?.VITE_API_BASE_URL ?? 'https://rpow4.com').replace(/\/$/, '');
   }, []);
   const sections = useMemo(() => buildSections(apiBase), [apiBase]);
 
@@ -1260,7 +1262,7 @@ export function DocsPage() {
         <div id="conventions" style={{ scrollMarginTop: 24 }} />
         <h3 style={{ margin: '4px 0 4px 0', fontSize: 14 }}>Base URL</h3>
         <p style={{ margin: '0 0 10px 0' }}>
-          Production: <code>https://api.rpow2.com</code>. Local dev:{' '}
+          Production: <code>https://rpow4.com</code>. Local dev:{' '}
           <code>http://localhost:8787</code>. All paths in this doc are
           relative to that base.
         </p>

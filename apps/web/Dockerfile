@@ -12,7 +12,9 @@ COPY packages/shared ./packages/shared
 COPY apps/web ./apps/web
 
 ARG VITE_API_BASE_URL
+ARG VITE_API_DOCS_BASE_URL
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+ENV VITE_API_DOCS_BASE_URL=${VITE_API_DOCS_BASE_URL}
 
 RUN npm run build --workspace @rpow/shared -- --force
 RUN rm -rf node_modules/@rpow/shared \

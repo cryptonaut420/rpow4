@@ -111,3 +111,9 @@ History/library content page:
 - [x] Wire [ history ] into the main navigation.
 - [x] Type-check frontend changes.
 
+Production EC2 deploy polish:
+- [x] Make ./deploy-aws-ec2.sh fully one-command for first deploy and redeploy.
+- [x] Generate sane production env vars/secrets on first run.
+- [x] Append newly introduced default env vars on redeploy without overwriting secrets.
+- [x] Validate compose/script syntax and production image build path.
+

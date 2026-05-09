@@ -56,11 +56,11 @@ export default function App() {
             <NavLink to="/send">[ send ]</NavLink>{' '}
             <NavLink to="/claim">[ claim ]</NavLink>{' '}
             <NavLink to="/activity">[ activity ]</NavLink>{' '}
-            <NavLink to="/ledger">[ about ]</NavLink>{' '}
             <NavLink to="/stats">[ stats ]</NavLink>{' '}
             <NavLink to="/explorer">[ explorer ]</NavLink>{' '}
             <NavLink to="/faucet">[ faucet ]</NavLink>{' '}
             <NavLink to="/trollbox">[ trollbox ]</NavLink>{' '}
+            <NavLink to="/ledger">[ about ]</NavLink>{' '}
             <NavLink to="/history">[ history ]</NavLink>{' '}
             <NavLink to="/docs">[ docs ]</NavLink>{' '}
             {signedIn ? (

@@ -11,6 +11,7 @@ API_HOST="${API_HOST:-api.rpow4.com}"
 LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-admin@rpow4.com}"
 INSTALL_DOCKER=1
 ACTION=deploy
+PUBLIC_IPV4=""
 
 usage() {
   cat <<EOF
@@ -34,6 +35,152 @@ DNS before first run:
 EC2 security group:
   allow inbound TCP 22, 80, 443
 EOF
+}
+
+env_has_key() {
+  local key="$1"
+  [[ -f "$ENV_FILE" ]] && grep -Eq "^${key}=" "$ENV_FILE"
+}
+
+env_get() {
+  local key="$1"
+  local fallback="$2"
+  if [[ -f "$ENV_FILE" ]] && env_has_key "$key"; then
+    grep -E "^${key}=" "$ENV_FILE" | tail -n 1 | cut -d= -f2-
+  else
+    printf '%s' "$fallback"
+  fi
+}
+
+append_env_if_missing() {
+  local key="$1"
+  local value="$2"
+  if ! env_has_key "$key"; then
+    printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+    echo "[deploy] added missing env: $key"
+  fi
+}
+
+generate_signing_keypair() {
+  "${DOCKER[@]}" run --rm node:22-alpine node -e "const {generateKeyPairSync}=require('node:crypto'); const {publicKey,privateKey}=generateKeyPairSync('ed25519'); const priv=privateKey.export({format:'der',type:'pkcs8'}).subarray(-32).toString('hex'); const pub=publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('hex'); console.log('RPOW_SIGNING_PRIVATE_KEY_HEX='+priv); console.log('RPOW_SIGNING_PUBLIC_KEY_HEX='+pub);"
+}
+
+sudo_cmd() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+ensure_host_tools() {
+  local missing=()
+  for bin in curl gpg openssl; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      missing+=("$bin")
+    fi
+  done
+
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    echo "[deploy] installing required host tools..."
+    sudo_cmd apt-get update
+    sudo_cmd apt-get install -y ca-certificates curl gnupg openssl
+  fi
+}
+
+detect_public_ipv4() {
+  local token
+  token="$(curl -fsS -m 2 -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)"
+
+  if [[ -n "$token" ]]; then
+    curl -fsS -m 2 -H "X-aws-ec2-metadata-token: $token" \
+      "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true
+    return
+  fi
+
+  curl -fsS -m 2 "http://169.254.169.254/latest/meta-data/public-ipv4" 2>/dev/null || true
+}
+
+dns_ipv4s() {
+  local host="$1"
+  getent ahostsv4 "$host" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' '
+}
+
+preflight_dns() {
+  local web_host="$1"
+  local api_host="$2"
+
+  PUBLIC_IPV4="$(detect_public_ipv4)"
+  if [[ -z "$PUBLIC_IPV4" ]]; then
+    echo "[deploy] could not detect EC2 public IPv4; skipping DNS match check"
+    echo "[deploy] make sure $web_host and $api_host point at this server before expecting SSL"
+    return
+  fi
+
+  echo "[deploy] detected EC2 public IPv4: $PUBLIC_IPV4"
+
+  local web_ips api_ips
+  web_ips="$(dns_ipv4s "$web_host")"
+  api_ips="$(dns_ipv4s "$api_host")"
+
+  if [[ " $web_ips " != *" $PUBLIC_IPV4 "* ]]; then
+    echo "[deploy] warning: $web_host does not currently resolve to $PUBLIC_IPV4"
+    echo "[deploy]          current A records: ${web_ips:-none found}"
+  fi
+
+  if [[ " $api_ips " != *" $PUBLIC_IPV4 "* ]]; then
+    echo "[deploy] warning: $api_host does not currently resolve to $PUBLIC_IPV4"
+    echo "[deploy]          current A records: ${api_ips:-none found}"
+  fi
+}
+
+sync_existing_env() {
+  echo "[deploy] checking $ENV_FILE for missing defaults..."
+
+  append_env_if_missing COMPOSE_PROJECT_NAME rpow4-prod
+  append_env_if_missing WEB_HOST "$WEB_HOST"
+  append_env_if_missing API_HOST "$API_HOST"
+  append_env_if_missing LETSENCRYPT_EMAIL "$LETSENCRYPT_EMAIL"
+
+  append_env_if_missing NODE_ENV production
+  append_env_if_missing PORT 8080
+  append_env_if_missing WEB_ORIGIN "https://$(env_get WEB_HOST "$WEB_HOST")"
+
+  append_env_if_missing DATABASE_POOL_MAX 30
+  append_env_if_missing DATABASE_STATEMENT_TIMEOUT_MS 5000
+  if ! env_has_key POSTGRES_PASSWORD; then
+    append_env_if_missing POSTGRES_PASSWORD "$(openssl rand -hex 32)"
+  fi
+  append_env_if_missing DATABASE_URL "postgres://rpow:$(env_get POSTGRES_PASSWORD "")@db:5432/rpow"
+
+  if ! env_has_key SESSION_SECRET; then
+    append_env_if_missing SESSION_SECRET "$(openssl rand -hex 32)"
+  fi
+  if ! env_has_key RPOW_SIGNING_PRIVATE_KEY_HEX || ! env_has_key RPOW_SIGNING_PUBLIC_KEY_HEX; then
+    local key_lines private_key public_key
+    key_lines="$(generate_signing_keypair)"
+    private_key="$(printf '%s\n' "$key_lines" | awk -F= '/RPOW_SIGNING_PRIVATE_KEY_HEX/ {print $2}')"
+    public_key="$(printf '%s\n' "$key_lines" | awk -F= '/RPOW_SIGNING_PUBLIC_KEY_HEX/ {print $2}')"
+    append_env_if_missing RPOW_SIGNING_PRIVATE_KEY_HEX "$private_key"
+    append_env_if_missing RPOW_SIGNING_PUBLIC_KEY_HEX "$public_key"
+  fi
+
+  append_env_if_missing DIFFICULTY_BITS 24
+  append_env_if_missing DIFFICULTY_STEP_BLOCKS 50000
+  append_env_if_missing DIFFICULTY_MAX_BITS 50
+  append_env_if_missing SIGNUP_DIFFICULTY_BITS 18
+  append_env_if_missing MINT_BASE_REWARD_BASE_UNITS 50000000000
+  append_env_if_missing HALVING_INTERVAL_BLOCKS 210000
+  append_env_if_missing MINT_MAX_SUPPLY 21000000
+  append_env_if_missing SEND_BASE_FEE_BASE_UNITS 1000000000
+
+  append_env_if_missing FAUCET_ENABLED true
+  append_env_if_missing FAUCET_CLAIM_AMOUNT_BASE_UNITS 5000000000
+  append_env_if_missing FAUCET_COOLDOWN_HOURS 24
+  append_env_if_missing TROLLBOX_POST_FEE_BASE_UNITS 5000000000
+
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
 }
 
 while [[ $# -gt 0 ]]; do
@@ -74,19 +221,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+ensure_host_tools
+
 if [[ "$INSTALL_DOCKER" == "1" ]] && ! command -v docker >/dev/null 2>&1; then
   echo "[deploy] Docker not found; installing Docker Engine..."
-  sudo apt-get update
-  sudo apt-get install -y ca-certificates curl gnupg openssl
-  sudo install -m 0755 -d /etc/apt/keyrings
-  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-  sudo chmod a+r /etc/apt/keyrings/docker.gpg
+  sudo_cmd install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    | sudo_cmd gpg --batch --yes --dearmor -o /etc/apt/keyrings/docker.gpg
+  sudo_cmd chmod a+r /etc/apt/keyrings/docker.gpg
   . /etc/os-release
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu ${VERSION_CODENAME} stable" \
-    | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-  sudo apt-get update
-  sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  sudo systemctl enable --now docker
+    | sudo_cmd tee /etc/apt/sources.list.d/docker.list >/dev/null
+  sudo_cmd apt-get update
+  sudo_cmd apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  sudo_cmd systemctl enable --now docker
 fi
 
 DOCKER=(docker)
@@ -107,12 +255,6 @@ fi
 
 mkdir -p "$OPS_DIR"
 
-if ! command -v openssl >/dev/null 2>&1; then
-  echo "[deploy] openssl not found; installing it for secret generation..."
-  sudo apt-get update
-  sudo apt-get install -y openssl
-fi
-
 if [[ "$ACTION" == "down" ]]; then
   "${DOCKER[@]}" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" down
   exit 0
@@ -126,11 +268,9 @@ fi
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "[deploy] creating $ENV_FILE with fresh secrets..."
   umask 077
-  POSTGRES_PASSWORD="$(openssl rand -base64 36 | tr -d '\n')"
+  POSTGRES_PASSWORD="$(openssl rand -hex 32)"
   SESSION_SECRET="$(openssl rand -hex 32)"
-  KEY_LINES="$(
-    "${DOCKER[@]}" run --rm node:22-alpine node -e "const {generateKeyPairSync}=require('node:crypto'); const {publicKey,privateKey}=generateKeyPairSync('ed25519'); const priv=privateKey.export({format:'der',type:'pkcs8'}).subarray(-32).toString('hex'); const pub=publicKey.export({format:'der',type:'spki'}).subarray(-32).toString('hex'); console.log('RPOW_SIGNING_PRIVATE_KEY_HEX='+priv); console.log('RPOW_SIGNING_PUBLIC_KEY_HEX='+pub);"
-  )"
+  KEY_LINES="$(generate_signing_keypair)"
   RPOW_SIGNING_PRIVATE_KEY_HEX="$(printf '%s\n' "$KEY_LINES" | awk -F= '/RPOW_SIGNING_PRIVATE_KEY_HEX/ {print $2}')"
   RPOW_SIGNING_PUBLIC_KEY_HEX="$(printf '%s\n' "$KEY_LINES" | awk -F= '/RPOW_SIGNING_PUBLIC_KEY_HEX/ {print $2}')"
 
@@ -168,9 +308,17 @@ FAUCET_CLAIM_AMOUNT_BASE_UNITS=5000000000
 FAUCET_COOLDOWN_HOURS=24
 TROLLBOX_POST_FEE_BASE_UNITS=5000000000
 EOF
+  chmod 600 "$ENV_FILE" 2>/dev/null || true
 else
   echo "[deploy] using existing $ENV_FILE (not overwriting secrets)"
 fi
+
+sync_existing_env
+
+EFFECTIVE_WEB_HOST="$(env_get WEB_HOST "$WEB_HOST")"
+EFFECTIVE_API_HOST="$(env_get API_HOST "$API_HOST")"
+
+preflight_dns "$EFFECTIVE_WEB_HOST" "$EFFECTIVE_API_HOST"
 
 echo "[deploy] building and starting production stack..."
 "${DOCKER[@]}" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
@@ -192,8 +340,8 @@ cat <<EOF
 
 [deploy] RPOW4 production stack is up.
 
-Web: https://$WEB_HOST
-API: https://$API_HOST
+Web: https://$EFFECTIVE_WEB_HOST
+API: https://$EFFECTIVE_API_HOST
 
 Let's Encrypt issuance can take a minute on first boot. Check:
   docker compose --env-file $ENV_FILE -f $COMPOSE_FILE logs -f acme-companion

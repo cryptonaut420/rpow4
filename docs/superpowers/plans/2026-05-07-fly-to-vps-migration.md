@@ -25,7 +25,7 @@ Files added to the rpow repo (committed):
 - `ops/rpow-status.sh` — one-page health (lives at `/usr/local/bin/rpow-status` on VPS, mirrored here)
 - `ops/systemd/rpow-server.service` — systemd unit (mirrored to `/etc/systemd/system/`)
 - `ops/systemd/rpow-backup.service`, `ops/systemd/rpow-backup.timer` — nightly backup
-- `ops/nginx/api.rpow2.com.conf` — nginx site config
+- `ops/nginx/api.rpow4.com.conf` — nginx site config
 - `docs/RUNBOOK.md` — updated post-cutover with new operator instructions
 
 Files NOT in the repo (live on VPS only, never committed):
@@ -538,8 +538,8 @@ DIFFICULTY_BITS=$DIFFICULTY_BITS
 DIFFICULTY_FLOOR=$DIFFICULTY_FLOOR
 MINT_EPOCH_SIZE=${MINT_EPOCH_SIZE:-1000000}
 MINT_MAX_SUPPLY=${MINT_MAX_SUPPLY:-21000000}
-MAGIC_LINK_BASE_URL=https://api.rpow2.com
-WEB_ORIGIN=https://rpow2.com
+MAGIC_LINK_BASE_URL=https://api.rpow4.com
+WEB_ORIGIN=https://rpow4.com
 EOF
 sudo chmod 640 /etc/rpow/server.env && sudo chown root:rpow /etc/rpow/server.env"
 ```
@@ -603,7 +603,7 @@ Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
 
 ## Task 5: TLS via Cloudflare DNS-01
 
-**Goal:** Provision a Let's Encrypt cert for `api.rpow2.com` using DNS-01 challenge with the Cloudflare API token. This works *before* the DNS A-record points at the VPS, because DNS-01 only needs a TXT record.
+**Goal:** Provision a Let's Encrypt cert for `api.rpow4.com` using DNS-01 challenge with the Cloudflare API token. This works *before* the DNS A-record points at the VPS, because DNS-01 only needs a TXT record.
 
 **Files:**
 - No repo files (cloudflare.ini contains a secret).
@@ -634,14 +634,14 @@ local$ ssh ubuntu@15.204.254.192 'sudo certbot certonly --non-interactive --agre
     --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
     --dns-cloudflare-propagation-seconds 30 \
     --staging \
-    -d api.rpow2.com'
+    -d api.rpow4.com'
 ```
 Expected: ends with "Successfully received certificate." If failure: read the error, most often it's wrong scope on the token. Fix and retry.
 
 - [ ] **Step 5.3: Delete the staging cert and issue the real one**
 
 ```
-local$ ssh ubuntu@15.204.254.192 'sudo certbot delete --non-interactive --cert-name api.rpow2.com'
+local$ ssh ubuntu@15.204.254.192 'sudo certbot delete --non-interactive --cert-name api.rpow4.com'
 ```
 Then issue with prod:
 ```
@@ -650,11 +650,11 @@ local$ ssh ubuntu@15.204.254.192 'sudo certbot certonly --non-interactive --agre
     --dns-cloudflare \
     --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
     --dns-cloudflare-propagation-seconds 30 \
-    -d api.rpow2.com'
+    -d api.rpow4.com'
 ```
 Verification:
 ```
-local$ ssh ubuntu@15.204.254.192 'sudo ls /etc/letsencrypt/live/api.rpow2.com/'
+local$ ssh ubuntu@15.204.254.192 'sudo ls /etc/letsencrypt/live/api.rpow4.com/'
 ```
 Expected: lists `cert.pem`, `chain.pem`, `fullchain.pem`, `privkey.pem`, `README`.
 
@@ -684,17 +684,17 @@ No repo files changed. Skip.
 **Goal:** nginx fronts the rpow-server on :443 with the LE cert. Smoke-test via `--resolve` (DNS still points at Fly).
 
 **Files:**
-- Create: `/Users/fredkrueger/rpow/ops/nginx/api.rpow2.com.conf` (mirrored to VPS)
+- Create: `/Users/fredkrueger/rpow/ops/nginx/api.rpow4.com.conf` (mirrored to VPS)
 
 - [ ] **Step 6.1: Write the nginx site config**
 
-Create `/Users/fredkrueger/rpow/ops/nginx/api.rpow2.com.conf`:
+Create `/Users/fredkrueger/rpow/ops/nginx/api.rpow4.com.conf`:
 
 ```nginx
 server {
     listen 80;
     listen [::]:80;
-    server_name api.rpow2.com;
+    server_name api.rpow4.com;
     return 301 https://$host$request_uri;
 }
 
@@ -702,17 +702,17 @@ server {
     listen 443 ssl;
     listen [::]:443 ssl;
     http2 on;
-    server_name api.rpow2.com;
+    server_name api.rpow4.com;
 
-    ssl_certificate     /etc/letsencrypt/live/api.rpow2.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/api.rpow2.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/api.rpow4.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.rpow4.com/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:SSL:10m;
 
     client_max_body_size 1m;
 
-    access_log /var/log/nginx/api.rpow2.com.access.log;
-    error_log  /var/log/nginx/api.rpow2.com.error.log;
+    access_log /var/log/nginx/api.rpow4.com.access.log;
+    error_log  /var/log/nginx/api.rpow4.com.error.log;
 
     location / {
         proxy_pass http://127.0.0.1:8080;
@@ -730,9 +730,9 @@ server {
 - [ ] **Step 6.2: Install the config and reload nginx**
 
 ```
-local$ scp /Users/fredkrueger/rpow/ops/nginx/api.rpow2.com.conf ubuntu@15.204.254.192:/tmp/ && \
-  ssh ubuntu@15.204.254.192 'sudo install -m 644 /tmp/api.rpow2.com.conf /etc/nginx/sites-available/api.rpow2.com.conf && \
-    sudo ln -sfn /etc/nginx/sites-available/api.rpow2.com.conf /etc/nginx/sites-enabled/api.rpow2.com.conf && \
+local$ scp /Users/fredkrueger/rpow/ops/nginx/api.rpow4.com.conf ubuntu@15.204.254.192:/tmp/ && \
+  ssh ubuntu@15.204.254.192 'sudo install -m 644 /tmp/api.rpow4.com.conf /etc/nginx/sites-available/api.rpow4.com.conf && \
+    sudo ln -sfn /etc/nginx/sites-available/api.rpow4.com.conf /etc/nginx/sites-enabled/api.rpow4.com.conf && \
     sudo rm -f /etc/nginx/sites-enabled/default && \
     sudo nginx -t && \
     sudo systemctl reload nginx'
@@ -743,31 +743,31 @@ Verification: `nginx -t` prints "syntax is ok" and "test is successful".
 
 ```
 local$ curl -sS -o /dev/null -w "HTTP %{http_code}, cert=%{ssl_verify_result}\n" \
-  --resolve api.rpow2.com:443:15.204.254.192 \
-  https://api.rpow2.com/health
+  --resolve api.rpow4.com:443:15.204.254.192 \
+  https://api.rpow4.com/health
 ```
 Expected: `HTTP 200, cert=0` (cert=0 means cert verified OK).
 
 - [ ] **Step 6.4: Smoke test HTTPS body**
 
 ```
-local$ curl -sS --resolve api.rpow2.com:443:15.204.254.192 https://api.rpow2.com/health
+local$ curl -sS --resolve api.rpow4.com:443:15.204.254.192 https://api.rpow4.com/health
 ```
 Expected: a JSON-ish health response.
 
 - [ ] **Step 6.5: Confirm Fly is still serving real traffic (paranoia check)**
 
 ```
-local$ curl -sS https://api.rpow2.com/health
+local$ curl -sS https://api.rpow4.com/health
 ```
-Expected: same JSON-ish response, served by Fly. `dig api.rpow2.com` should still return Fly's IP `66.241.125.213`.
+Expected: same JSON-ish response, served by Fly. `dig api.rpow4.com` should still return Fly's IP `66.241.125.213`.
 
 - [ ] **Step 6.6: Phase commit**
 
 ```
 local$ cd /Users/fredkrueger/rpow && \
-  git add ops/nginx/api.rpow2.com.conf && \
-  git commit -m "ops: nginx site config for api.rpow2.com
+  git add ops/nginx/api.rpow4.com.conf && \
+  git commit -m "ops: nginx site config for api.rpow4.com
 
 TLS reverse proxy to 127.0.0.1:8080, LE cert from /etc/letsencrypt,
 HTTP→HTTPS redirect, 1m body cap.
@@ -1020,7 +1020,7 @@ Create `/Users/fredkrueger/rpow/ops/smoke-test.sh`:
 set -euo pipefail
 
 VPS_IP="${VPS_IP:-15.204.254.192}"
-HOST="api.rpow2.com"
+HOST="api.rpow4.com"
 RESOLVE="--resolve ${HOST}:443:${VPS_IP}"
 
 curl_ok () {
@@ -1055,7 +1055,7 @@ Create `/Users/fredkrueger/rpow/ops/dns-flip.sh`:
 
 ```bash
 #!/usr/bin/env bash
-# Flip api.rpow2.com A (and AAAA if VPS_IPV6 is set) to point at VPS.
+# Flip api.rpow4.com A (and AAAA if VPS_IPV6 is set) to point at VPS.
 # Required env: CLOUDFLARE_API_TOKEN, VPS_IP, VPS_IPV6 (or "NONE")
 set -euo pipefail
 
@@ -1090,7 +1090,7 @@ else
 fi
 
 echo "Done. Live records:"
-api "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=api.rpow2.com" \
+api "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=api.rpow4.com" \
   | jq -r '.result[] | "  \(.type) \(.name) -> \(.content) (proxied=\(.proxied), ttl=\(.ttl))"'
 ```
 
@@ -1125,7 +1125,7 @@ step () { echo; echo "[$(date -u +%H:%M:%SZ)] $*"; }
 echo "rpow cutover starting. Verify pre-flight:"
 echo "  - VPS_IP=$VPS_IP, VPS_IPV6=$VPS_IPV6"
 echo "  - safety dump already archived to B2? (Step 8.7)"
-echo "  - TTL=60 already set on api.rpow2.com? (done 2026-05-07)"
+echo "  - TTL=60 already set on api.rpow4.com? (done 2026-05-07)"
 gate "ALL PRE-FLIGHT VERIFIED"
 
 step "T+0s: stopping Fly app"
@@ -1158,23 +1158,23 @@ step "T+100s: GATE 2 — smoke test via --resolve"
 VPS_IP="$VPS_IP" "$(dirname "$0")/smoke-test.sh"
 gate "Confirm /health, /ledger, TLS all OK"
 
-step "T+125s: DNS FLIP — point api.rpow2.com at VPS"
+step "T+125s: DNS FLIP — point api.rpow4.com at VPS"
 "$(dirname "$0")/dns-flip.sh"
 
 step "T+130s: watching propagation (~60s)"
 for i in 1 2 3 4 5; do
     sleep 12
     echo "$(date -u +%H:%M:%SZ)"
-    dig +short A api.rpow2.com @1.1.1.1
-    dig +short A api.rpow2.com @8.8.8.8
+    dig +short A api.rpow4.com @1.1.1.1
+    dig +short A api.rpow4.com @8.8.8.8
 done
 
 step "T+200s: live curl through real DNS"
-curl -sS -o /dev/null -w "HTTP %{http_code} cert=%{ssl_verify_result} via %{remote_ip}\n" https://api.rpow2.com/health || true
+curl -sS -o /dev/null -w "HTTP %{http_code} cert=%{ssl_verify_result} via %{remote_ip}\n" https://api.rpow4.com/health || true
 
 step "Cutover complete. Monitor for 30 min:"
 echo "  ssh $VPS_HOST 'journalctl -u rpow-server -f'"
-echo "  ssh $VPS_HOST 'tail -f /var/log/nginx/api.rpow2.com.access.log'"
+echo "  ssh $VPS_HOST 'tail -f /var/log/nginx/api.rpow4.com.access.log'"
 ```
 
 - [ ] **Step 8.5: Make scripts executable and commit**
@@ -1273,8 +1273,8 @@ Run all verifications one more time:
 ```
 local$ . /Users/fredkrueger/rpow/.env.vps && \
   ssh ubuntu@15.204.254.192 'systemctl is-active rpow-server && systemctl is-active nginx && systemctl is-active postgresql' && \
-  curl -sS -o /dev/null -w "VPS: HTTP %{http_code}\n" --resolve api.rpow2.com:443:15.204.254.192 https://api.rpow2.com/health && \
-  curl -sS -o /dev/null -w "Fly: HTTP %{http_code}\n" https://api.rpow2.com/health && \
+  curl -sS -o /dev/null -w "VPS: HTTP %{http_code}\n" --resolve api.rpow4.com:443:15.204.254.192 https://api.rpow4.com/health && \
+  curl -sS -o /dev/null -w "Fly: HTTP %{http_code}\n" https://api.rpow4.com/health && \
   echo "VPS_IP=$VPS_IP, VPS_IPV6=$VPS_IPV6"
 ```
 Expected: all systemctl active, both `HTTP 200`, IP env vars set.
@@ -1284,7 +1284,7 @@ Expected: all systemctl active, both `HTTP 200`, IP env vars set.
 In three more shells, run:
 ```
 local-2$ ssh ubuntu@15.204.254.192 'journalctl -u rpow-server -f'
-local-3$ ssh ubuntu@15.204.254.192 'sudo tail -f /var/log/nginx/api.rpow2.com.access.log'
+local-3$ ssh ubuntu@15.204.254.192 'sudo tail -f /var/log/nginx/api.rpow4.com.access.log'
 local-4$ ssh ubuntu@15.204.254.192 'sudo -u postgres psql rpow -c "SELECT count(*) AS users FROM users; SELECT count(*) AS tokens FROM tokens;"'
 ```
 
@@ -1303,10 +1303,10 @@ The script halts at two gates (row-count parity, smoke test). Read the output ca
 After the cutover script completes, run for ~5 minutes:
 ```
 local$ watch -n 5 'echo "=== $(date -u) ==="; \
-  dig +short A api.rpow2.com @1.1.1.1; \
-  dig +short A api.rpow2.com @8.8.8.8; \
-  dig +short A api.rpow2.com @9.9.9.9; \
-  curl -sS -o /dev/null -w "real-DNS curl: HTTP %{http_code} via %{remote_ip}\n" https://api.rpow2.com/health'
+  dig +short A api.rpow4.com @1.1.1.1; \
+  dig +short A api.rpow4.com @8.8.8.8; \
+  dig +short A api.rpow4.com @9.9.9.9; \
+  curl -sS -o /dev/null -w "real-DNS curl: HTTP %{http_code} via %{remote_ip}\n" https://api.rpow4.com/health'
 ```
 Expected: within ~120s, all three resolvers return `15.204.254.192`; the `remote_ip` in the curl is also `15.204.254.192`.
 
@@ -1354,7 +1354,7 @@ If no rollback needed, skip this step entirely.
 
 For ~30 min after cutover:
 - Watch `journalctl -u rpow-server -f` for errors
-- Watch `tail -f /var/log/nginx/api.rpow2.com.error.log` for proxy errors
+- Watch `tail -f /var/log/nginx/api.rpow4.com.error.log` for proxy errors
 - `sudo -u postgres psql rpow -c "SELECT count(*) FROM tokens;"` periodically — should grow as users mint
 - Check Resend dashboard — magic-link emails should still be sending
 
@@ -1409,7 +1409,7 @@ bar "postgres size"
 sudo -u postgres psql -At -c "SELECT pg_size_pretty(pg_database_size('rpow'));" rpow 2>/dev/null | sed 's/^/  rpow db: /'
 
 bar "cert"
-echo | openssl s_client -servername api.rpow2.com -connect 127.0.0.1:443 2>/dev/null \
+echo | openssl s_client -servername api.rpow4.com -connect 127.0.0.1:443 2>/dev/null \
   | openssl x509 -noout -enddate | sed 's/^/  /'
 
 bar "last backup"
@@ -1469,7 +1469,7 @@ Replace the contents of `docs/RUNBOOK.md`:
 - **Server**: OVH VPS at `15.204.254.192`. SSH: `ssh ubuntu@15.204.254.192`
 - **Web SPA**: Netlify, deployed automatically from `main`.
 - **DB**: PostgreSQL 16 on the same VPS, Unix-socket-only.
-- **DNS**: Cloudflare, zone `rpow2.com`.
+- **DNS**: Cloudflare, zone `rpow4.com`.
 - **Email**: Resend.
 - **Backups**: restic → Backblaze B2 bucket `rpow2-ovhbackup`, nightly at 03:00 UTC.
 
@@ -1483,7 +1483,7 @@ ssh ubuntu@15.204.254.192 'sudo /usr/local/bin/rpow-status'
 
 ```bash
 ssh ubuntu@15.204.254.192 'journalctl -u rpow-server -f'
-ssh ubuntu@15.204.254.192 'sudo tail -f /var/log/nginx/api.rpow2.com.access.log'
+ssh ubuntu@15.204.254.192 'sudo tail -f /var/log/nginx/api.rpow4.com.access.log'
 ```
 
 ## Deploys (manual)

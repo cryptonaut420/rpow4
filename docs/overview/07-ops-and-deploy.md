@@ -8,13 +8,15 @@ for ledger correctness.
 The simplest production path is the Docker-based AWS EC2 deploy:
 
 ```bash
-./deploy-aws-ec2.sh --email you@example.com
+./deploy-aws-ec2.sh
 ```
 
-That script creates `ops/aws-ec2/prod.env` on first run, builds the API and SPA
-images, starts Postgres, publishes ports `80` and `443` through
-`nginxproxy/nginx-proxy`, and uses `nginxproxy/acme-companion` for Let's
-Encrypt certificates. The default hosts are `rpow4.com` and `api.rpow4.com`.
+That script installs Docker when needed, creates `ops/aws-ec2/prod.env` on first
+run, appends any missing default env vars on later runs without overwriting
+secrets, builds the API and SPA images, starts Postgres, publishes ports `80`
+and `443` through `nginxproxy/nginx-proxy`, and uses
+`nginxproxy/acme-companion` for Let's Encrypt certificates. The default hosts
+are `rpow4.com` and `api.rpow4.com`.
 
 ## Required Env
 
@@ -25,7 +27,8 @@ Encrypt certificates. The default hosts are `rpow4.com` and `api.rpow4.com`.
 | `RPOW_SIGNING_PRIVATE_KEY_HEX` | Server Ed25519 token/event signing key |
 | `RPOW_SIGNING_PUBLIC_KEY_HEX` | Published verification key |
 | `DIFFICULTY_BITS` | Mining difficulty ceiling/default |
-| `DIFFICULTY_FLOOR` | Minimum accepted mining difficulty |
+| `DIFFICULTY_STEP_BLOCKS` | Blocks between +1-bit difficulty steps |
+| `DIFFICULTY_MAX_BITS` | Maximum mining difficulty |
 | `SIGNUP_DIFFICULTY_BITS` | Anti-spam signup PoW |
 | `MINT_MAX_SUPPLY` | Cap counter ceiling in whole RPOW |
 | `WEB_ORIGIN` | CORS origin for the SPA |

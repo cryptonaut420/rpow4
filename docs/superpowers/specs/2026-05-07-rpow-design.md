@@ -3,17 +3,17 @@
 **Status:** Draft v1
 **Date:** 2026-05-07
 **Owner:** fred
-**Domain:** rpow2.com
+**Domain:** rpow4.com
 **Tagline:** *A tribute to the original RPOW by Hal Finney.*
 
-A faithful modern recreation of Hal Finney's Reusable Proofs of Work (2004), shipped as a public web product at **rpow2.com** with companion iOS/Android app. Users sign in via magic link, mine RPOW tokens by solving hashcash-style proofs of work, and transfer tokens to other users by email. The server is the trusted issuer/registry: it signs tokens, prevents double-spend, and re-issues on transfer.
+A faithful modern recreation of Hal Finney's Reusable Proofs of Work (2004), shipped as a public web product at **rpow4.com** with companion iOS/Android app. Users sign in via magic link, mine RPOW tokens by solving hashcash-style proofs of work, and transfer tokens to other users by email. The server is the trusted issuer/registry: it signs tokens, prevents double-spend, and re-issues on transfer.
 
 The product is positioned explicitly as a tribute. The original RPOW system was Hal Finney's 2004 prototype of a reusable proof-of-work currency — a direct intellectual ancestor of Bitcoin. RPOW2 keeps the protocol's core idea (mine a hashcash POW, exchange it for a server-signed reusable token, transfer by reissuance) and modernizes the surface (modern crypto, email identity, web/mobile clients).
 
 ## Goals
 
 - Stay faithful to the spirit of Finney's RPOW: server-issued, server-signed, server-tracked tokens; reissuance on transfer; transparent ledger.
-- Ship as a real product on a domain like `rpow2.com` with magic-link auth, real email delivery, and a mobile app.
+- Ship as a real product on a domain like `rpow4.com` with magic-link auth, real email delivery, and a mobile app.
 - Retro terminal aesthetic — monospace, no graphics — that signals the project's lineage.
 - Honest difficulty: mining one token takes ~30 s on a current MacBook Pro, ~60–90 s on a phone. Difficulty is uniform across devices.
 
@@ -239,7 +239,7 @@ transfers(
 
 ### Hosting
 
-- Domain: `rpow2.com` (or similar). Cloudflare DNS + TLS.
+- Domain: `rpow4.com` (or similar). Cloudflare DNS + TLS.
 - Server: **Fly.io** single small machine (256 MB) in one region, auto-deployed from `main` via GitHub Actions.
 - DB: **Neon** Postgres free tier; connection string in Fly secrets.
 - Email: **Resend**.
@@ -281,7 +281,7 @@ transfers(
 
 ## Open Questions
 
-- Email sender domain: needs DNS records (SPF, DKIM, DMARC via Resend) configured for `rpow2.com`.
+- Email sender domain: needs DNS records (SPF, DKIM, DMARC via Resend) configured for `rpow4.com`.
 - Native mobile mining module: build a custom Expo native module vs. pulling `react-native-quick-crypto` and wrapping a tight loop in JS — decided in implementation plan based on benchmarks.
 
 ## Out-of-Scope Reminders
