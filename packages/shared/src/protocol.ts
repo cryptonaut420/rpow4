@@ -328,6 +328,10 @@ export interface LedgerResponse {
   user_count: number;
   /** Lifetime count of trollbox messages posted. */
   trollbox_message_count: string;
+  /** Lifetime count of successful faucet claims. */
+  faucet_claim_count: string;
+  /** Lifetime sum of RPOW (base units) dripped from the faucet. */
+  faucet_total_claimed_base_units: string;
 }
 
 export type LeaderboardSort = 'balance' | 'minted';

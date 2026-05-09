@@ -158,6 +158,87 @@ input:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); }
 }
 .app-footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
+/* ── Leaderboard (Stats page) ────────────────────────────────────────────
+ * Single grid that contains every entry's 4 cells (rank, identity,
+ * primary value, secondary stat). Using one grid gives uniform column
+ * alignment across rows on desktop (so all RPOW values right-align in
+ * the same column). On mobile the same 4 cells per entry are repositioned
+ * into a 2-row stack via :nth-child rules — rank spans both rows on the
+ * left, identity on the top, primary + secondary side-by-side below.
+ */
+.leaderboard-header {
+  margin: 0 0 4px 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+.leaderboard-grid {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  column-gap: 16px;
+  row-gap: 2px;
+  align-items: center;
+  font-family: inherit;
+}
+.leaderboard-grid > .lb-rank { color: var(--dim); }
+.leaderboard-grid > .lb-identity {
+  /* Allow this column to actually shrink in a flex/grid context — without
+   * min-width:0 the <code>{label}</code> child would push the column out
+   * to its full width and overflow the viewport on mobile. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaderboard-grid > .lb-primary {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.leaderboard-grid > .lb-secondary {
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+@media (max-width: 600px) {
+  .leaderboard-header { display: none; }
+  .leaderboard-grid {
+    /* 3 columns: rank | flexible content | trailing stat.
+     * Each entry's 4 cells get re-flowed into a 2-row stack via the
+     * nth-child rules below — this keeps the JSX flat (no per-row
+     * wrapper) while still reorganizing for narrow screens. */
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    column-gap: 8px;
+    row-gap: 0;
+  }
+  .leaderboard-grid > * { padding: 1px 0; }
+  /* rank — span both rows of its entry, top-aligned */
+  .leaderboard-grid > :nth-child(4n+1) {
+    grid-column: 1;
+    grid-row: span 2;
+    align-self: start;
+    padding-top: 4px;
+  }
+  /* identity — top row, span columns 2-3 so it can use the full width */
+  .leaderboard-grid > :nth-child(4n+2) {
+    grid-column: 2 / span 2;
+    padding-top: 4px;
+  }
+  /* primary value — second row, column 2, left-aligned (was right on desktop) */
+  .leaderboard-grid > :nth-child(4n+3) {
+    grid-column: 2;
+    text-align: left;
+    color: var(--accent);
+    padding-bottom: 6px;
+    border-bottom: 1px dashed var(--dimmer);
+  }
+  /* secondary stat — second row, column 3 (right side) */
+  .leaderboard-grid > :nth-child(4n+4) {
+    grid-column: 3;
+    padding-bottom: 6px;
+    border-bottom: 1px dashed var(--dimmer);
+  }
+}
+
 .terminal {
   background: var(--bg-2);
   border: 1px solid var(--accent-dim);

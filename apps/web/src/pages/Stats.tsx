@@ -108,6 +108,8 @@ export function StatsPage() {
   const treasuryBalance = formatRpow(ledger.treasury_balance_base_units ?? '0');
   const totalFees = formatRpow(ledger.total_fees_collected_base_units ?? '0');
   const currentFee = formatRpow(ledger.current_fee_base_units ?? '0');
+  const faucetClaimCount = formatNumber(ledger.faucet_claim_count ?? '0');
+  const faucetTotalClaimed = formatRpow(ledger.faucet_total_claimed_base_units ?? '0');
 
   const board = boards[sort];
 
@@ -131,6 +133,9 @@ export function StatsPage() {
   SEND FEE            : ${currentFee} RPOW per transfer
   TOTAL FEES EARNED   : ${totalFees} RPOW
   TREASURY BALANCE    : ${treasuryBalance} RPOW
+
+  FAUCET CLAIMS       : ${faucetClaimCount}
+  FAUCET DRIPPED      : ${faucetTotalClaimed} RPOW
 
   TROLLBOX MESSAGES   : ${formatNumber(ledger.trollbox_message_count)}
 `}
@@ -182,21 +187,12 @@ function LeaderboardTable({
   const headerLabel = SORT_LABELS[sort].primary;
   return (
     <>
-      <pre style={{ margin: '0 0 4px 0', color: 'var(--dim)', fontSize: 12 }}>
+      <pre className="leaderboard-header">
 {sort === 'balance'
   ? `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (RPOW)   MINED`
   : `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (RPOW)   BLOCKS`}
       </pre>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'auto 1fr auto auto',
-          columnGap: 16,
-          rowGap: 2,
-          alignItems: 'center',
-          fontFamily: 'inherit',
-        }}
-      >
+      <div className="leaderboard-grid">
         {entries.map((e) => {
           const label = e.display_name ?? shortPubkey(e.pubkey);
           const primary = sort === 'balance'
@@ -236,13 +232,13 @@ function RowFragment({
 }) {
   return (
     <>
-      <span style={{ color: 'var(--dim)' }}>{rank}</span>
-      <span title={pubkey}>
+      <span className="lb-rank">{rank}</span>
+      <span className="lb-identity" title={pubkey}>
         <code>{label}</code>{' '}
         <CopyButton text={pubkey} label="copy" />
       </span>
-      <span style={{ textAlign: 'right' }}>{primary}</span>
-      <span style={{ color: 'var(--dim)', fontSize: 12 }}>{secondary}</span>
+      <span className="lb-primary">{primary}</span>
+      <span className="lb-secondary">{secondary}</span>
     </>
   );
 }

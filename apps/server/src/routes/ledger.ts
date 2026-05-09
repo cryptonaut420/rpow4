@@ -66,6 +66,8 @@ export async function ledgerRoutes(app: FastifyInstance) {
         user_count: string;
         total_transferred: string;
         trollbox_message_count: string;
+        faucet_claim_count: string;
+        faucet_total_claimed: string;
       }>(
         `SELECT
            COALESCE((SELECT value FROM app_counters WHERE name='minted_supply'), 0)::text AS minted_supply,
@@ -76,7 +78,9 @@ export async function ledgerRoutes(app: FastifyInstance) {
            COALESCE((SELECT value FROM ledger_stats WHERE name='circulating_supply'), 0)::text AS circulating_supply,
            COALESCE((SELECT value FROM ledger_stats WHERE name='user_count'), 0)::text AS user_count,
            COALESCE((SELECT sum(value) FROM ledger_stat_shards WHERE name='total_transferred'), 0)::text AS total_transferred,
-           COALESCE((SELECT value FROM app_counters WHERE name='trollbox_message_count'), 0)::text AS trollbox_message_count`,
+           COALESCE((SELECT value FROM app_counters WHERE name='trollbox_message_count'), 0)::text AS trollbox_message_count,
+           COALESCE((SELECT count(*) FROM faucet_claims), 0)::text AS faucet_claim_count,
+           COALESCE((SELECT sum(amount_base_units) FROM faucet_claims), 0)::text AS faucet_total_claimed`,
         [TREASURY_PUBKEY],
       );
 
@@ -138,6 +142,8 @@ export async function ledgerRoutes(app: FastifyInstance) {
         is_capped: info.isCapped,
         user_count: userCount,
         trollbox_message_count: stats.trollbox_message_count,
+        faucet_claim_count: stats.faucet_claim_count,
+        faucet_total_claimed_base_units: stats.faucet_total_claimed,
       };
       return buildCachedJsonResponse(body);
     });
