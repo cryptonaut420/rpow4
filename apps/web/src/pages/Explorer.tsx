@@ -12,7 +12,7 @@ import type {
   ExplorerAccountResponse,
   ExplorerAccountEvent,
 } from '@rpow/shared';
-import { formatRpow } from '../lib/format.js';
+import { formatRpow, formatCount } from '../lib/format.js';
 
 const PAGE_SIZE = 50;
 
@@ -253,7 +253,7 @@ function FeedRow({ event: ev }: { event: ExplorerEvent }) {
             fee: {formatRpow(ev.fee_base_units)} RPOW
           </span>
         )}
-        <span style={{ color: 'var(--dim)', fontSize: 11 }}>#{ev.event_seq}</span>
+        <span style={{ color: 'var(--dim)', fontSize: 11 }}>#{formatCount(ev.event_seq)}</span>
       </div>
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 12, color: 'var(--dim)' }}>
@@ -322,7 +322,7 @@ function TxView({ id }: { id: string }) {
        * detail page on click. */}
       <pre style={{ margin: 0, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
         {`TYPE:      ${tx.type.toUpperCase()}\n`}
-        {`BLOCK:     #${tx.event_seq}\n`}
+        {`BLOCK:     #${formatCount(tx.event_seq)}\n`}
         {`TIME:      ${formatFullTs(tx.at)}\n`}
         {`\n`}
         {`AMOUNT:    ${isMint ? '+' : ''}${formatRpow(tx.amount_base_units)} RPOW\n`}
@@ -426,10 +426,10 @@ function AccountView({ pubkey }: { pubkey: string }) {
         `PUBKEY:    ${pubkey}`,
         ``,
         `BALANCE:   ${formatRpow(account.spendable_base_units)} RPOW (spendable)`,
-        `MINED:     ${formatRpow(account.minted_base_units)} RPOW  (${account.blocks_mined} block${account.blocks_mined === '1' ? '' : 's'})`,
+        `MINED:     ${formatRpow(account.minted_base_units)} RPOW  (${formatCount(account.blocks_mined)} block${account.blocks_mined === '1' ? '' : 's'})`,
         `SENT:      ${formatRpow(account.sent_base_units)} RPOW`,
         `RECEIVED:  ${formatRpow(account.received_base_units)} RPOW`,
-        `TXS:       ${account.total_count}`,
+        `TXS:       ${formatCount(account.total_count)}`,
       ].filter(Boolean).join('\n')}</pre>
 
       <CopyButton text={pubkey} label="copy pubkey" />
@@ -482,7 +482,7 @@ function AccountEventRow({ event: e }: { event: ExplorerAccountEvent }) {
         {e.fee_base_units && e.fee_base_units !== '0' && (
           <span style={{ color: 'var(--dim)', fontSize: 11 }}>fee: {formatRpow(e.fee_base_units)} RPOW</span>
         )}
-        <span style={{ color: 'var(--dim)', fontSize: 11 }}>#{e.event_seq}</span>
+        <span style={{ color: 'var(--dim)', fontSize: 11 }}>#{formatCount(e.event_seq)}</span>
       </div>
 
       {cpLabel && e.counterparty_pubkey && (

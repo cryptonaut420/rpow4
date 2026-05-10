@@ -5,7 +5,7 @@ import { useWallet } from '../wallet/WalletProvider.js';
 import { MiningVisualizer } from './MiningVisualizer.js';
 import { Panel } from './Panel.js';
 import { CopyButton } from './CopyButton.js';
-import { formatRpow } from '../lib/format.js';
+import { formatRpow, formatCount } from '../lib/format.js';
 import {
   expectedSecondsAt,
   formatDuration,
@@ -236,13 +236,13 @@ function ExpandedDetails(props: ExpandedDetailsProps) {
     const eta = props.bench
       ? formatDuration(expectedSecondsAt(props.ledger.current_difficulty_bits, props.bench.hps))
       : '—';
-    rewardBlock = `  BLOCK HEIGHT      : ${props.ledger.block_height}
+    rewardBlock = `  BLOCK HEIGHT      : ${formatCount(props.ledger.block_height)}
   CURRENT REWARD    : ${currentReward} RPOW per solution  (halving #${props.ledger.halving_index})
   CURRENT DIFFICULTY: ${props.ledger.current_difficulty_bits} trailing zero bits
   YOUR HASHRATE     : ${yourRate}  (~${eta} per solution on this CPU)
-  NEXT HALVING AT   : block ${props.ledger.next_halving_at_block}  (${props.ledger.blocks_to_next_halving} to go)
+  NEXT HALVING AT   : block ${formatCount(props.ledger.next_halving_at_block)}  (${formatCount(props.ledger.blocks_to_next_halving)} to go)
   NEXT REWARD       : ${props.ledger.is_capped ? 'CAPPED' : `${nextReward} RPOW`}
-  NEXT DIFFICULTY   : +1 bit at block ${props.ledger.next_difficulty_at_block}  (${props.ledger.blocks_to_next_difficulty_step} to go)
+  NEXT DIFFICULTY   : +1 bit at block ${formatCount(props.ledger.next_difficulty_at_block)}  (${formatCount(props.ledger.blocks_to_next_difficulty_step)} to go)
 
 `;
   }
@@ -255,11 +255,11 @@ function ExpandedDetails(props: ExpandedDetailsProps) {
   TOTAL MINTED      : ${formatRpow(props.meMinted)} RPOW
 
 ${rewardBlock}  TARGET            : ${props.target || '--'} trailing zero bits
-  HASHES (session)  : ${Number(props.totalHashes).toLocaleString()}
+  HASHES (session)  : ${formatCount(props.totalHashes)}
   RATE              : ${props.fmtRate}
   ELAPSED           : ${props.fmtElapsed}
   STATUS            : ${props.status.toUpperCase()}
-  MINED THIS RUN    : ${props.sessionMinted}${props.sessionRewardLabel}${props.error ? `\n  ERROR             : ${props.error}` : ''}
+  MINED THIS RUN    : ${formatCount(props.sessionMinted)}${props.sessionRewardLabel}${props.error ? `\n  ERROR             : ${props.error}` : ''}
 `}
         </pre>
         {props.lastTokenId && (
