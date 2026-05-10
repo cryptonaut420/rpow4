@@ -55,34 +55,48 @@ export default function App() {
           <pre style={{ margin: 0 }}>{HEADER}</pre>
           <SupplyBar />
           <div className="tagline">a modern tribute to a tribute to the original rpow by hal finney</div>
-          <nav style={{ marginTop: 8 }}>
-            <NavLink to="/">[ wallet ]</NavLink>{' '}
-            <NavLink to="/send">[ send ]</NavLink>{' '}
-            <NavLink to="/claim">[ claim ]</NavLink>{' '}
-            <NavLink to="/activity">[ activity ]</NavLink>{' '}
-            <NavLink to="/stats">[ stats ]</NavLink>{' '}
-            <NavLink to="/explorer">[ explorer ]</NavLink>{' '}
-            <NavLink to="/faucet">[ faucet ]</NavLink>{' '}
-            <NavLink to="/trollbox">[ trollbox ]</NavLink>{' '}
-            <NavLink to="/ledger">[ about ]</NavLink>{' '}
-            <NavLink to="/history">[ history ]</NavLink>{' '}
-            <NavLink to="/docs">[ docs ]</NavLink>{' '}
-            <NavLink to="/ecosystem">[ ecosystem ]</NavLink>{' '}
-            <a href="https://rpowmarket.com/" target="_blank" rel="noopener noreferrer">[ predict ]</a>{' '}
+          <nav className="primary-nav" aria-label="primary">
+            <div className="nav-group">
+              <span className="nav-group-label">wallet</span>
+              <NavLink to="/">[ home ]</NavLink>
+              <NavLink to="/send">[ send ]</NavLink>
+              <NavLink to="/claim">[ claim ]</NavLink>
+              <NavLink to="/activity">[ activity ]</NavLink>
+            </div>
+            <div className="nav-group">
+              <span className="nav-group-label">network</span>
+              <NavLink to="/stats">[ stats ]</NavLink>
+              <NavLink to="/explorer">[ explorer ]</NavLink>
+              <NavLink to="/faucet">[ faucet ]</NavLink>
+              <NavLink to="/trollbox">[ trollbox ]</NavLink>
+            </div>
+            <div className="nav-group">
+              <span className="nav-group-label">info</span>
+              <NavLink to="/ledger">[ about ]</NavLink>
+              <NavLink to="/history">[ history ]</NavLink>
+              <NavLink to="/docs">[ docs ]</NavLink>
+              <NavLink to="/ecosystem">[ ecosystem ]</NavLink>
+            </div>
+            <div className="nav-group">
+              <span className="nav-group-label">links</span>
+              <a href="https://rpowmarket.com/" target="_blank" rel="noopener noreferrer">[ predict ↗ ]</a>
+            </div>
+          </nav>
+          <div className="utility-bar" aria-label="session controls">
             {signedIn ? (
               <>
-                <span style={{ color: 'var(--dim)' }} title={me!.pubkey}>
-                  · <code>{me!.display_name ?? shortPubkey(me!.pubkey)}</code>
-                </span>{' '}
-                <CopyButton text={me!.pubkey} title="copy pubkey" />{' '}
+                <span className="utility-user" title={me!.pubkey}>
+                  <code>{me!.display_name ?? shortPubkey(me!.pubkey)}</code>
+                </span>
+                <CopyButton text={me!.pubkey} title="copy pubkey" />
                 <button onClick={logout} title="end session and lock wallet (encrypted backup is preserved)">[ logout ]</button>
               </>
             ) : (
               <NavLink to="/login">[ login ]</NavLink>
             )}
-            {' · '}
+            <span className="utility-sep">·</span>
             <button onClick={() => setTheme(nextTheme(theme))} title="cycle theme">[ theme: {theme} ]</button>
-          </nav>
+          </div>
         </header>
         <main>
           <Routes>

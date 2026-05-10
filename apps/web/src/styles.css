@@ -158,6 +158,77 @@ input:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); }
 }
 .app-footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
+/* ── Primary nav (header) ────────────────────────────────────────────────
+ * Grouped sections with a quiet uppercase section label on the left of
+ * each row; the bracketed link style is unchanged from the original
+ * single-row nav so the page still reads "terminal".
+ *
+ *   wallet  · [ home ] [ send ] [ claim ] [ activity ]
+ *   network · [ stats ] [ explorer ] [ faucet ] [ trollbox ]
+ *   info    · [ about ] [ history ] [ docs ] [ ecosystem ]
+ *   links   · [ predict ↗ ]
+ *
+ * The utility bar (user / theme) sits below on its own line, separated
+ * by a dashed rule so session controls don't compete with navigation.
+ */
+.primary-nav {
+  margin: 12px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.nav-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  line-height: 1.7;
+}
+.nav-group-label {
+  color: var(--dim);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  /* Reserve the same column on every row so brackets line up. The label
+   * is ~7 chars at most ("network") + the trailing dot from ::after. */
+  min-width: 70px;
+  flex-shrink: 0;
+  user-select: none;
+}
+.nav-group-label::after {
+  content: ' ·';
+  color: var(--dimmer);
+  margin-left: 4px;
+}
+.nav-group a {
+  /* Defang the global dotted-underline so the bracketed link doesn't read
+   * like flowing prose; active/hover still flips color via NavLink. */
+  border-bottom: none;
+  color: var(--fg);
+  opacity: 0.7;
+  transition: opacity 100ms, color 100ms;
+}
+.nav-group a:hover,
+.nav-group a.active { opacity: 1; color: var(--accent); }
+
+/* Utility bar — quieter affordances for session + theme. Dashed top rule
+ * splits navigation from controls. */
+.utility-bar {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--dimmer);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  font-size: 12px;
+}
+.utility-bar a { border-bottom: none; opacity: 0.85; }
+.utility-bar a:hover { opacity: 1; color: var(--accent); }
+.utility-bar button { font-size: 11px; padding: 2px 10px; }
+.utility-user code { color: var(--accent); }
+.utility-sep { color: var(--dimmer); }
+
 /* ── Ecosystem page ──────────────────────────────────────────────────────
  * Each entry stacks the link + label on one line and the description on the
  * next, with a leading > bullet to keep the terminal feel. The list also
@@ -553,6 +624,28 @@ main { margin-top: 4px; }
     font-size: 12px;
     line-height: 1.9;
   }
+  /* On phones the section label collapses to its own row above the
+   * bracketed links — preserves the grouping cue without eating column
+   * width that the actual links need. */
+  .nav-group {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+    margin-bottom: 4px;
+    line-height: 1.55;
+  }
+  .nav-group-label {
+    min-width: 0;
+    font-size: 9px;
+    margin-bottom: -2px;
+  }
+  .nav-group > :not(.nav-group-label) {
+    /* Pull the bracketed links into their own wrapping flex row. */
+    display: inline-block;
+    margin-right: 8px;
+  }
+  .utility-bar { font-size: 11px; }
+  .utility-bar button { font-size: 11px; }
   /* SupplyBar's bottom stats put two long phrases on one row — let them
    * stack on mobile so they don't get cropped or scroll horizontally. */
   .supply-stats { flex-direction: column; gap: 2px; align-items: flex-start; }
