@@ -41,8 +41,12 @@ export function LedgerPage() {
 `}
         </pre>
         <div style={{ marginTop: 12 }} className="tagline">
-          a modern tribute to a tribute to the original rpow by hal finney —
-          <a href="https://nakamotoinstitute.org/finney/rpow/" target="_blank" rel="noreferrer"> finney's announcement</a>
+          a modern tribute building on{' '}
+          <a href="https://github.com/frkrueger/rpow" target="_blank" rel="noreferrer">rpow2</a>
+          {' '}and{' '}
+          <a href="https://github.com/arben777/rpow3" target="_blank" rel="noreferrer">rpow3</a>,
+          tracing back to{' '}
+          <a href="https://nakamotoinstitute.org/finney/rpow/" target="_blank" rel="noreferrer">hal finney's original rpow</a>.
         </div>
       </Panel>
 
@@ -67,6 +71,12 @@ export function LedgerPage() {
   Bitcoin solved all three: decentralized consensus via PoW mining tied
   to a chain, automatic difficulty adjustment, and a fixed 21M supply
   cap.
+
+  Lineage: this project builds on community ports that came before.
+  RPOW2 (github.com/frkrueger/rpow) was the first modern web-app
+  revival of Hal's idea and is the direct ancestor of this project;
+  RPOW3 (github.com/arben777/rpow3) continued that lineage. RPOW4
+  inherits from both — see the [ ecosystem ] page for live links.
 
   RPOW4 is a modern tribute to the spirit of Finney's original. No IBM
   4758 — Ed25519 signatures, BIP-39 / SLIP-0010 wallets, every
