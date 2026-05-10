@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import type { MeResponse } from '@rpow/shared';
@@ -10,6 +10,12 @@ import type { MeResponse } from '@rpow/shared';
  * so background polling (e.g. mid-mining) doesn't make the page flicker
  * to a "loading..." placeholder every refresh.
  *
+ * `refresh` is a stable reference (useCallback with empty deps) so that
+ * any caller passing it through `useEffect`/`useCallback` deps doesn't
+ * force a re-run on every render. Mining provider's pool-stats polling
+ * effect was hitting an infinite loop because it transitively depended
+ * on this; keeping `refresh` stable is the canonical fix.
+ *
  * The hook is wallet-aware so every consumer (App nav, MiningProvider,
  * page-local copies) automatically picks up a fresh identity the moment
  * the wallet flips to 'unlocked' — no remount / page refresh required.
@@ -18,9 +24,9 @@ export function useMe(): { me: MeResponse | null; loading: boolean; refresh: () 
   const wallet = useWallet();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const refresh = async (): Promise<void> => {
+  const refresh = useCallback(async (): Promise<void> => {
     try { setMe(await api.me()); } catch { setMe(null); }
-  };
+  }, []);
   useEffect(() => {
     if (wallet.status === 'loading') return;
     if (wallet.status === 'unlocked') {
@@ -29,6 +35,6 @@ export function useMe(): { me: MeResponse | null; loading: boolean; refresh: () 
       setMe(null);
       setLoading(false);
     }
-  }, [wallet.status]);
+  }, [wallet.status, refresh]);
   return { me, loading, refresh };
 }

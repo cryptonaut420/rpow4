@@ -29,6 +29,14 @@ import {
 
 const TICK_MS = 250;
 
+function formatHashrateCompact(hps: number): string {
+  if (!Number.isFinite(hps) || hps <= 0) return '—';
+  if (hps >= 1e9) return `${(hps / 1e9).toFixed(2)} GH/s`;
+  if (hps >= 1e6) return `${(hps / 1e6).toFixed(2)} MH/s`;
+  if (hps >= 1e3) return `${(hps / 1e3).toFixed(1)} KH/s`;
+  return `${Math.round(hps)} H/s`;
+}
+
 export function MiningBar() {
   const wallet = useWallet();
   const mining = useMining();
@@ -91,6 +99,8 @@ export function MiningBar() {
   // Live ref reads — captured per render so JSX doesn't re-touch the refs.
   const totalHashes = mining.totalHashesRef.current + mining.currentCycleHashesRef.current;
   const sessionMinted = mining.sessionMintedRef.current;
+  const sessionShares = mining.sessionSharesRef.current;
+  const sessionPoolPayout = mining.sessionPoolPayoutBaseUnitsRef.current;
   const lastTokenId = mining.lastTokenIdRef.current;
 
   const endTime = running
@@ -134,12 +144,16 @@ export function MiningBar() {
               target={mining.target ?? mining.ledger?.current_difficulty_bits ?? 0}
               totalHashes={totalHashes}
               sessionMinted={sessionMinted}
+              sessionShares={sessionShares}
+              sessionPoolPayout={sessionPoolPayout}
               sessionRewardLabel={sessionRewardLabel}
               fmtElapsed={fmtElapsed()}
               fmtRate={fmtRate()}
               meBalance={me.balance_base_units}
               meMinted={me.minted_base_units}
               lastTokenId={lastTokenId}
+              mode={mining.mode}
+              poolStats={mining.poolStats}
             />
           </div>
         )}
@@ -151,15 +165,51 @@ export function MiningBar() {
             {running ? 'MINING' : mining.status === 'error' ? 'STOPPED' : 'IDLE'}
           </span>
 
+          <button
+            type="button"
+            className={`mining-mode-pill is-${mining.mode}`}
+            onClick={() => mining.setMode(mining.mode === 'pool' ? 'solo' : 'pool')}
+            title={
+              running
+                ? 'switching modes will stop the current run; press [ MINE ] again to resume in the new mode'
+                : mining.mode === 'pool'
+                  ? 'pool mode — share rewards with other miners (2% fee). click to switch to solo.'
+                  : 'solo mode — keep 100% of any block you find. click to join the pool.'
+            }
+          >
+            MODE: <strong>{mining.mode === 'pool' ? 'POOL' : 'SOLO'}</strong>
+          </button>
+
           <span className="mining-bar-balance" title="your spendable balance">
             <span className="mining-bar-label-text">BALANCE</span>{' '}
             <strong>{formatRpow(me.balance_base_units)}</strong> RPOW
           </span>
 
-          {running && (
+          {running && mining.mode === 'solo' && (
             <span className="mining-bar-stat" title="elapsed time / minted this run">
               <span className="mining-bar-label-text">RUN</span>{' '}
               {fmtElapsed()} · {sessionMinted}{sessionRewardLabel}
+            </span>
+          )}
+
+          {running && mining.mode === 'pool' && (
+            <span
+              className="mining-bar-stat"
+              title="this run: elapsed time · shares submitted · cumulative pool payout"
+            >
+              <span className="mining-bar-label-text">RUN</span>{' '}
+              {fmtElapsed()} · {sessionShares} share{sessionShares === 1 ? '' : 's'}
+              {sessionPoolPayout > 0n
+                ? ` · +${formatRpow(sessionPoolPayout)} RPOW`
+                : ''}
+            </span>
+          )}
+
+          {mining.mode === 'pool' && mining.poolStats && (
+            <span className="mining-bar-stat" title="active pool members and aggregate hashrate">
+              <span className="mining-bar-label-text">POOL</span>{' '}
+              {mining.poolStats.active_miners} miners ·{' '}
+              {formatHashrateCompact(mining.poolStats.pool_hashrate_hps)}
             </span>
           )}
 
@@ -219,12 +269,16 @@ interface ExpandedDetailsProps {
   target: number;
   totalHashes: bigint;
   sessionMinted: number;
+  sessionShares: number;
+  sessionPoolPayout: bigint;
   sessionRewardLabel: string;
   fmtElapsed: string;
   fmtRate: string;
   meBalance: string;
   meMinted: string;
   lastTokenId: string;
+  mode: ReturnType<typeof useMining>['mode'];
+  poolStats: ReturnType<typeof useMining>['poolStats'];
 }
 
 function ExpandedDetails(props: ExpandedDetailsProps) {
@@ -247,19 +301,79 @@ function ExpandedDetails(props: ExpandedDetailsProps) {
 `;
   }
 
+  // Pool block — only meaningful when in pool mode + we have a stats snapshot.
+  let poolBlock = '';
+  if (props.mode === 'pool' && props.poolStats) {
+    const ps = props.poolStats;
+    const cur = ps.current_round;
+    const youShares = cur ? cur.your_shares : '0';
+    const totalShares = cur ? cur.total_shares : '0';
+    const ifFinder = cur ? formatRpow(cur.estimated_finder_payout_base_units) : '—';
+    const ifPro = cur ? formatRpow(cur.estimated_pro_rata_payout_base_units) : '—';
+    poolBlock = `  POOL HASHRATE     : ${formatHashrateCompact(ps.pool_hashrate_hps)}  (${ps.active_miners} active miner${ps.active_miners === 1 ? '' : 's'})
+  POOL FEE          : ${(ps.pool_fee_bps / 100).toFixed(2)}% to treasury
+  FINDER BONUS      : ${(ps.finder_bps / 100).toFixed(2)}% of net to the lucky miner
+  CURRENT ROUND     : #${cur?.id ?? '—'}  ${formatCount(totalShares)} share${totalShares === '1' ? '' : 's'} total
+  YOUR SHARES       : ${formatCount(youShares)}
+  EST. IF YOU FIND  : +${ifFinder} RPOW
+  EST. POOL PAYOUT  : +${ifPro} RPOW
+
+`;
+  }
   return (
     <>
-      <Panel title="MINE">
+      {props.mode === 'pool' && (
+        <Panel title="HOW POOL MINING WORKS">
+          <div style={{ color: 'var(--dim)', fontSize: 12, lineHeight: 1.6 }}>
+            Your browser submits "shares" — partial proofs-of-work that meet
+            a lower-difficulty target than the network requires
+            ({props.poolStats?.share_difficulty_bits ?? '—'} trailing zero
+            bits vs. {props.poolStats?.network_difficulty_bits ?? '—'} for a
+            real block). Every accepted share counts toward the current
+            round's pro-rata pool.
+            <br /><br />
+            When any pool member's share <em style={{ color: 'var(--fg)' }}>also</em>{' '}
+            clears the network target, the round closes and the gross
+            block reward is split:
+            <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
+              <li>
+                <strong style={{ color: 'var(--fg)' }}>2%</strong> to the
+                treasury (funds the faucet)
+              </li>
+              <li>
+                <strong style={{ color: 'var(--accent)' }}>25%</strong>{' '}
+                of the post-fee remainder to the lucky finder as a flat
+                bonus
+              </li>
+              <li>
+                The remaining{' '}
+                <strong style={{ color: 'var(--accent)' }}>75%</strong>{' '}
+                split pro-rata across all NON-finder shares from the
+                round
+              </li>
+            </ul>
+            You earn frequently and predictably regardless of who finds
+            the block, with less variance than solo. The trade-off is
+            the 2% treasury haircut and the smaller finder slice on
+            wins. Solo mode keeps 100% but at high difficulty can mean
+            long dry spells. <strong style={{ color: 'var(--fg)' }}>Toggle
+            modes any time</strong> from the MODE pill in the bar; your
+            choice is remembered for future sessions.
+          </div>
+        </Panel>
+      )}
+
+      <Panel title={props.mode === 'pool' ? 'MINE · POOL' : 'MINE · SOLO'}>
         <pre style={{ margin: 0 }}>
 {`  BALANCE           : ${formatRpow(props.meBalance)} RPOW
   TOTAL MINTED      : ${formatRpow(props.meMinted)} RPOW
 
-${rewardBlock}  TARGET            : ${props.target || '--'} trailing zero bits
+${rewardBlock}${poolBlock}  TARGET            : ${props.target || '--'} trailing zero bits
   HASHES (session)  : ${formatCount(props.totalHashes)}
   RATE              : ${props.fmtRate}
   ELAPSED           : ${props.fmtElapsed}
   STATUS            : ${props.status.toUpperCase()}
-  MINED THIS RUN    : ${formatCount(props.sessionMinted)}${props.sessionRewardLabel}${props.error ? `\n  ERROR             : ${props.error}` : ''}
+  ${props.mode === 'pool' ? 'BLOCKS THIS RUN ' : 'MINED THIS RUN  '}  : ${formatCount(props.sessionMinted)}${props.sessionRewardLabel}${props.mode === 'pool' ? `\n  SHARES THIS RUN   : ${formatCount(props.sessionShares)}\n  POOL EARNED       : +${formatRpow(props.sessionPoolPayout)} RPOW` : ''}${props.error ? `\n  ERROR             : ${props.error}` : ''}
 `}
         </pre>
         {props.lastTokenId && (
@@ -268,6 +382,19 @@ ${rewardBlock}  TARGET            : ${props.target || '--'} trailing zero bits
           </div>
         )}
       </Panel>
+
+      {props.mode === 'pool' && props.poolStats && props.poolStats.recent_payouts.length > 0 && (
+        <Panel title="POOL ROUND HISTORY">
+          <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
+{props.poolStats.recent_payouts.map((p) => {
+  const at = new Date(p.ended_at).toISOString().slice(11, 19);
+  const finder = p.finder_display_name ? `@${p.finder_display_name}` : `${p.finder_pubkey.slice(0, 6)}…${p.finder_pubkey.slice(-4)}`;
+  const yours = p.your_payout_base_units ? `  (you: +${formatRpow(p.your_payout_base_units)})` : '';
+  return `  ${at}  #${p.round_id}  ${formatRpow(p.reward_base_units)} RPOW  · ${p.participant_count} miner${p.participant_count === 1 ? '' : 's'}  · won by ${finder}${yours}`;
+}).join('\n')}
+          </pre>
+        </Panel>
+      )}
 
       <Panel title="MINING ORIGINS">
         <div style={{ color: 'var(--dim)', fontSize: 12, lineHeight: 1.6 }}>

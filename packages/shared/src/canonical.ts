@@ -17,7 +17,8 @@ export type CanonicalAction =
   | 'account.signup'
   | 'trollbox.post'
   | 'claim.create'
-  | 'claim.cancel';
+  | 'claim.cancel'
+  | 'pool.share';
 
 export const CANONICAL_VERSION = 'v1';
 

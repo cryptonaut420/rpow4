@@ -1,0 +1,702 @@
+import type { FastifyInstance } from 'fastify';
+import type { PoolClient } from 'pg';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
+import { z } from 'zod';
+import { TREASURY_PUBKEY, trailingZeroBits, verifyCanonical } from '@rpow/shared';
+import { withTxRetry } from '../db.js';
+import { signTokenPayload } from '../signing.js';
+import {
+  currentRewardForBlock,
+  difficultyForBlock,
+  BASE_UNITS_PER_RPOW,
+} from '../schedule.js';
+import {
+  macPoolChallenge,
+  type PoolChallengeEnvelope,
+} from '../pool-challenge.js';
+import { macsEqual } from '../mint-challenge.js';
+import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
+
+const ShareBody = z.object({
+  challenge_id: z.string().uuid(),
+  nonce_prefix: z.string().regex(/^[0-9a-f]{32}$/),
+  network_difficulty_bits: z.number().int().min(4).max(64),
+  share_difficulty_bits: z.number().int().min(4).max(64),
+  issued_at: z.string(),
+  expires_at: z.string(),
+  challenge_mac: z.string().regex(/^[0-9a-f]{64}$/),
+  solution_nonce: z.string().regex(/^\d{1,20}$/),
+  client_signature_base58: z.string().min(64).max(96),
+});
+
+interface OpenRoundRow {
+  id: string;
+  started_at: Date;
+}
+
+async function readOpenRound(c: PoolClient): Promise<OpenRoundRow | null> {
+  const r = await c.query<OpenRoundRow>(
+    `SELECT id::text AS id, started_at FROM pool_rounds WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1`,
+  );
+  return r.rows[0] ?? null;
+}
+
+export async function poolRoutes(app: FastifyInstance) {
+  // ---- POST /pool/challenge -------------------------------------------------
+  // Auth: session cookie. Issues an envelope MAC'd over (challenge_id,
+  // user_pubkey, nonce_prefix, network_bits, share_bits, issued_at,
+  // expires_at, domain). Same caller can hold many concurrent challenges
+  // (worker rotates them), but each challenge_id is single-use for any
+  // given (challenge_id, nonce) pair.
+  app.post('/pool/challenge', async (req, reply) => {
+    if (!app.config.poolEnabled) {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
+    }
+    const s = app.readSession(req);
+    if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
+
+    const { rows } = await app.pool.query<{ name: string; value: string }>(
+      `SELECT name, value::text AS value FROM app_counters WHERE name IN ('minted_supply','block_height')`,
+    );
+    let mintedBaseUnits = 0n;
+    let blockHeight = 0n;
+    for (const r of rows) {
+      if (r.name === 'minted_supply') mintedBaseUnits = BigInt(r.value);
+      else if (r.name === 'block_height') blockHeight = BigInt(r.value);
+    }
+    const capBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
+    if (mintedBaseUnits >= capBaseUnits) {
+      return reply.code(410).send({ error: 'SUPPLY_EXHAUSTED', message: '21M cap reached' });
+    }
+
+    const networkBits = difficultyForBlock(blockHeight, {
+      difficultyStartBits: app.config.difficultyStartBits,
+      difficultyStepBlocks: app.config.difficultyStepBlocks,
+      difficultyMaxBits: app.config.difficultyMaxBits,
+    });
+    const shareBits = Math.max(
+      app.config.poolShareMinBits,
+      networkBits - app.config.poolShareBitsOffset,
+    );
+
+    const id = randomUUID();
+    const noncePrefix = randomBytes(16).toString('hex');
+    const now = Date.now();
+    const envelope: PoolChallengeEnvelope = {
+      challenge_id: id,
+      user_pubkey: s.pubkey,
+      nonce_prefix: noncePrefix,
+      network_difficulty_bits: networkBits,
+      share_difficulty_bits: shareBits,
+      issued_at: new Date(now).toISOString(),
+      expires_at: new Date(now + app.config.poolChallengeTtlSeconds * 1000).toISOString(),
+      domain: 'rpow4.pool',
+    };
+    return {
+      challenge_id: envelope.challenge_id,
+      user_pubkey: envelope.user_pubkey,
+      nonce_prefix: envelope.nonce_prefix,
+      network_difficulty_bits: envelope.network_difficulty_bits,
+      share_difficulty_bits: envelope.share_difficulty_bits,
+      issued_at: envelope.issued_at,
+      expires_at: envelope.expires_at,
+      challenge_mac: macPoolChallenge(envelope, app.config.sessionSecret),
+    };
+  });
+
+  // ---- POST /pool/share -----------------------------------------------------
+  // Submit a single share. Validates MAC + signature + recomputed hash +
+  // share difficulty. If the same hash also clears network difficulty,
+  // closes the current round and fans out per-miner payouts inside the
+  // same transaction.
+  app.post('/pool/share', async (req, reply) => {
+    if (!app.config.poolEnabled) {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
+    }
+    const s = app.readSession(req);
+    if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
+
+    const parsed = ShareBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
+    }
+
+    // Per-share signature: client signs (challenge_id, solution_nonce).
+    // Cheap (Ed25519 verify is microseconds) and provides authentic
+    // attribution even if the session cookie is leaky.
+    const sigOk = verifyCanonical(
+      'pool.share',
+      { challenge_id: parsed.data.challenge_id, solution_nonce: parsed.data.solution_nonce },
+      parsed.data.client_signature_base58,
+      s.pubkey,
+    );
+    if (!sigOk) {
+      return reply.code(401).send({ error: 'INVALID_SIGNATURE', message: 'share signature does not verify' });
+    }
+
+    const envelope: PoolChallengeEnvelope = {
+      challenge_id: parsed.data.challenge_id,
+      user_pubkey: s.pubkey,
+      nonce_prefix: parsed.data.nonce_prefix,
+      network_difficulty_bits: parsed.data.network_difficulty_bits,
+      share_difficulty_bits: parsed.data.share_difficulty_bits,
+      issued_at: parsed.data.issued_at,
+      expires_at: parsed.data.expires_at,
+      domain: 'rpow4.pool',
+    };
+    const expectedMac = macPoolChallenge(envelope, app.config.sessionSecret);
+    if (!macsEqual(expectedMac, parsed.data.challenge_mac)) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'challenge mac mismatch' });
+    }
+
+    const expiresAtMs = Date.parse(parsed.data.expires_at);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs < Date.now()) {
+      return reply.code(410).send({ error: 'CHALLENGE_EXPIRED', message: 'challenge expired' });
+    }
+
+    const nonce = BigInt(parsed.data.solution_nonce);
+    const noncePrefixBuf = Buffer.from(parsed.data.nonce_prefix, 'hex');
+    const zeros = recomputeHashTrailingZeros(noncePrefixBuf, nonce);
+    if (zeros < parsed.data.share_difficulty_bits) {
+      return reply.code(400).send({ error: 'INVALID_SHARE', message: 'hash does not meet share difficulty' });
+    }
+    const isBlock = zeros >= parsed.data.network_difficulty_bits;
+
+    const result = await withTxRetry(
+      app.pool,
+      async (c) => {
+        const round = await readOpenRound(c);
+        if (!round) {
+          // Should never happen: migration seeds an open round and every
+          // round-close opens a fresh one in the same TX. If we hit this
+          // it's a system invariant violation; surface as 500.
+          throw new Error('no open pool round');
+        }
+        // Capture as a non-null local so TS narrowing reaches into
+        // closures (the payout helper below).
+        const roundId: string = round.id;
+
+        // Insert the share. Unique index on (challenge_id, nonce_text)
+        // catches replays.
+        try {
+          await c.query(
+            `INSERT INTO pool_shares(round_id, pubkey, challenge_id, nonce_text, zeros)
+             VALUES($1::bigint, $2, $3, $4, $5)`,
+            [roundId, s.pubkey, parsed.data.challenge_id, parsed.data.solution_nonce, zeros],
+          );
+        } catch (e) {
+          if ((e as { code?: string }).code === '23505') {
+            return { error: 'DUPLICATE_SHARE' as const, message: 'share already submitted' };
+          }
+          throw e;
+        }
+
+        await c.query(
+          `UPDATE pool_rounds SET total_shares = total_shares + 1 WHERE id = $1::bigint`,
+          [roundId],
+        );
+
+        if (!isBlock) {
+          return {
+            ok: true as const,
+            share_id: 'pending',
+            zeros,
+            round_id: roundId,
+            block_won: false,
+          };
+        }
+
+        // Block win path: serialize all closeouts on a single advisory
+        // lock so two simultaneous winning shares can't both close the
+        // same round.
+        await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_pool_round_close'))`);
+        const stillOpen = await c.query<{ id: string }>(
+          `SELECT id::text AS id FROM pool_rounds WHERE id = $1::bigint AND ended_at IS NULL FOR UPDATE`,
+          [roundId],
+        );
+        if (stillOpen.rows.length === 0) {
+          // Another share closed this round between insert and lock. Our
+          // share is already counted; treat as a regular accepted share.
+          return {
+            ok: true as const,
+            share_id: 'pending',
+            zeros,
+            round_id: roundId,
+            block_won: false,
+          };
+        }
+
+        // Read counters for the mint, identical guards to /mint.
+        const counterRows = (await c.query<{ name: string; value: string }>(
+          `SELECT name, value::text AS value FROM app_counters WHERE name IN ('minted_supply','block_height')`,
+        )).rows;
+        let mintedBaseUnits = 0n;
+        let blockHeight = 0n;
+        for (const r of counterRows) {
+          if (r.name === 'minted_supply') mintedBaseUnits = BigInt(r.value);
+          else if (r.name === 'block_height') blockHeight = BigInt(r.value);
+        }
+
+        const scheduleOpts = {
+          baseRewardBaseUnits: app.config.baseRewardBaseUnits,
+          halvingIntervalBlocks: app.config.halvingIntervalBlocks,
+          difficultyStartBits: app.config.difficultyStartBits,
+          difficultyStepBlocks: app.config.difficultyStepBlocks,
+          difficultyMaxBits: app.config.difficultyMaxBits,
+          maxSupplyRpow: app.config.mintMaxSupply,
+        };
+        const reward = currentRewardForBlock(blockHeight, scheduleOpts);
+        if (reward === 0n) {
+          return { error: 'SUPPLY_EXHAUSTED' as const, message: 'reward floored to zero — schedule terminated' };
+        }
+        const expectedDifficulty = difficultyForBlock(blockHeight, scheduleOpts);
+        if (parsed.data.network_difficulty_bits !== expectedDifficulty) {
+          return {
+            error: 'CHALLENGE_EXPIRED' as const,
+            message: 'difficulty changed between challenge and share; request a new challenge',
+          };
+        }
+
+        const capBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
+        const supplyResult = await c.query(
+          `UPDATE app_counters
+             SET value = value + (CASE
+               WHEN name = 'minted_supply' THEN $1::bigint
+               ELSE 1::bigint
+             END)
+           WHERE name IN ('minted_supply','block_height')
+             AND (SELECT value FROM app_counters WHERE name='minted_supply') + $1::bigint <= $2::bigint`,
+          [reward.toString(), capBaseUnits.toString()],
+        );
+        if (supplyResult.rowCount !== 2) {
+          return { error: 'SUPPLY_EXHAUSTED' as const, message: '21M cap reached' };
+        }
+
+        // ---- Distribution math ------------------------------------------
+        // Treasury fee off the gross.
+        const grossReward = reward;
+        const treasuryCut = (grossReward * BigInt(app.config.poolFeeBps)) / 10000n;
+        const netReward = grossReward - treasuryCut;
+        // Finder takes a flat share of the net; the rest is the pro-rata
+        // pool divided across non-finder shares.
+        const finderPayout = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
+        const proRataPool = netReward - finderPayout;
+
+        // Aggregate shares by pubkey for this round.
+        const shareRows = (await c.query<{ pubkey: string; share_count: string }>(
+          `SELECT pubkey, count(*)::text AS share_count
+             FROM pool_shares
+            WHERE round_id = $1::bigint
+            GROUP BY pubkey`,
+          [roundId],
+        )).rows;
+
+        let nonFinderShares = 0n;
+        const nonFinderRows: { pubkey: string; shareCount: bigint }[] = [];
+        let finderShareCount = 0n;
+        for (const r of shareRows) {
+          const sc = BigInt(r.share_count);
+          if (r.pubkey === s.pubkey) {
+            finderShareCount = sc;
+          } else {
+            nonFinderRows.push({ pubkey: r.pubkey, shareCount: sc });
+            nonFinderShares += sc;
+          }
+        }
+
+        // Compute non-finder payouts. Integer division; whatever residue
+        // is left after rounding is added back to the treasury cut.
+        let proRataDistributed = 0n;
+        const nonFinderPayouts: { pubkey: string; shareCount: bigint; payout: bigint }[] = [];
+        if (nonFinderShares > 0n) {
+          for (const r of nonFinderRows) {
+            const payout = (proRataPool * r.shareCount) / nonFinderShares;
+            proRataDistributed += payout;
+            nonFinderPayouts.push({ pubkey: r.pubkey, shareCount: r.shareCount, payout });
+          }
+        }
+        // Whatever didn't divide evenly across non-finder shares stays in
+        // the treasury (rolls into the fee). When there are no
+        // non-finders, `proRataDistributed` is 0 and `dust` equals the
+        // full pro-rata pool — the treasury keeps all 75% in that case.
+        const dust = proRataPool - proRataDistributed;
+        const finalTreasuryCut = treasuryCut + dust;
+
+        // ---- MINT event: actor = TREASURY, amount = full reward --------
+        const mintEventId = randomUUID();
+        await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [mintEventId]);
+
+        const issuedAt = new Date();
+        const sigForMint = signTokenPayload(
+          { id: mintEventId, owner_pubkey: TREASURY_PUBKEY, value: grossReward, issued_at: issuedAt.toISOString() },
+          app.config.signingPrivateKeyHex,
+        );
+
+        // Treasury balance bumps by the full reward (it's the temporary
+        // holder); we'll deduct each non-finder payout and the finder
+        // payout below as TRANSFERs out of treasury. Crucially we do NOT
+        // increment the treasury's `blocks_mined` or `minted_base_units`
+        // — the treasury is just a conduit; counting it as a miner would
+        // pollute the leaderboard with the entire pool's output.
+        await c.query(
+          `INSERT INTO account_balances(pubkey, spendable_base_units, events_count, updated_at)
+           VALUES($1, $2, 1, now())
+           ON CONFLICT (pubkey) DO UPDATE SET
+             spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+             events_count = account_balances.events_count + 1,
+             updated_at = now()`,
+          [TREASURY_PUBKEY, grossReward.toString()],
+        );
+
+        // Credit the finder with the actual "mined a block" stat so the
+        // leaderboard reflects who did the lucky work, even though the
+        // funds flow through the treasury.
+        await c.query(
+          `UPDATE account_balances
+              SET blocks_mined = blocks_mined + 1,
+                  updated_at = now()
+            WHERE pubkey = $1`,
+          [s.pubkey],
+        );
+
+        await c.query(
+          `UPDATE ledger_stats SET value = value + $1::bigint, updated_at = now() WHERE name='circulating_supply'`,
+          [grossReward.toString()],
+        );
+
+        const mintInsert = await c.query<LedgerEventRow>(
+          `WITH inserted AS (
+             INSERT INTO ledger_events(
+               id, event_type, actor_pubkey, amount, memo, server_sig, created_at
+             )
+             VALUES($1,'MINT',$2,$3,$4,$5,$6)
+             RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                       amount, fee_base_units, memo,
+                       challenge_id, solution_nonce, idempotency_key,
+                       client_signature_base58, server_sig, created_at
+           ),
+           upd_event_id AS (
+             UPDATE ledger_event_ids ids
+             SET event_seq = i.event_seq
+             FROM inserted i
+             WHERE ids.id = i.id
+           )
+           SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                  amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
+                  challenge_id, solution_nonce, idempotency_key,
+                  client_signature_base58, server_sig, created_at
+           FROM inserted`,
+          [
+            mintEventId,
+            TREASURY_PUBKEY,
+            grossReward.toString(),
+            `pool round #${roundId}`,
+            sigForMint,
+            issuedAt,
+          ],
+        );
+        await mirrorLedgerEventHot(c, mintInsert.rows[0]!);
+
+        // ---- Helper: TRANSFER from treasury to a recipient -------------
+        async function payoutTransfer(
+          recipient: string,
+          amount: bigint,
+          memo: string,
+          isFinder: boolean,
+          shareCount: bigint,
+        ): Promise<string | null> {
+          if (amount === 0n) return null;
+          // Debit treasury (not under spendable check since we just
+          // credited it; conservative subtraction).
+          await c.query(
+            `UPDATE account_balances
+                SET spendable_base_units = spendable_base_units - $2::bigint,
+                    sent_base_units = sent_base_units + $2::bigint,
+                    updated_at = now()
+              WHERE pubkey = $1`,
+            [TREASURY_PUBKEY, amount.toString()],
+          );
+          // Credit recipient.
+          await c.query(
+            `INSERT INTO account_balances(pubkey, spendable_base_units, received_base_units, events_count, updated_at)
+             VALUES($1, $2, $2, 1, now())
+             ON CONFLICT (pubkey) DO UPDATE SET
+               spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+               received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
+               events_count = account_balances.events_count + 1,
+               updated_at = now()`,
+            [recipient, amount.toString()],
+          );
+          await c.query(
+            `UPDATE ledger_stat_shards
+                SET value = value + $1::bigint, updated_at = now()
+              WHERE name='total_transferred'
+                AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
+            [amount.toString(), recipient],
+          );
+
+          const transferId = randomUUID();
+          await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [transferId]);
+          const tinsert = await c.query<LedgerEventRow>(
+            `WITH inserted AS (
+               INSERT INTO ledger_events(
+                 id, event_type, actor_pubkey, counterparty_pubkey, amount,
+                 fee_base_units, memo, idempotency_key, client_signature_base58, created_at
+               )
+               VALUES($1,'TRANSFER',$2,$3,$4,0,$5,NULL,NULL,$6)
+               RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                         amount, fee_base_units, memo,
+                         challenge_id, solution_nonce, idempotency_key,
+                         client_signature_base58, server_sig, created_at
+             ),
+             upd_event_id AS (
+               UPDATE ledger_event_ids ids
+               SET event_seq = i.event_seq
+               FROM inserted i
+               WHERE ids.id = i.id
+             ),
+             upd_transfer_count AS (
+               UPDATE app_counters SET value = value + 1
+                WHERE name='transfer_count'
+             )
+             SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                    amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
+                    challenge_id, solution_nonce, idempotency_key,
+                    client_signature_base58, server_sig, created_at
+             FROM inserted`,
+            [transferId, TREASURY_PUBKEY, recipient, amount.toString(), memo, issuedAt],
+          );
+          await mirrorLedgerEventHot(c, tinsert.rows[0]!);
+
+          await c.query(
+            `INSERT INTO pool_payouts(round_id, pubkey, share_count, payout_base_units, is_finder, transfer_event_id)
+             VALUES($1::bigint, $2, $3::bigint, $4::bigint, $5, $6)`,
+            [roundId, recipient, shareCount.toString(), amount.toString(), isFinder, transferId],
+          );
+          return transferId;
+        }
+
+        // ---- Fan out payouts -------------------------------------------
+        await payoutTransfer(s.pubkey, finderPayout, `pool round #${roundId} (finder)`, true, finderShareCount);
+        for (const r of nonFinderPayouts) {
+          await payoutTransfer(r.pubkey, r.payout, `pool round #${roundId}`, false, r.shareCount);
+        }
+
+        // ---- Close round + open the next one ---------------------------
+        await c.query(
+          `UPDATE pool_rounds
+             SET ended_at = now(),
+                 ended_by_pubkey = $2,
+                 ended_by_event_id = $3,
+                 reward_base_units = $4::bigint,
+                 treasury_cut_base_units = $5::bigint,
+                 finder_payout_base_units = $6::bigint,
+                 pro_rata_pool_base_units = $7::bigint,
+                 participant_count = $8
+           WHERE id = $1::bigint`,
+          [
+            roundId,
+            s.pubkey,
+            mintEventId,
+            grossReward.toString(),
+            finalTreasuryCut.toString(),
+            finderPayout.toString(),
+            proRataPool.toString(),
+            shareRows.length,
+          ],
+        );
+        await c.query(`INSERT INTO pool_rounds (started_at) VALUES (now())`);
+
+        const yourPayout = finderPayout;
+        return {
+          ok: true as const,
+          share_id: 'pending',
+          zeros,
+          round_id: roundId,
+          block_won: true,
+          block_event_id: mintEventId,
+          finder_pubkey: s.pubkey,
+          reward_base_units: grossReward.toString(),
+          your_payout_base_units: yourPayout.toString(),
+        };
+      },
+      { onRetry: (err, attempt) => app.log.warn({ err, attempt, route: 'pool/share' }, 'tx retry') },
+    );
+
+    if ('error' in result) {
+      const status =
+        result.error === 'SUPPLY_EXHAUSTED' ? 410 :
+        result.error === 'CHALLENGE_EXPIRED' ? 410 :
+        result.error === 'DUPLICATE_SHARE' ? 409 :
+        400;
+      return reply.code(status).send(result);
+    }
+
+    if (result.block_won) {
+      app.invalidateLedger();
+      app.invalidateAccount(s.pubkey);
+      app.invalidateAccount(TREASURY_PUBKEY);
+      // Best-effort: invalidate all participants' caches so their feed
+      // refreshes. We don't have the list here without an extra query;
+      // the per-account cache TTL of 2s is short enough to be fine.
+    }
+    return result;
+  });
+
+  // ---- GET /pool/stats ------------------------------------------------------
+  // Snapshot of the active round + recent payouts. Cheap query — keep in
+  // a 2s TTL cache so the visualizer can poll it without DB pressure.
+  app.get('/pool/stats', async (req, reply) => {
+    if (!app.config.poolEnabled) {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
+    }
+
+    const session = app.readSession(req);
+    const cacheKey = session?.pubkey ?? 'anon';
+
+    const body = await app.caches.poolStats.get(cacheKey, async () => {
+      const open = (await app.pool.query<{ id: string; started_at: Date; total_shares: string }>(
+        `SELECT id::text AS id, started_at, total_shares::text AS total_shares
+           FROM pool_rounds WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1`,
+      )).rows[0];
+      const totalShares = open ? BigInt(open.total_shares) : 0n;
+
+      const counterRows = (await app.pool.query<{ name: string; value: string }>(
+        `SELECT name, value::text AS value FROM app_counters WHERE name = 'block_height'`,
+      )).rows;
+      const blockHeight = counterRows[0] ? BigInt(counterRows[0].value) : 0n;
+      const networkBits = difficultyForBlock(blockHeight, {
+        difficultyStartBits: app.config.difficultyStartBits,
+        difficultyStepBlocks: app.config.difficultyStepBlocks,
+        difficultyMaxBits: app.config.difficultyMaxBits,
+      });
+      const shareBits = Math.max(
+        app.config.poolShareMinBits,
+        networkBits - app.config.poolShareBitsOffset,
+      );
+
+      // Active miners + per-miner share counts in last 60s, used to
+      // estimate hashrate. 2^share_bits hashes per share by definition.
+      const recent = (await app.pool.query<{ pubkey: string; n: string }>(
+        `SELECT pubkey, count(*)::text AS n
+           FROM pool_shares
+          WHERE submitted_at > now() - interval '60 seconds'
+          GROUP BY pubkey`,
+      )).rows;
+      let totalRecentShares = 0n;
+      for (const r of recent) totalRecentShares += BigInt(r.n);
+      const poolHashratePerSec = Number(totalRecentShares) * Math.pow(2, shareBits) / 60;
+
+      // Caller's contribution to the open round.
+      let yourShares = 0n;
+      if (session && open) {
+        const r = (await app.pool.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM pool_shares WHERE round_id = $1::bigint AND pubkey = $2`,
+          [open.id, session.pubkey],
+        )).rows[0];
+        yourShares = r ? BigInt(r.n) : 0n;
+      }
+
+      // Schedule helpers for the estimated payout preview.
+      const reward = currentRewardForBlock(blockHeight, {
+        baseRewardBaseUnits: app.config.baseRewardBaseUnits,
+        halvingIntervalBlocks: app.config.halvingIntervalBlocks,
+        difficultyStartBits: app.config.difficultyStartBits,
+        difficultyStepBlocks: app.config.difficultyStepBlocks,
+        difficultyMaxBits: app.config.difficultyMaxBits,
+        maxSupplyRpow: app.config.mintMaxSupply,
+      });
+      const treasuryCut = (reward * BigInt(app.config.poolFeeBps)) / 10000n;
+      const netReward = reward - treasuryCut;
+      const finderPayout = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
+      const proRataPool = netReward - finderPayout;
+
+      const nonFinderShares = totalShares > yourShares ? totalShares - yourShares : 0n;
+      const estIfFinder = finderPayout;
+      const estIfNotFinder = nonFinderShares > 0n
+        ? (proRataPool * yourShares) / nonFinderShares
+        : 0n;
+
+      // Recent closed rounds for the activity strip in the UI.
+      const recentClosedRows = (await app.pool.query<{
+        id: string;
+        ended_at: Date;
+        ended_by_pubkey: string;
+        reward_base_units: string;
+        participant_count: number | null;
+        finder_payout_base_units: string;
+        ended_by_display_name: string | null;
+      }>(
+        `SELECT pr.id::text AS id,
+                pr.ended_at,
+                pr.ended_by_pubkey,
+                pr.reward_base_units::text AS reward_base_units,
+                pr.participant_count,
+                pr.finder_payout_base_units::text AS finder_payout_base_units,
+                a.display_name AS ended_by_display_name
+           FROM pool_rounds pr
+      LEFT JOIN accounts a ON a.pubkey = pr.ended_by_pubkey
+          WHERE pr.ended_at IS NOT NULL
+       ORDER BY pr.ended_at DESC
+          LIMIT 10`,
+      )).rows;
+
+      // Caller's payout history within the recent closed rounds.
+      const recentRoundIds = recentClosedRows.map((r) => r.id);
+      const yourPayouts: Record<string, string> = {};
+      if (session && recentRoundIds.length > 0) {
+        const r = await app.pool.query<{ round_id: string; payout_base_units: string }>(
+          `SELECT round_id::text AS round_id, payout_base_units::text AS payout_base_units
+             FROM pool_payouts
+            WHERE round_id = ANY($1::bigint[]) AND pubkey = $2`,
+          [recentRoundIds, session.pubkey],
+        );
+        for (const row of r.rows) yourPayouts[row.round_id] = row.payout_base_units;
+      }
+
+      return {
+        enabled: true,
+        share_difficulty_bits: shareBits,
+        network_difficulty_bits: networkBits,
+        current_round: open
+          ? {
+              id: open.id,
+              started_at: open.started_at.toISOString(),
+              total_shares: totalShares.toString(),
+              your_shares: yourShares.toString(),
+              estimated_finder_payout_base_units: estIfFinder.toString(),
+              estimated_pro_rata_payout_base_units: estIfNotFinder.toString(),
+            }
+          : null,
+        active_miners: recent.length,
+        pool_hashrate_hps: Math.round(poolHashratePerSec),
+        pool_fee_bps: app.config.poolFeeBps,
+        finder_bps: app.config.poolFinderBps,
+        gross_reward_base_units: reward.toString(),
+        recent_payouts: recentClosedRows.map((r) => ({
+          round_id: r.id,
+          ended_at: r.ended_at.toISOString(),
+          finder_pubkey: r.ended_by_pubkey,
+          ...(r.ended_by_display_name ? { finder_display_name: r.ended_by_display_name } : {}),
+          reward_base_units: r.reward_base_units,
+          finder_payout_base_units: r.finder_payout_base_units,
+          participant_count: r.participant_count ?? 0,
+          ...(yourPayouts[r.id] ? { your_payout_base_units: yourPayouts[r.id] } : {}),
+        })),
+      };
+    });
+    reply.header('cache-control', 'private, max-age=0');
+    return body;
+  });
+}
+
+function recomputeHashTrailingZeros(noncePrefix: Buffer, nonce: bigint): number {
+  // Re-derive the hash and count trailing zero bits. Used in /pool/share
+  // since we accept hashes below network difficulty (those would fail
+  // the existing /pow.ts verifier which only returns a boolean).
+  const nonceBuf = Buffer.alloc(8);
+  let x = nonce;
+  for (let i = 0; i < 8; i++) { nonceBuf[i] = Number(x & 0xffn); x >>= 8n; }
+  const h = createHash('sha256').update(noncePrefix).update(nonceBuf).digest();
+  return trailingZeroBits(h);
+}

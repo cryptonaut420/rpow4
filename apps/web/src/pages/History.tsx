@@ -7,9 +7,10 @@ import preBitcoinMd from '../content/history/pre-bitcoin.md?raw';
 import manifestosMd from '../content/history/manifestos.md?raw';
 import whitepaperMd from '../content/history/bitcoin-whitepaper.md?raw';
 import declarationMd from '../content/history/bitcoin-declaration.md?raw';
+import poolsMd from '../content/history/pools.md?raw';
 import sourcesMd from '../content/history/sources.md?raw';
 
-type TabId = 'overview' | 'rpow' | 'prebitcoin' | 'manifestos' | 'whitepaper' | 'declaration' | 'sources';
+type TabId = 'overview' | 'rpow' | 'prebitcoin' | 'manifestos' | 'whitepaper' | 'declaration' | 'pools' | 'sources';
 
 interface Tab {
   id: TabId;
@@ -25,6 +26,7 @@ const TABS: Tab[] = [
   { id: 'manifestos', label: 'manifestos', title: 'MANIFESTOS', body: manifestosMd },
   { id: 'whitepaper', label: 'white paper', title: 'BITCOIN WHITE PAPER', body: whitepaperMd },
   { id: 'declaration', label: 'declaration', title: 'BITCOIN DECLARATION', body: declarationMd },
+  { id: 'pools', label: 'pools', title: 'MINING POOLS', body: poolsMd },
   { id: 'sources', label: 'sources', title: 'SOURCES', body: sourcesMd },
 ];
 

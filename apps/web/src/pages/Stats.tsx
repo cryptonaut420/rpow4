@@ -8,6 +8,7 @@ import type {
   LeaderboardResponse,
   LeaderboardSort,
   LedgerResponse,
+  PoolStatsResponse,
 } from '@rpow/shared';
 import { shortPubkey } from '@rpow/shared';
 import { formatRpow } from '../lib/format.js';
@@ -50,9 +51,18 @@ const SORT_LABELS: Record<LeaderboardSort, { tab: string; panel: string; primary
 /** Network stats + both leaderboards refresh on this interval while the page is open. */
 const STATS_REFRESH_MS = 30_000;
 
+function formatHashrateCompact(hps: number): string {
+  if (!Number.isFinite(hps) || hps <= 0) return '—';
+  if (hps >= 1e9) return `${(hps / 1e9).toFixed(2)} GH/s`;
+  if (hps >= 1e6) return `${(hps / 1e6).toFixed(2)} MH/s`;
+  if (hps >= 1e3) return `${(hps / 1e3).toFixed(1)} KH/s`;
+  return `${Math.round(hps)} H/s`;
+}
+
 export function StatsPage() {
   usePageMeta('Stats', 'RPOW4 network statistics, mining leaderboards, and richest accounts on the network.');
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
+  const [poolStats, setPoolStats] = useState<PoolStatsResponse | null>(null);
   // Cache both sort variants once they've been fetched so flipping the
   // toggle is instant after the first round-trip.
   const [boards, setBoards] = useState<Partial<Record<LeaderboardSort, LeaderboardResponse>>>({});
@@ -76,6 +86,20 @@ export function StatsPage() {
       cancelled = true;
       window.clearInterval(id);
     };
+  }, []);
+
+  // Pool stats: refresh on a tighter cadence than ledger because the
+  // round + active-miner count change every share submission.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      api.poolStats()
+        .then((r) => { if (!cancelled) setPoolStats(r); })
+        .catch(() => { /* tolerate transient failures */ });
+    };
+    load();
+    const id = window.setInterval(load, 5_000);
+    return () => { cancelled = true; window.clearInterval(id); };
   }, []);
 
   useEffect(() => {
@@ -157,6 +181,34 @@ export function StatsPage() {
 `}
         </pre>
       </Panel>
+
+      {poolStats && poolStats.enabled && (
+        <Panel title="MINING POOL">
+          <pre style={{ margin: 0 }}>
+{`  POOL HASHRATE       : ${formatHashrateCompact(poolStats.pool_hashrate_hps)}
+  ACTIVE MINERS       : ${formatNumber(poolStats.active_miners)}
+  POOL FEE            : ${(poolStats.pool_fee_bps / 100).toFixed(2)}% of block reward → treasury
+  FINDER BONUS        : ${(poolStats.finder_bps / 100).toFixed(2)}% of net to the lucky miner
+  SHARE DIFFICULTY    : ${poolStats.share_difficulty_bits} bits  (network ${poolStats.network_difficulty_bits} bits)
+  CURRENT ROUND       : #${poolStats.current_round?.id ?? '—'}  ${poolStats.current_round ? formatNumber(poolStats.current_round.total_shares) : 0} share${poolStats.current_round?.total_shares === '1' ? '' : 's'}
+`}
+          </pre>
+          {poolStats.recent_payouts.length > 0 && (
+            <>
+              <div style={{ margin: '12px 0 4px', color: 'var(--dim)', fontSize: 11, letterSpacing: '0.14em' }}>
+                RECENT POOL ROUNDS
+              </div>
+              <pre style={{ margin: 0, fontSize: 12, color: 'var(--dim)' }}>
+{poolStats.recent_payouts.map((p) => {
+  const at = new Date(p.ended_at).toISOString().slice(11, 19) + ' UTC';
+  const finder = p.finder_display_name ? `@${p.finder_display_name}` : `${p.finder_pubkey.slice(0, 6)}…${p.finder_pubkey.slice(-4)}`;
+  return `  ${at}  #${p.round_id}  ${formatRpow(p.reward_base_units).padStart(11)} RPOW · ${p.participant_count} miner${p.participant_count === 1 ? '' : 's'} · won by ${finder}`;
+}).join('\n')}
+              </pre>
+            </>
+          )}
+        </Panel>
+      )}
 
       <Panel title={SORT_LABELS[sort].panel}>
         <div style={{ marginBottom: 10 }}>

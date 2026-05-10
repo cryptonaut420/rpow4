@@ -98,6 +98,20 @@ export function LedgerPage() {
   Accepted proofs credit balances directly. Transfers move ledger
   balances with no fees.
 
+  MINING MODES. Two modes are available from the bottom mining bar:
+
+  - SOLO — your browser scans for hashes that meet the network
+    difficulty. Find one, you keep 100% of the block reward. Highest
+    variance: long dry spells when the network difficulty is high.
+
+  - POOL (recommended) — your browser submits lower-difficulty
+    "shares" to a centralized pool. When ANY pool member's share also
+    clears the network target, the block is won and the reward is
+    split: 2% to the treasury, 25% finder bonus to the lucky miner,
+    and the remaining 75% split pro-rata across the round's other
+    shares. You earn frequently and predictably. The treasury cut
+    funds the faucet.
+
   Caveat: this IS a centralized system. The ledger lives in a Postgres
   database operated by one person on rented infrastructure. If that
   server is breached, lost, or seized, your tokens may be lost with

@@ -17,6 +17,7 @@ import { explorerRoutes } from './routes/explorer.js';
 import { faucetRoutes } from './routes/faucet.js';
 import { trollboxRoutes } from './routes/trollbox.js';
 import { claimRoutes } from './routes/claim.js';
+import { poolRoutes } from './routes/pool.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -47,6 +48,17 @@ export interface AppConfig {
   faucetCooldownHours: number;
   /** Trollbox post fee in base units, paid to the treasury per message. */
   trollboxPostFeeBaseUnits: bigint;
+  /** Pool subsystem on/off switch. */
+  poolEnabled: boolean;
+  /** Treasury fee bps off the gross block reward (200 = 2%). */
+  poolFeeBps: number;
+  /** Finder bonus bps of net (post-fee) block reward (2500 = 25%). */
+  poolFinderBps: number;
+  /** Share difficulty = network_difficulty − offset, clamped at the floor. */
+  poolShareBitsOffset: number;
+  poolShareMinBits: number;
+  /** Pool challenge TTL in seconds. */
+  poolChallengeTtlSeconds: number;
   signingPrivateKeyHex: string;
   signingPublicKeyHex: string;
   webOrigin: string;
@@ -92,6 +104,8 @@ export interface AppCaches {
   faucetStatus: TtlCache<string, unknown>;
   /** Public /trollbox feed pre-serialized pages, keyed by cursor|limit. */
   trollboxFeed: TtlCache<string, CachedJsonResponse>;
+  /** Pool stats for the mining widget. Per-caller (anon vs each pubkey). */
+  poolStats: TtlCache<string, unknown>;
 }
 
 declare module 'fastify' {
@@ -159,6 +173,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // Trollbox feed: invalidated explicitly on every post; short TTL is a
     // safety net so a missed invalidation can't pin stale messages.
     trollboxFeed: new TtlCache<string, CachedJsonResponse>({ ttlMs: 3_000, maxSize: 256 }),
+    // Pool stats: very short TTL because the widget polls every ~3s and
+    // share submissions advance the round constantly.
+    poolStats: new TtlCache<string, unknown>({ ttlMs: 2_000, maxSize: 20_000 }),
   };
   app.decorate('caches', caches);
   app.decorate('invalidateAccount', (pubkey: string) => {
@@ -184,6 +201,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // /ledger surfaces trollbox_message_count, so a new post (which also
     // shifts treasury) needs to drop the trollbox feed cache too.
     caches.trollboxFeed.clear();
+    // Pool stats include the active round's totals + recent payouts —
+    // every block win shifts both, so flush on any ledger movement.
+    caches.poolStats.clear();
   });
 
   await app.register(cookie, { secret: opts.config.sessionSecret });
@@ -288,6 +308,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(faucetRoutes);
   await app.register(trollboxRoutes);
   await app.register(claimRoutes);
+  await app.register(poolRoutes);
 
   // Public-key PEM is fully determined by the signing config; precompute
   // once at startup instead of rebuilding on every request.

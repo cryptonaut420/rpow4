@@ -527,6 +527,91 @@ export interface TrollboxFeedResponse {
   next_cursor?: string;
 }
 
+// ---- pool mining ------------------------------------------------------------
+
+/** Pool challenge envelope returned by POST /pool/challenge. The same fields
+ * are echoed back by the client when submitting a share to /pool/share so
+ * the server can re-verify the MAC. */
+export interface PoolChallengeResponse {
+  challenge_id: string;
+  user_pubkey: string;
+  nonce_prefix: string;
+  /** Current network difficulty — the share also wins a block at this. */
+  network_difficulty_bits: number;
+  /** Lower threshold for "share". Each accepted share counts toward
+   * the round's pro-rata payout. */
+  share_difficulty_bits: number;
+  issued_at: string;
+  expires_at: string;
+  challenge_mac: string;
+}
+
+export interface PoolShareRequestBody {
+  challenge_id: string;
+  nonce_prefix: string;
+  network_difficulty_bits: number;
+  share_difficulty_bits: number;
+  issued_at: string;
+  expires_at: string;
+  challenge_mac: string;
+  solution_nonce: string;
+  /** Ed25519 signature over canonicalMessage('pool.share', { challenge_id, solution_nonce }). */
+  client_signature_base58: string;
+}
+
+export interface PoolShareResponse {
+  ok: true;
+  share_id: string;
+  zeros: number;
+  round_id: string;
+  /** True when this share also cleared network difficulty and triggered
+   * a block-win + round closeout. */
+  block_won: boolean;
+  block_event_id?: string;
+  finder_pubkey?: string;
+  reward_base_units?: string;
+  /** Caller's payout for this round (only when they were the finder; for
+   * non-finders, payouts arrive via the standard /activity feed). */
+  your_payout_base_units?: string;
+}
+
+export interface PoolStatsResponse {
+  enabled: boolean;
+  share_difficulty_bits: number;
+  network_difficulty_bits: number;
+  /** Treasury fee in basis points (200 = 2%). */
+  pool_fee_bps: number;
+  /** Finder bonus in basis points of the post-fee reward (2500 = 25%). */
+  finder_bps: number;
+  /** Active round; null only on a freshly-migrated DB before the seed row. */
+  current_round: {
+    id: string;
+    started_at: string;
+    total_shares: string;
+    your_shares: string;
+    estimated_finder_payout_base_units: string;
+    estimated_pro_rata_payout_base_units: string;
+  } | null;
+  /** Distinct miners with at least one share in the last 60s. */
+  active_miners: number;
+  /** Estimated pool hashrate in hashes/sec, derived from share rate. */
+  pool_hashrate_hps: number;
+  /** Current full-block reward at this height (gross, before treasury cut). */
+  gross_reward_base_units: string;
+  /** Last 10 closed rounds, newest first, with the caller's per-round payout
+   * if they participated. */
+  recent_payouts: Array<{
+    round_id: string;
+    ended_at: string;
+    finder_pubkey: string;
+    finder_display_name?: string;
+    reward_base_units: string;
+    finder_payout_base_units: string;
+    participant_count: number;
+    your_payout_base_units?: string;
+  }>;
+}
+
 // ---- claim tokens (offline bearer transfers) --------------------------------
 
 export type ClaimState = 'pending' | 'redeemed' | 'cancelled';

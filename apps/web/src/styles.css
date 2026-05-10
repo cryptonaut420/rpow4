@@ -516,6 +516,41 @@ main { margin-top: 4px; }
   box-shadow: 0 0 8px var(--accent);
   animation: mining-pulse 1.4s ease-in-out infinite;
 }
+
+/* Mode toggle: solo vs pool. Sits next to the status pill in the strip.
+ * Disabled while mining is running so the user has to STOP first — flipping
+ * mid-run would leave shares uncredited and create confusion. */
+.mining-mode-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--accent-dim);
+  padding: 3px 10px;
+  border-radius: 2px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 100ms, border-color 100ms, color 100ms;
+}
+.mining-mode-pill strong {
+  color: var(--fg);
+  letter-spacing: 0.08em;
+}
+.mining-mode-pill.is-pool {
+  color: var(--accent);
+  border-color: var(--accent);
+  text-shadow: 0 0 4px var(--accent-dim);
+}
+.mining-mode-pill.is-pool strong { color: var(--accent); }
+.mining-mode-pill:hover:not(:disabled) { background: var(--accent-dim); }
+.mining-mode-pill:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 @keyframes mining-pulse {
   0%, 100% { opacity: 0.55; transform: scale(0.85); }
   50%      { opacity: 1;    transform: scale(1.15); }

@@ -17,6 +17,10 @@ import type {
   ExplorerTxResponse,
   FaucetClaimResponse,
   FaucetStatusResponse,
+  PoolChallengeResponse,
+  PoolShareRequestBody,
+  PoolShareResponse,
+  PoolStatsResponse,
   LeaderboardResponse,
   LeaderboardSort,
   LedgerEventsResponse,
@@ -127,6 +131,11 @@ export const api = {
   // Faucet (public)
   faucet: () => call<FaucetStatusResponse>('GET', '/faucet'),
   faucetClaim: () => call<FaucetClaimResponse>('POST', '/faucet/claim', {}),
+
+  // Pool mining (auth required for challenge / share; stats has anon view)
+  poolChallenge: () => call<PoolChallengeResponse>('POST', '/pool/challenge', {}),
+  poolShare: (b: PoolShareRequestBody) => call<PoolShareResponse>('POST', '/pool/share', b),
+  poolStats: () => call<PoolStatsResponse>('GET', '/pool/stats'),
 
   // Trollbox (public read, signed write)
   trollbox: (cursor?: string, limit?: number) => {

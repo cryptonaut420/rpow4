@@ -1,7 +1,16 @@
 import { createSHA256 } from 'hash-wasm';
 import { trailingZeroBits, bytesFromHex } from '@rpow/shared';
 
-type StartMsg = { type: 'start'; nonce_prefix: string; difficulty_bits: number };
+type StartMsg = {
+  type: 'start';
+  nonce_prefix: string;
+  difficulty_bits: number;
+  /** Optional pool share threshold. When set, every hash with
+   *  `trailingZeroBits >= share_difficulty_bits` is posted as a `share`
+   *  message; the loop continues mining until network difficulty is met
+   *  (or abort). When omitted, the worker behaves as a solo miner. */
+  share_difficulty_bits?: number;
+};
 type AbortMsg = { type: 'abort' };
 type InMsg = StartMsg | AbortMsg;
 
@@ -22,6 +31,12 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
   aborted = false;
   const prefix = bytesFromHex(msg.nonce_prefix);
   const target = msg.difficulty_bits;
+  // Pool-mode threshold. Solo runs leave this undefined and never emit
+  // share messages. Clamped at the network target so a misconfigured
+  // share_bits >= network_bits doesn't dual-emit on the same hash.
+  const shareTarget = typeof msg.share_difficulty_bits === 'number'
+    ? Math.min(msg.share_difficulty_bits, target)
+    : null;
 
   const sha = await createSHA256();
   const buf = new Uint8Array(prefix.length + 8);
@@ -47,13 +62,33 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
     const digest = sha.digest('binary'); // Uint8Array
     const tz = trailingZeroBits(digest);
     if (tz >= target) {
+      // In solo mode (no share target), a network-meeting hash ends the
+      // run — the provider mints and respawns the worker.
+      if (shareTarget === null) {
+        (self as any).postMessage({
+          type: 'found',
+          solution_nonce: nonce.toString(),
+          hashes: count.toString(),
+          hash_hex: toHex(digest),
+        });
+        return;
+      }
+      // In pool mode the worker doesn't exit; the same hash is just a
+      // share that happens to clear the network target. The server
+      // detects this from the share's zero count and triggers round
+      // closeout in the share-submission path. We fall through to the
+      // share-emit branch below.
+    }
+    // Pool-mode: every share-worthy hash gets posted as a `share`
+    // message. The provider POSTs it to /pool/share asynchronously; the
+    // worker keeps mining without waiting for the network.
+    if (shareTarget !== null && tz >= shareTarget) {
       (self as any).postMessage({
-        type: 'found',
+        type: 'share',
         solution_nonce: nonce.toString(),
-        hashes: count.toString(),
+        zeros: tz,
         hash_hex: toHex(digest),
       });
-      return;
     }
     if (tz > bestZeros) {
       bestZeros = tz;
