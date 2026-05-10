@@ -18,8 +18,11 @@ function sitemapPlugin(appUrl: string): Plugin {
     name: 'rpow-sitemap',
     apply: 'build',
     generateBundle() {
-      if (!appUrl) return;
-      const base = appUrl.replace(/\/$/, '');
+      // Fall back to the canonical production origin if VITE_APP_URL is
+      // unset; combined with the static public/sitemap.xml fallback this
+      // guarantees /sitemap.xml exists in every build, regardless of how
+      // the deploy env is wired.
+      const base = (appUrl || 'https://rpow4.com').replace(/\/$/, '');
       const today = new Date().toISOString().split('T')[0];
 
       const urlEntries = SITEMAP_ROUTES.map(

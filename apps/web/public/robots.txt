@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://rpow4.com/sitemap.xml
