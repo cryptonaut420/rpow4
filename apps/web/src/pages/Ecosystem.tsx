@@ -33,6 +33,11 @@ const SITES: EcosystemEntry[] = [
     description: 'exchange for swapping the RPOW2 token.',
   },
   {
+    label: 'rpow2stats.com',
+    url: 'http://rpow2stats.com',
+    description: 'community stats and network metrics for RPOW2.',
+  },
+  {
     label: 'rpow.hopeware.ltd',
     url: 'https://rpow.hopeware.ltd/',
     description: 'a CLI tool for performing proof-of-work mining against an RPOW node.',
