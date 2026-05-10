@@ -1,0 +1,165 @@
+# RPOW4 — Reusable Proofs of Work
+
+> RPOW4 is a modern tribute to Hal Finney's 2004 Reusable Proofs of Work
+> system. It's a browser-native, Bitcoin-style proof-of-work token network:
+> sign up with an Ed25519 keypair, mine RPOW tokens by running SHA-256 in a
+> Web Worker on your own CPU, send to other users, redeem bearer claim
+> tokens, post to a public trollbox, and inspect a public ledger explorer.
+> Live at https://rpow4.com. Source at https://github.com/cryptonaut420/rpow4.
+
+RPOW4 is a centralized server-and-Postgres simulation, not a blockchain. It
+keeps the spirit and tokenomics of Bitcoin (hard 21,000,000 RPOW supply cap,
+50 RPOW initial block reward, halvings every 210,000 blocks, geometric sum
+to exactly 21M) while replacing the IBM 4758 secure-coprocessor model of
+Hal's original RPOW with modern wallet cryptography. Every state-changing
+action is signed by the user's keypair; the server validates the signature
+before applying the change. The server-signed token format keeps the
+"reusable proof" abstraction Hal pioneered.
+
+## What it is
+
+- **Token network**: 21,000,000 RPOW hard cap. No premine, no founder
+  allocation, no operator-held reserve. Every token in circulation was
+  earned by an accepted proof of work.
+- **Bitcoin-style schedule**: 50 RPOW per accepted PoW solution, halving
+  every 210,000 blocks. Difficulty starts at 24 trailing-zero bits, steps
+  up by +1 bit every ~164,000 blocks, capped at 50 bits so the chain stays
+  mineable on commodity hardware long term.
+- **Browser-native mining**: PoW runs in a Web Worker via `hash-wasm`
+  SHA-256. The user mines in a tab; no installer, no external rig.
+- **Ed25519 + BIP-39 / SLIP-0010 wallet**: keys live in the browser. The
+  server only ever sees signatures and public keys.
+- **Centralized ledger**: Postgres database operated by one person. If the
+  server is breached, lost, or seized, balances may be lost with it. Treat
+  it as a tribute / experiment, not a financial instrument.
+
+## How to use it
+
+1. **Create a wallet** at https://rpow4.com/#/login — pick "create new
+   wallet", record the 12-word BIP-39 mnemonic offline, set a local
+   password to encrypt it on this device, register a handle.
+2. **Mine** — the sticky bottom bar contains the mining widget. Click
+   `[ MINE ]`; the worker fetches a server-signed challenge with a random
+   `nonce_prefix`, scans integer nonces, hashes
+   `SHA-256(nonce_prefix || u64le(nonce))`, and submits when a hash has the
+   required trailing-zero bits. The reward credits to your balance.
+3. **Claim free tokens** at https://rpow4.com/#/faucet — once per cooldown
+   window per (pubkey, IP). 5 RPOW per claim.
+4. **Send** at https://rpow4.com/#/send — to a base58 pubkey or a registered
+   handle. A small per-send fee (also halving-scheduled) is paid to the
+   treasury.
+5. **Create bearer claim tokens** at https://rpow4.com/#/claim — produces a
+   signed link that anyone can redeem to receive the locked RPOW. Lets you
+   gift tokens via URL.
+6. **Browse the public ledger** at https://rpow4.com/#/explorer — every
+   transaction, every account, full transaction history.
+7. **Read the leaderboards** at https://rpow4.com/#/stats — top miners, top
+   balances, network-wide aggregates.
+
+## Pages on the site
+
+- [Home / wallet](https://rpow4.com/): your wallet — balance, history, send/receive shortcuts.
+- [Send](https://rpow4.com/#/send): transfer RPOW to another pubkey or handle.
+- [Claim](https://rpow4.com/#/claim): create a bearer-token claim URL anyone can redeem.
+- [Activity](https://rpow4.com/#/activity): your personal transaction feed.
+- [Stats](https://rpow4.com/#/stats): network stats, leaderboards (top miners and richest accounts), share-of-supply per account.
+- [Explorer](https://rpow4.com/#/explorer): public ledger feed, search by tx id / pubkey / handle, account detail pages.
+- [Faucet](https://rpow4.com/#/faucet): claim free tokens once per cooldown window.
+- [Trollbox](https://rpow4.com/#/trollbox): a fee-paying public chat — each post burns a small RPOW fee to the treasury.
+- [About](https://rpow4.com/#/ledger): live ledger snapshot + project description and lineage.
+- [History](https://rpow4.com/#/history): the historical record behind RPOW — Hal Finney's 2004 announcement, cypherpunk manifestos, Satoshi's whitepaper, and related primary sources.
+- [Docs](https://rpow4.com/#/docs): full API reference, hand-verified against the route source.
+- [Ecosystem](https://rpow4.com/#/ecosystem): directory of related RPOW projects (RPOW2, RPOW3, rpowmarket, swap, CLI tooling).
+
+## API (public, JSON)
+
+Base URL: `https://rpow4.com` (the same origin serves both the web app and
+the API; the SPA proxies everything under `/auth`, `/challenge`, `/mint`,
+`/send`, `/me`, `/activity`, `/ledger`, `/stats`, `/explorer`, `/lookup`,
+`/signup`, `/claim`, `/faucet`, `/trollbox` to the Fastify server). Full
+reference with examples is at https://rpow4.com/#/docs.
+
+### Read endpoints (public, no auth)
+
+- `GET /health` — liveness probe.
+- `GET /ledger` — current network state: total minted, circulating supply,
+  block height, current reward, current difficulty, current send and
+  trollbox fees (both halving-scheduled), treasury balance, total fees,
+  user count, faucet claim count, total faucet dripped.
+- `GET /ledger/events` — paginated newest-first global event stream.
+- `GET /explorer/feed` — recent transactions; filter `?type=mint|transfer`.
+- `GET /explorer/tx/:id` — transaction detail by UUID.
+- `GET /explorer/account/:pubkey` — account summary + paginated history.
+- `GET /lookup/:name` — resolve a handle to a pubkey.
+- `GET /stats/leaderboard?sort=balance|minted` — top 100 accounts.
+- `GET /faucet` — current faucet eligibility / cooldown / treasury.
+- `GET /trollbox` — paginated newest-first message feed + current post fee.
+- `GET /.well-known/rpow-pubkey.pem` — the server's Ed25519 signing pubkey
+  (used to verify server-signed token payloads).
+
+### Write endpoints (require an Ed25519 signature over a canonical body)
+
+- `POST /signup/challenge` + `POST /signup` — register a pubkey + handle,
+  gated by a small client-side proof-of-work to slow handle squatters.
+- `POST /auth/challenge` + `POST /auth/session` — pubkey-based login. The
+  server hands the client a short-lived envelope; the client signs it; the
+  server returns a session cookie.
+- `POST /auth/logout` — destroy the session.
+- `POST /me/display_name` — set or clear your handle.
+- `POST /challenge` + `POST /mint` — request a mining challenge, then submit
+  a solution. Mint requires a session AND a wallet signature over
+  `('mint', { challenge_id, solution_nonce })`.
+- `POST /send` — transfer RPOW to a recipient. Requires a wallet signature
+  and an idempotency key.
+- `POST /claim` + `POST /claim/:id/redeem` + `POST /claim/:id/cancel` —
+  bearer claim-token lifecycle.
+- `POST /faucet/claim` — credit your account from the treasury, subject to
+  per-pubkey + per-IP cooldown.
+- `POST /trollbox` — post a message; burns the current trollbox fee to the
+  treasury (the fee halves alongside the block reward).
+
+All canonical signing payloads are documented in
+`packages/shared/src/canonical.ts` in the source repo.
+
+## Tokenomics one-liner
+
+50 RPOW × 210,000 blocks × Σ (1/2)ⁿ = exactly 21,000,000 RPOW. Same
+geometric series as Bitcoin. Both the per-send fee and the trollbox post
+fee bit-shift right by the current halving index, so user-paid network
+costs decay at the same cadence as the block reward.
+
+## Lineage
+
+RPOW4 builds on community RPOW ports that came before it:
+
+- [RPOW2](https://github.com/frkrueger/rpow) — the first modern web-app
+  revival of Hal's idea. Direct ancestor of this project.
+- [RPOW3](https://github.com/arben777/rpow3) — continued the lineage with
+  hashcash mining and Ed25519-signed tokens.
+- [RPOW4](https://github.com/cryptonaut420/rpow4) — this site.
+
+The chain traces back to Hal Finney's
+[original 2004 announcement](https://nakamotoinstitute.org/finney/rpow/).
+The full ecosystem (live sites, swaps, prediction markets, CLI tooling) is
+listed at https://rpow4.com/#/ecosystem.
+
+## Caveats
+
+- **Centralized**: ledger lives in one Postgres database. No 51%-attack
+  story, no decentralized recovery — operator can take the server offline,
+  data could be lost. Use it accordingly.
+- **No warranty**: the project is a tribute / educational experiment. No
+  responsibility taken for breaches, downtime, lost balances.
+- **Wallet keys live in your browser**: lose the mnemonic, lose the
+  account. There is no server-side recovery.
+
+## Important links
+
+- Live site: https://rpow4.com
+- Source: https://github.com/cryptonaut420/rpow4
+- API docs: https://rpow4.com/#/docs
+- Project history & primary sources: https://rpow4.com/#/history
+- Ecosystem directory: https://rpow4.com/#/ecosystem
+- Hal Finney's RPOW announcement (2004):
+  https://nakamotoinstitute.org/finney/rpow/
+- Sitemap: https://rpow4.com/sitemap.xml
