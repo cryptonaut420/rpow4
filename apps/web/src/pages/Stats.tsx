@@ -122,6 +122,7 @@ export function StatsPage() {
   const treasuryBalance = formatRpow(ledger.treasury_balance_base_units ?? '0');
   const totalFees = formatRpow(ledger.total_fees_collected_base_units ?? '0');
   const currentFee = formatRpow(ledger.current_fee_base_units ?? '0');
+  const currentTrollboxFee = formatRpow(ledger.current_trollbox_fee_base_units ?? '0');
   const faucetClaimCount = formatNumber(ledger.faucet_claim_count ?? '0');
   const faucetTotalClaimed = formatRpow(ledger.faucet_total_claimed_base_units ?? '0');
 
@@ -145,6 +146,7 @@ export function StatsPage() {
   NEXT DIFFICULTY +1  : in ${blocksToDiffStep} blocks (cap ${ledger.difficulty_max_bits})
 
   SEND FEE            : ${currentFee} RPOW per transfer
+  TROLLBOX POST FEE   : ${currentTrollboxFee} RPOW per post
   TOTAL FEES EARNED   : ${totalFees} RPOW
   TREASURY BALANCE    : ${treasuryBalance} RPOW
 

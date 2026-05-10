@@ -10,6 +10,7 @@ const SITEMAP_ROUTES: Array<{ path: string; priority: string; changefreq: string
   { path: '/#/trollbox', priority: '0.6', changefreq: 'hourly' },
   { path: '/#/history', priority: '0.7', changefreq: 'monthly' },
   { path: '/#/docs', priority: '0.8', changefreq: 'monthly' },
+  { path: '/#/ecosystem', priority: '0.6', changefreq: 'monthly' },
 ];
 
 function sitemapPlugin(appUrl: string): Plugin {

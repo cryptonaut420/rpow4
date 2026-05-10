@@ -170,3 +170,18 @@ export function scheduleInfoForBlock(
     isMintable,
   };
 }
+
+/**
+ * Apply the reward-halving schedule to a base fee. Used so the network's
+ * "transaction-cost" fees (per-send fee, trollbox post fee) decay at the
+ * same cadence as the block reward — half at every halving, capped at 0.
+ *
+ * Bit-shift right by halvingIndex == floor(base / 2^halvingIndex). Caller
+ * supplies an integer halvingIndex computed from block_height.
+ */
+export function feeAtHalving(baseFeeBaseUnits: bigint, halvingIndex: number): bigint {
+  if (baseFeeBaseUnits <= 0n) return 0n;
+  if (halvingIndex <= 0) return baseFeeBaseUnits;
+  const shifted = baseFeeBaseUnits >> BigInt(halvingIndex);
+  return shifted < 0n ? 0n : shifted;
+}

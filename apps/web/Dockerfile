@@ -15,10 +15,14 @@ ARG VITE_API_BASE_URL
 ARG VITE_API_DOCS_BASE_URL
 ARG VITE_PUBLIC_POSTHOG_TOKEN
 ARG VITE_PUBLIC_POSTHOG_HOST
+# Public canonical URL of this deployment, e.g. https://rpow4.com — required
+# by the sitemap plugin in vite.config.ts to emit sitemap.xml + robots.txt.
+ARG VITE_APP_URL
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
 ENV VITE_API_DOCS_BASE_URL=${VITE_API_DOCS_BASE_URL}
 ENV VITE_PUBLIC_POSTHOG_TOKEN=${VITE_PUBLIC_POSTHOG_TOKEN}
 ENV VITE_PUBLIC_POSTHOG_HOST=${VITE_PUBLIC_POSTHOG_HOST}
+ENV VITE_APP_URL=${VITE_APP_URL}
 
 RUN npm run build --workspace @rpow/shared -- --force
 RUN rm -rf node_modules/@rpow/shared \

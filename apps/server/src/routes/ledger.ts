@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { scheduleInfoForBlock, BASE_UNITS_PER_RPOW } from '../schedule.js';
+import { scheduleInfoForBlock, feeAtHalving, BASE_UNITS_PER_RPOW } from '../schedule.js';
 import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
 import { TREASURY_PUBKEY } from '@rpow/shared';
 
@@ -104,11 +104,13 @@ export async function ledgerRoutes(app: FastifyInstance) {
         maxSupplyRpow: app.config.mintMaxSupply,
       });
 
-      // Current fee = base fee >> halving_index (halves with every reward halving).
-      const currentFeeBaseUnits =
-        info.halvingIndex <= 0
-          ? app.config.sendBaseFeeBaseUnits
-          : app.config.sendBaseFeeBaseUnits >> BigInt(info.halvingIndex);
+      // Network-cost fees decay at the same cadence as the block reward —
+      // half at every halving, capped at 0.
+      const currentFeeBaseUnits = feeAtHalving(app.config.sendBaseFeeBaseUnits, info.halvingIndex);
+      const currentTrollboxFeeBaseUnits = feeAtHalving(
+        app.config.trollboxPostFeeBaseUnits,
+        info.halvingIndex,
+      );
 
       const body = {
         total_minted_base_units: counterBaseUnits.toString(),
@@ -123,6 +125,7 @@ export async function ledgerRoutes(app: FastifyInstance) {
         treasury_balance_base_units: treasuryBalance.toString(),
         total_fees_collected_base_units: totalFeesCollected.toString(),
         current_fee_base_units: currentFeeBaseUnits.toString(),
+        current_trollbox_fee_base_units: currentTrollboxFeeBaseUnits.toString(),
         halving_interval_blocks: app.config.halvingIntervalBlocks,
         difficulty_step_blocks: app.config.difficultyStepBlocks,
         difficulty_max_bits: app.config.difficultyMaxBits,

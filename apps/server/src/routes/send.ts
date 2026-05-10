@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { isValidPubkeyBase58, verifyCanonical, TREASURY_PUBKEY } from '@rpow/shared';
 import { withTxRetry } from '../db.js';
+import { feeAtHalving } from '../schedule.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
 
 const Body = z.object({
@@ -25,14 +26,6 @@ const Body = z.object({
   client_signature_base58: z.string().min(64).max(128),
   memo: z.string().max(64).optional(),
 });
-
-/** Derive the current send fee at a given halving index. Fee halves with the reward. */
-function computeFee(baseFeeBaseUnits: bigint, halvingIndex: number): bigint {
-  if (halvingIndex <= 0) return baseFeeBaseUnits;
-  // Bit-shift right by halvingIndex (floor division by 2^n). Cap at 0.
-  const shifted = baseFeeBaseUnits >> BigInt(halvingIndex);
-  return shifted < 0n ? 0n : shifted;
-}
 
 export async function sendRoutes(app: FastifyInstance) {
   app.post('/send', async (req, reply) => {
@@ -101,8 +94,8 @@ export async function sendRoutes(app: FastifyInstance) {
             `SELECT value::text FROM app_counters WHERE name='block_height'`,
           );
           const blockHeight = BigInt(heightRow.rows[0]?.value ?? '0');
-          const halvingIndex = Math.floor(Number(blockHeight) / app.config.halvingIntervalBlocks);
-          const baseFee = computeFee(app.config.sendBaseFeeBaseUnits, halvingIndex);
+          const halvingIndex = Number(blockHeight / BigInt(app.config.halvingIntervalBlocks));
+          const baseFee = feeAtHalving(app.config.sendBaseFeeBaseUnits, halvingIndex);
 
           const waiveRow = await c.query<{ waived: boolean }>(
             `SELECT COALESCE(

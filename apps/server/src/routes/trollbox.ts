@@ -9,6 +9,7 @@ import {
   type TrollboxMessage,
 } from '@rpow/shared';
 import { withTxRetry } from '../db.js';
+import { feeAtHalving } from '../schedule.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
 import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
 
@@ -136,10 +137,19 @@ export async function trollboxRoutes(app: FastifyInstance) {
         params,
       );
 
-      const totalRow = await app.pool.query<{ value: string }>(
-        `SELECT value::text FROM app_counters WHERE name='trollbox_message_count'`,
+      // Fetch trollbox count + current block height in one round-trip so
+      // we can derive the live post fee at the active halving tier. The
+      // fee scales with the block-reward halvings just like /send: shifted
+      // right one bit per halving, capped at 0.
+      const metaRow = await app.pool.query<{ trollbox_count: string; block_height: string }>(
+        `SELECT
+           COALESCE((SELECT value FROM app_counters WHERE name='trollbox_message_count'), 0)::text AS trollbox_count,
+           COALESCE((SELECT value FROM app_counters WHERE name='block_height'), 0)::text AS block_height`,
       );
-      const totalCount = totalRow.rows[0]?.value ?? '0';
+      const totalCount = metaRow.rows[0]?.trollbox_count ?? '0';
+      const blockHeight = BigInt(metaRow.rows[0]?.block_height ?? '0');
+      const halvingIndex = Number(blockHeight / BigInt(app.config.halvingIntervalBlocks));
+      const currentPostFee = feeAtHalving(app.config.trollboxPostFeeBaseUnits, halvingIndex);
 
       const hasMore = result.rows.length > limit;
       const page = result.rows.slice(0, limit);
@@ -156,7 +166,7 @@ export async function trollboxRoutes(app: FastifyInstance) {
           fee_event_id: r.fee_event_id,
           posted_at: r.created_at.toISOString(),
         })),
-        post_fee_base_units: app.config.trollboxPostFeeBaseUnits.toString(),
+        post_fee_base_units: currentPostFee.toString(),
         body_max: TROLLBOX_BODY_MAX,
         total_count: totalCount,
         ...(hasMore && last ? { next_cursor: last.seq } : {}),
@@ -209,8 +219,6 @@ export async function trollboxRoutes(app: FastifyInstance) {
       return reply.code(401).send({ error: 'INVALID_SIGNATURE', message: 'trollbox signature does not verify' });
     }
 
-    const fee = app.config.trollboxPostFeeBaseUnits;
-
     type PostResult =
       | {
           ok: true;
@@ -231,6 +239,18 @@ export async function trollboxRoutes(app: FastifyInstance) {
       out = await withTxRetry<PostResult>(
         app.pool,
         async (c) => {
+          // Read block_height inside the tx to derive the active halving
+          // tier, then halve the configured base post fee accordingly.
+          // Mirrors /send so a single fee-decay schedule governs every
+          // user-paid network cost. block_height only moves up, so a
+          // slightly stale read is always lenient (never overcharges).
+          const heightRow = await c.query<{ value: string }>(
+            `SELECT value::text FROM app_counters WHERE name='block_height'`,
+          );
+          const blockHeight = BigInt(heightRow.rows[0]?.value ?? '0');
+          const halvingIndex = Number(blockHeight / BigInt(app.config.halvingIntervalBlocks));
+          const fee = feeAtHalving(app.config.trollboxPostFeeBaseUnits, halvingIndex);
+
           // Idempotency: a network retry from the same author with the
           // same key should observe the original row, not double-post.
           const dup = await selectMessageByIdem(c, author, idem);

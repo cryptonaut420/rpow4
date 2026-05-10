@@ -308,6 +308,8 @@ export interface LedgerResponse {
   total_fees_collected_base_units: string;
   /** Current fee charged per send (halves with the block reward). */
   current_fee_base_units: string;
+  /** Current trollbox post fee (halves with the block reward, mirrors send). */
+  current_trollbox_fee_base_units: string;
   halving_interval_blocks: number;
   difficulty_step_blocks: number;
   difficulty_max_bits: number;
