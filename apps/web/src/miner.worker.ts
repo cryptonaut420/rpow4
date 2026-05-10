@@ -65,6 +65,10 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
     if ((count & 0xffffn) === 0n) {
       const now = performance.now();
       if (now - last > 250) {
+        // `best_*` is the closest-to-target hash this cycle (sticky high-water
+        // mark). `current_*` is the most recently computed digest — it changes
+        // every progress tick so the visualizer has live motion to render
+        // even when bestZeros is plateaued.
         (self as any).postMessage({
           type: 'progress',
           hashes: count.toString(),
@@ -72,6 +76,9 @@ self.onmessage = async (e: MessageEvent<InMsg>) => {
           best_zeros: bestZeros,
           best_hash_hex: bestHashHex,
           best_nonce_hex: bestNonceHex,
+          current_hash_hex: toHex(digest),
+          current_zeros: tz,
+          current_nonce_hex: nonce.toString(16).padStart(16, '0'),
         });
         last = now;
       }

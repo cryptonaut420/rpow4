@@ -58,6 +58,14 @@ export interface MiningVisualizerHandles {
     bestZeros: number;
     bestHashHex: string;
     bestNonceHex: string;
+    /**
+     * The most recent digest from the worker's hot loop, refreshed each
+     * progress tick (~250ms). Drives the live-updating "best candidate"
+     * display so it doesn't sit frozen between high-water-mark events.
+     */
+    currentHashHex: string;
+    currentZeros: number;
+    currentNonceHex: string;
     hashesPerSec: number;
     /**
      * Total hashes done in the *current* cycle (resets to 0 each time a new
@@ -140,6 +148,12 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
   const bestZerosRef = useRef(-1);
   const bestHashRef = useRef<string>('');
   const bestNonceRef = useRef<string>('');
+  // Live (most recent) hash sample from the worker. Refreshed every
+  // ~250ms regardless of best-zeros progress so the displayed "best
+  // candidate" hash actually changes between high-water-mark events.
+  const currentHashRef = useRef<string>('');
+  const currentZerosRef = useRef(0);
+  const currentNonceRef = useRef<string>('');
   const hpsRef = useRef(0);
   // Latest cycle hash count from the worker + when it arrived. The RAF loop
   // extrapolates between progress messages so the meter moves smoothly.
@@ -179,6 +193,9 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
         bestZerosRef.current = p.bestZeros;
         bestHashRef.current = p.bestHashHex;
         bestNonceRef.current = p.bestNonceHex;
+        currentHashRef.current = p.currentHashHex;
+        currentZerosRef.current = p.currentZeros;
+        currentNonceRef.current = p.currentNonceHex;
         hpsRef.current = p.hashesPerSec;
         cycleHashesRef.current = p.cycleHashes;
         lastProgressAtRef.current = performance.now();
@@ -253,16 +270,23 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
       }
 
       // ---- Best hash row ----------------------------------------------------
-      const bestHash = bestHashRef.current;
+      // We render the *current* hash sample (refreshed each progress tick)
+      // so the line actually moves. Highlight is computed from this exact
+      // hash's own trailing zeros, so when a particularly-close candidate
+      // streams by it visibly flashes; otherwise the tail is dim. The
+      // "zeros: N / target" caption below still shows the cycle high-water
+      // mark from bestZerosRef so the headline progress signal is preserved.
       const bestZeros = bestZerosRef.current;
+      const liveHash = currentHashRef.current || bestHashRef.current;
+      const liveZeros = currentHashRef.current ? currentZerosRef.current : bestZeros;
       if (bestHashNodeRef.current) {
-        if (bestHash) {
-          // Visualize trailing zero bits by underlining the tail. trailingZeroBits
-          // is bit-level, so to highlight at byte granularity we color the
-          // corresponding hex characters at the end of the digest. Each hex is 4 bits.
-          const hexZeros = Math.min(bestHash.length, Math.floor(bestZeros / 4));
-          const head = bestHash.slice(0, bestHash.length - hexZeros);
-          const tail = bestHash.slice(bestHash.length - hexZeros);
+        if (liveHash) {
+          // Each hex char encodes 4 bits, so floor(zeros/4) hex chars at
+          // the tail are guaranteed-zero — color those as the "got close"
+          // accent.
+          const hexZeros = Math.min(liveHash.length, Math.max(0, Math.floor(liveZeros / 4)));
+          const head = liveHash.slice(0, liveHash.length - hexZeros);
+          const tail = liveHash.slice(liveHash.length - hexZeros);
           bestHashNodeRef.current.innerHTML = '';
           const headNode = document.createElement('span');
           headNode.style.color = 'var(--dim)';
@@ -453,11 +477,12 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
             <span ref={progressPctNodeRef} style={{ color: 'var(--accent)' }} />
           </span>
         </div>
-        {!compact && (
-          <div style={{ marginTop: 2, fontSize: 11, color: 'var(--dim)', textAlign: 'right' }}>
-            <span ref={expectedNodeRef} />
-          </div>
-        )}
+        {/* Expected-solve ETA — useful in both modes so the user always
+         * sees the headline "how long should this take" alongside the
+         * statistical CDF percentage above. */}
+        <div style={{ marginTop: 2, fontSize: 11, color: 'var(--dim)', textAlign: 'right' }}>
+          <span ref={expectedNodeRef} />
+        </div>
       </div>
 
       {/* Live status footer */}

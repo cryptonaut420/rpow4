@@ -28,6 +28,20 @@ function formatRank(rank: number, width: number): string {
   return s.length >= width ? s : ' '.repeat(width - s.length) + s;
 }
 
+/**
+ * Percentage of `total` that `part` represents, formatted to 2 decimal
+ * places. Uses BigInt-scaled basis points so we don't lose precision on
+ * large base-unit values that overflow Number safely.
+ */
+function formatShareOfTotal(part: string, total: string): string {
+  const t = BigInt(total);
+  if (t === 0n) return '0.00%';
+  const bps = Number(BigInt(part) * 10_000n / t);
+  const pct = bps / 100;
+  if (pct > 0 && pct < 0.01) return '<0.01%';
+  return `${pct.toFixed(2)}%`;
+}
+
 const SORT_LABELS: Record<LeaderboardSort, { tab: string; panel: string; primary: string }> = {
   balance: { tab: 'richest', panel: 'TOP 100 RICHEST', primary: 'BALANCE' },
   minted:  { tab: 'most mined', panel: 'TOP 100 MINERS', primary: 'MINED' },
@@ -156,7 +170,12 @@ export function StatsPage() {
         ) : board.entries.length === 0 ? (
           <div style={{ color: 'var(--dim)' }}>(no balances yet — start mining)</div>
         ) : (
-          <LeaderboardTable sort={sort} entries={board.entries} generatedAt={board.generated_at} />
+          <LeaderboardTable
+            sort={sort}
+            entries={board.entries}
+            generatedAt={board.generated_at}
+            totalMintedBaseUnits={ledger.total_minted_base_units}
+          />
         )}
       </Panel>
     </>
@@ -178,11 +197,12 @@ function SortTab({ active, onClick, label }: { active: boolean; onClick: () => v
 }
 
 function LeaderboardTable({
-  sort, entries, generatedAt,
+  sort, entries, generatedAt, totalMintedBaseUnits,
 }: {
   sort: LeaderboardSort;
   entries: LeaderboardEntry[];
   generatedAt: string;
+  totalMintedBaseUnits: string;
 }) {
   const headerLabel = SORT_LABELS[sort].primary;
   return (
@@ -198,9 +218,13 @@ function LeaderboardTable({
           const primary = sort === 'balance'
             ? formatRpowPadded(e.spendable_base_units, 14)
             : formatRpowPadded(e.minted_base_units, 14);
+          // % of all coins ever minted that were earned by this account.
+          // Same metric for both sort views — it describes the user, not
+          // the sort key — but appended to the secondary cell either way.
+          const sharePct = formatShareOfTotal(e.minted_base_units, totalMintedBaseUnits);
           const secondary = sort === 'balance'
-            ? `(mined ${formatNumber(e.blocks_mined)} blk)`
-            : `${formatNumber(e.blocks_mined)} blocks`;
+            ? `(mined ${formatNumber(e.blocks_mined)} blk · ${sharePct})`
+            : `${formatNumber(e.blocks_mined)} blocks · ${sharePct}`;
           return (
             <RowFragment
               key={e.pubkey}

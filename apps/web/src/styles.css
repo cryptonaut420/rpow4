@@ -158,6 +158,54 @@ input:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); }
 }
 .app-footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
+/* ── Ecosystem page ──────────────────────────────────────────────────────
+ * Each entry stacks the link + label on one line and the description on the
+ * next, with a leading > bullet to keep the terminal feel. The list also
+ * wraps cleanly on mobile because the head row uses flex-wrap and the
+ * description is just normal flowing text.
+ */
+.ecosystem-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ecosystem-entry {
+  margin: 0 0 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px dashed var(--dimmer);
+}
+.ecosystem-entry:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+.ecosystem-entry-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.ecosystem-entry-bullet {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.ecosystem-entry-link {
+  /* Long URLs (e.g. github.com/cryptonaut420/rpow4) need to wrap on
+   * narrow screens instead of pushing the row past the viewport. */
+  word-break: break-all;
+}
+.ecosystem-entry-tag {
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.ecosystem-entry-desc {
+  margin: 4px 0 0 16px;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 /* ── Leaderboard (Stats page) ────────────────────────────────────────────
  * Single grid that contains every entry's 4 cells (rank, identity,
  * primary value, secondary stat). Using one grid gives uniform column

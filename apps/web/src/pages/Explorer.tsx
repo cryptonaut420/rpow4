@@ -306,6 +306,8 @@ function TxView({ id }: { id: string }) {
   const isMint = tx.type === 'mint';
   const actorLabel = tx.actor_display_name ?? shortPubkey(tx.actor_pubkey);
   const cpLabel = tx.counterparty_display_name ?? (tx.counterparty_pubkey ? shortPubkey(tx.counterparty_pubkey) : null);
+  const actorHref = `/explorer/account/${tx.actor_pubkey}`;
+  const cpHref = tx.counterparty_pubkey ? `/explorer/account/${tx.counterparty_pubkey}` : null;
 
   return (
     <>
@@ -314,29 +316,40 @@ function TxView({ id }: { id: string }) {
           <Link to="/explorer">← back to feed</Link>
         </span>
       </div>
-      <pre style={{ margin: 0, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{[
-        `TYPE:      ${tx.type.toUpperCase()}`,
-        `BLOCK:     #${tx.event_seq}`,
-        `TIME:      ${formatFullTs(tx.at)}`,
-        ``,
-        `AMOUNT:    ${isMint ? '+' : ''}${formatRpow(tx.amount_base_units)} RPOW`,
-        ...(!isMint && tx.fee_base_units !== '0' ? [`FEE:       ${formatRpow(tx.fee_base_units)} RPOW`] : []),
-        ...(tx.memo ? [`MEMO:      ${tx.memo}`] : []),
-        ``,
-        `FROM:      ${actorLabel}`,
-        `           ${tx.actor_pubkey}`,
-        ...(tx.counterparty_pubkey ? [
-          `TO:        ${cpLabel ?? ''}`,
-          `           ${tx.counterparty_pubkey}`,
-        ] : []),
-        ...(tx.challenge_id ? [`CHALLENGE: ${tx.challenge_id}`] : []),
-        ...(tx.client_signature_base58 ? [
-          `SIG:       ${tx.client_signature_base58.slice(0, 32)}`,
-          `           ${tx.client_signature_base58.slice(32)}`,
-        ] : []),
-        ``,
-        `TX ID:     ${tx.id}`,
-      ].join('\n')}</pre>
+      {/* Detail block — kept as a <pre> so the column-aligned key:value layout
+       * survives whitespace collapsing, but actor/counterparty handles and
+       * pubkeys are interleaved as <Link>s so they navigate to the account
+       * detail page on click. */}
+      <pre style={{ margin: 0, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+        {`TYPE:      ${tx.type.toUpperCase()}\n`}
+        {`BLOCK:     #${tx.event_seq}\n`}
+        {`TIME:      ${formatFullTs(tx.at)}\n`}
+        {`\n`}
+        {`AMOUNT:    ${isMint ? '+' : ''}${formatRpow(tx.amount_base_units)} RPOW\n`}
+        {!isMint && tx.fee_base_units !== '0' ? `FEE:       ${formatRpow(tx.fee_base_units)} RPOW\n` : null}
+        {tx.memo ? `MEMO:      ${tx.memo}\n` : null}
+        {`\n`}
+        {`FROM:      `}
+        <Link to={actorHref} title={tx.actor_pubkey}>{actorLabel}</Link>
+        {`\n           `}
+        <Link to={actorHref}>{tx.actor_pubkey}</Link>
+        {`\n`}
+        {cpHref && tx.counterparty_pubkey ? (
+          <>
+            {`TO:        `}
+            <Link to={cpHref} title={tx.counterparty_pubkey}>{cpLabel ?? shortPubkey(tx.counterparty_pubkey)}</Link>
+            {`\n           `}
+            <Link to={cpHref}>{tx.counterparty_pubkey}</Link>
+            {`\n`}
+          </>
+        ) : null}
+        {tx.challenge_id ? `CHALLENGE: ${tx.challenge_id}\n` : null}
+        {tx.client_signature_base58
+          ? `SIG:       ${tx.client_signature_base58.slice(0, 32)}\n           ${tx.client_signature_base58.slice(32)}\n`
+          : null}
+        {`\n`}
+        {`TX ID:     ${tx.id}\n`}
+      </pre>
 
       <div style={{ marginTop: 12, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12 }}>
         <Link to={`/explorer/account/${tx.actor_pubkey}`}>

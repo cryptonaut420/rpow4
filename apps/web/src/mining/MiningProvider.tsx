@@ -241,6 +241,9 @@ export function MiningProvider({ children }: { children: ReactNode }) {
             bestZeros: typeof m.best_zeros === 'number' ? m.best_zeros : -1,
             bestHashHex: typeof m.best_hash_hex === 'string' ? m.best_hash_hex : '',
             bestNonceHex: typeof m.best_nonce_hex === 'string' ? m.best_nonce_hex : '',
+            currentHashHex: typeof m.current_hash_hex === 'string' ? m.current_hash_hex : '',
+            currentZeros: typeof m.current_zeros === 'number' ? m.current_zeros : -1,
+            currentNonceHex: typeof m.current_nonce_hex === 'string' ? m.current_nonce_hex : '',
             hashesPerSec: hashesPerSecRef.current,
             cycleHashes,
           });

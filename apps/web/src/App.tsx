@@ -17,6 +17,7 @@ import { DocsPage } from './pages/Docs.js';
 import { HistoryPage } from './pages/History.js';
 import { ClaimPage } from './pages/Claim.js';
 import { RedeemPage } from './pages/Redeem.js';
+import { EcosystemPage } from './pages/Ecosystem.js';
 import { CopyButton } from './components/CopyButton.js';
 import { SupplyBar } from './components/SupplyBar.js';
 import { MiningBar } from './components/MiningBar.js';
@@ -66,6 +67,7 @@ export default function App() {
             <NavLink to="/ledger">[ about ]</NavLink>{' '}
             <NavLink to="/history">[ history ]</NavLink>{' '}
             <NavLink to="/docs">[ docs ]</NavLink>{' '}
+            <NavLink to="/ecosystem">[ ecosystem ]</NavLink>{' '}
             <a href="https://rpowmarket.com/" target="_blank" rel="noopener noreferrer">[ predict ]</a>{' '}
             {signedIn ? (
               <>
@@ -99,6 +101,7 @@ export default function App() {
             <Route path="/redeem/:id" element={<RedeemPage />} />
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/docs" element={<DocsPage />} />
+            <Route path="/ecosystem" element={<EcosystemPage />} />
           </Routes>
         </main>
         <footer className="app-footer">
