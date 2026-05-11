@@ -606,10 +606,41 @@ export interface PoolStatsResponse {
     finder_pubkey: string;
     finder_display_name?: string;
     reward_base_units: string;
+    /**
+     * The finder's TOTAL take for the round (flat finder bonus + their
+     * own pro-rata share), in base units. Not just the 25% bonus.
+     */
     finder_payout_base_units: string;
     participant_count: number;
     your_payout_base_units?: string;
   }>;
+}
+
+/** Single row in GET /pool/rounds — used by the full pool-rounds history view. */
+export interface PoolRoundEntry {
+  round_id: string;
+  started_at: string;
+  ended_at: string;
+  finder_pubkey: string;
+  finder_display_name?: string;
+  /** The MINT ledger event id created when the block closed (explorer linkage). */
+  block_event_id?: string;
+  reward_base_units: string;
+  treasury_cut_base_units: string;
+  /** Finder's TOTAL take (bonus + their pro-rata share). */
+  finder_payout_base_units: string;
+  /** 75% pool that was distributed pro-rata across ALL participants. */
+  pro_rata_pool_base_units: string;
+  participant_count: number;
+  total_shares: string;
+  /** Caller's payout for this round, only present when authed + participated. */
+  your_payout_base_units?: string;
+}
+
+export interface PoolRoundsResponse {
+  rounds: PoolRoundEntry[];
+  /** Cursor to pass as ?cursor= to fetch the next (older) page. */
+  next_cursor?: string;
 }
 
 // ---- claim tokens (offline bearer transfers) --------------------------------

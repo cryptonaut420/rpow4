@@ -54,9 +54,8 @@ export interface AppConfig {
   poolFeeBps: number;
   /** Finder bonus bps of net (post-fee) block reward (2500 = 25%). */
   poolFinderBps: number;
-  /** Share difficulty = network_difficulty − offset, clamped at the floor. */
-  poolShareBitsOffset: number;
-  poolShareMinBits: number;
+  /** Pool share difficulty in trailing zero bits — fixed, independent of network difficulty. */
+  poolShareBits: number;
   /** Pool challenge TTL in seconds. */
   poolChallengeTtlSeconds: number;
   signingPrivateKeyHex: string;
@@ -181,7 +180,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate('invalidateAccount', (pubkey: string) => {
     caches.me.invalidate(pubkey);
     caches.activity.invalidate(pubkey);
-    caches.explorerAccount.invalidate(pubkey);
+    // The explorer-account cache is keyed by `${pubkey}|${filterType}`
+    // so we must invalidate every filter variant we might have cached
+    // for this pubkey.
+    for (const t of ['all', 'mint', 'send', 'receive'] as const) {
+      caches.explorerAccount.invalidate(`${pubkey}|${t}`);
+    }
   });
   app.decorate('invalidateLookup', (name: string | null | undefined) => {
     if (!name) return;

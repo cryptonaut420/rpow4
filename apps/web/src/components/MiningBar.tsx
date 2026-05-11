@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { useMining } from '../mining/MiningProvider.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { MiningVisualizer } from './MiningVisualizer.js';
@@ -248,12 +248,24 @@ export function MiningBar() {
 
         {/* ── The full visualizer — ALWAYS mounted, just toggles compact mode.
               Mounting once preserves the rain animation across page nav and
-              across the expand/collapse toggle. ─────────────────────────── */}
+              across the expand/collapse toggle. In pool mode we forward the
+              aggregate pool hashrate + share difficulty so the visualizer
+              can show both pool and personal expected-solve numbers. ─── */}
         <div className="mining-bar-viz">
           <MiningVisualizer
             target={mining.target ?? mining.ledger?.current_difficulty_bits ?? 0}
             handlesRef={mining.vizHandlesRef}
             compact={!expanded}
+            poolHashratePerSec={
+              mining.mode === 'pool' && mining.poolStats
+                ? mining.poolStats.pool_hashrate_hps
+                : undefined
+            }
+            shareDifficultyBits={
+              mining.mode === 'pool' && mining.poolStats
+                ? mining.poolStats.share_difficulty_bits
+                : undefined
+            }
           />
         </div>
       </div>
@@ -385,14 +397,37 @@ ${rewardBlock}${poolBlock}  TARGET            : ${props.target || '--'} trailing
 
       {props.mode === 'pool' && props.poolStats && props.poolStats.recent_payouts.length > 0 && (
         <Panel title="POOL ROUND HISTORY">
-          <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>
-{props.poolStats.recent_payouts.map((p) => {
-  const at = new Date(p.ended_at).toISOString().slice(11, 19);
-  const finder = p.finder_display_name ? `@${p.finder_display_name}` : `${p.finder_pubkey.slice(0, 6)}…${p.finder_pubkey.slice(-4)}`;
-  const yours = p.your_payout_base_units ? `  (you: +${formatRpow(p.your_payout_base_units)})` : '';
-  return `  ${at}  #${p.round_id}  ${formatRpow(p.reward_base_units)} RPOW  · ${p.participant_count} miner${p.participant_count === 1 ? '' : 's'}  · won by ${finder}${yours}`;
-}).join('\n')}
-          </pre>
+          <div className="pool-rounds-list">
+            {props.poolStats.recent_payouts.map((p) => {
+              const at = new Date(p.ended_at).toISOString().slice(11, 19);
+              const finder = p.finder_display_name
+                ? `@${p.finder_display_name}`
+                : `${p.finder_pubkey.slice(0, 6)}…${p.finder_pubkey.slice(-4)}`;
+              return (
+                <div key={p.round_id} className="pool-rounds-row">
+                  <span className="pool-rounds-time">{at}</span>
+                  <span className="pool-rounds-id">#{p.round_id}</span>
+                  <span className="pool-rounds-reward">{formatRpow(p.reward_base_units)} RPOW</span>
+                  <span className="pool-rounds-meta">
+                    {p.participant_count} miner{p.participant_count === 1 ? '' : 's'} · won by{' '}
+                    <Link
+                      to={`/explorer/account/${p.finder_pubkey}`}
+                      title={p.finder_pubkey}
+                      className="pool-rounds-finder"
+                    >
+                      <code>{finder}</code>
+                    </Link>
+                    {p.your_payout_base_units
+                      ? ` · you +${formatRpow(p.your_payout_base_units)} RPOW`
+                      : ''}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 8, fontSize: 12 }}>
+            <Link to="/pool/history">[ view all pool rounds ]</Link>
+          </div>
         </Panel>
       )}
 

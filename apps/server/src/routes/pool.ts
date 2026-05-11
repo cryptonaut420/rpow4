@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { z } from 'zod';
-import { TREASURY_PUBKEY, trailingZeroBits, verifyCanonical } from '@rpow/shared';
+import { TREASURY_PUBKEY, trailingZeroBits, verifyCanonical, type PoolRoundsResponse } from '@rpow/shared';
 import { withTxRetry } from '../db.js';
 import { signTokenPayload } from '../signing.js';
 import {
@@ -74,10 +74,10 @@ export async function poolRoutes(app: FastifyInstance) {
       difficultyStepBlocks: app.config.difficultyStepBlocks,
       difficultyMaxBits: app.config.difficultyMaxBits,
     });
-    const shareBits = Math.max(
-      app.config.poolShareMinBits,
-      networkBits - app.config.poolShareBitsOffset,
-    );
+    // Share target is fixed — see POOL_SHARE_BITS in env.ts. We deliberately
+    // do NOT track networkBits so share rates stay stable as the network
+    // schedule climbs.
+    const shareBits = app.config.poolShareBits;
 
     const id = randomUUID();
     const noncePrefix = randomBytes(16).toString('hex');
@@ -277,10 +277,16 @@ export async function poolRoutes(app: FastifyInstance) {
         const grossReward = reward;
         const treasuryCut = (grossReward * BigInt(app.config.poolFeeBps)) / 10000n;
         const netReward = grossReward - treasuryCut;
-        // Finder takes a flat share of the net; the rest is the pro-rata
-        // pool divided across non-finder shares.
-        const finderPayout = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
-        const proRataPool = netReward - finderPayout;
+        // The finder bonus is a flat slice of the net; the rest is the
+        // pro-rata pool. Every miner — INCLUDING the finder — earns from
+        // the pro-rata pool in proportion to their share count. The
+        // finder additionally receives the bonus on top. This avoids the
+        // earlier perverse incentive where a heavy contributor earned
+        // *more* when someone else found a block (because excluding the
+        // finder from pro-rata gave them a larger slice when they were
+        // not the winner).
+        const finderBonus = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
+        const proRataPool = netReward - finderBonus;
 
         // Aggregate shares by pubkey for this round.
         const shareRows = (await c.query<{ pubkey: string; share_count: string }>(
@@ -291,36 +297,60 @@ export async function poolRoutes(app: FastifyInstance) {
           [roundId],
         )).rows;
 
-        let nonFinderShares = 0n;
-        const nonFinderRows: { pubkey: string; shareCount: bigint }[] = [];
+        let totalShares = 0n;
+        const participantRows: { pubkey: string; shareCount: bigint }[] = [];
         let finderShareCount = 0n;
         for (const r of shareRows) {
           const sc = BigInt(r.share_count);
-          if (r.pubkey === s.pubkey) {
-            finderShareCount = sc;
-          } else {
-            nonFinderRows.push({ pubkey: r.pubkey, shareCount: sc });
-            nonFinderShares += sc;
-          }
+          participantRows.push({ pubkey: r.pubkey, shareCount: sc });
+          totalShares += sc;
+          if (r.pubkey === s.pubkey) finderShareCount = sc;
         }
 
-        // Compute non-finder payouts. Integer division; whatever residue
-        // is left after rounding is added back to the treasury cut.
+        // Pro-rata share for each participant — including the finder.
+        // Integer division means a small residue may remain; that "dust"
+        // rolls into the treasury cut so we never mint more than the
+        // gross reward.
         let proRataDistributed = 0n;
-        const nonFinderPayouts: { pubkey: string; shareCount: bigint; payout: bigint }[] = [];
-        if (nonFinderShares > 0n) {
-          for (const r of nonFinderRows) {
-            const payout = (proRataPool * r.shareCount) / nonFinderShares;
-            proRataDistributed += payout;
-            nonFinderPayouts.push({ pubkey: r.pubkey, shareCount: r.shareCount, payout });
+        // `payout` is the FULL credit each participant receives this
+        // round (finder includes their bonus). `proRataShare` is the
+        // pro-rata portion only — used to track distribution + dust.
+        type PayoutRow = {
+          pubkey: string;
+          shareCount: bigint;
+          payout: bigint;
+          isFinder: boolean;
+        };
+        const payouts: PayoutRow[] = [];
+        if (totalShares > 0n) {
+          for (const r of participantRows) {
+            const proRataShare = (proRataPool * r.shareCount) / totalShares;
+            proRataDistributed += proRataShare;
+            const isFinder = r.pubkey === s.pubkey;
+            payouts.push({
+              pubkey: r.pubkey,
+              shareCount: r.shareCount,
+              payout: isFinder ? proRataShare + finderBonus : proRataShare,
+              isFinder,
+            });
           }
+        } else {
+          // No shares at all — shouldn't happen because the winning share
+          // is itself counted. Defensive fallback: finder still gets the
+          // bonus, everything else stays in the treasury.
+          payouts.push({
+            pubkey: s.pubkey,
+            shareCount: finderShareCount,
+            payout: finderBonus,
+            isFinder: true,
+          });
         }
-        // Whatever didn't divide evenly across non-finder shares stays in
-        // the treasury (rolls into the fee). When there are no
-        // non-finders, `proRataDistributed` is 0 and `dust` equals the
-        // full pro-rata pool — the treasury keeps all 75% in that case.
+
+        // Residue (rounding dust) goes back to the treasury.
         const dust = proRataPool - proRataDistributed;
         const finalTreasuryCut = treasuryCut + dust;
+        // What the finder actually takes home (bonus + their own pro-rata).
+        const finderPayoutTotal = payouts.find((p) => p.isFinder)?.payout ?? finderBonus;
 
         // ---- MINT event: actor = TREASURY, amount = full reward --------
         const mintEventId = randomUUID();
@@ -477,12 +507,20 @@ export async function poolRoutes(app: FastifyInstance) {
         }
 
         // ---- Fan out payouts -------------------------------------------
-        await payoutTransfer(s.pubkey, finderPayout, `pool round #${roundId} (finder)`, true, finderShareCount);
-        for (const r of nonFinderPayouts) {
-          await payoutTransfer(r.pubkey, r.payout, `pool round #${roundId}`, false, r.shareCount);
+        // The finder's row gets a dedicated memo so explorer / activity
+        // feeds make it obvious WHY they got the bigger transfer.
+        for (const p of payouts) {
+          const memo = p.isFinder
+            ? `pool round #${roundId} (finder bonus + pro-rata)`
+            : `pool round #${roundId}`;
+          await payoutTransfer(p.pubkey, p.payout, memo, p.isFinder, p.shareCount);
         }
 
         // ---- Close round + open the next one ---------------------------
+        // `finder_payout_base_units` records the finder's TOTAL take for
+        // the round (bonus + their own pro-rata share), not just the
+        // 25% bonus. That's what the UI shows users when they ask "how
+        // much did the winner get?".
         await c.query(
           `UPDATE pool_rounds
              SET ended_at = now(),
@@ -500,14 +538,13 @@ export async function poolRoutes(app: FastifyInstance) {
             mintEventId,
             grossReward.toString(),
             finalTreasuryCut.toString(),
-            finderPayout.toString(),
+            finderPayoutTotal.toString(),
             proRataPool.toString(),
             shareRows.length,
           ],
         );
         await c.query(`INSERT INTO pool_rounds (started_at) VALUES (now())`);
 
-        const yourPayout = finderPayout;
         return {
           ok: true as const,
           share_id: 'pending',
@@ -517,7 +554,7 @@ export async function poolRoutes(app: FastifyInstance) {
           block_event_id: mintEventId,
           finder_pubkey: s.pubkey,
           reward_base_units: grossReward.toString(),
-          your_payout_base_units: yourPayout.toString(),
+          your_payout_base_units: finderPayoutTotal.toString(),
         };
       },
       { onRetry: (err, attempt) => app.log.warn({ err, attempt, route: 'pool/share' }, 'tx retry') },
@@ -570,10 +607,7 @@ export async function poolRoutes(app: FastifyInstance) {
         difficultyStepBlocks: app.config.difficultyStepBlocks,
         difficultyMaxBits: app.config.difficultyMaxBits,
       });
-      const shareBits = Math.max(
-        app.config.poolShareMinBits,
-        networkBits - app.config.poolShareBitsOffset,
-      );
+      const shareBits = app.config.poolShareBits;
 
       // Active miners + per-miner share counts in last 60s, used to
       // estimate hashrate. 2^share_bits hashes per share by definition.
@@ -608,14 +642,17 @@ export async function poolRoutes(app: FastifyInstance) {
       });
       const treasuryCut = (reward * BigInt(app.config.poolFeeBps)) / 10000n;
       const netReward = reward - treasuryCut;
-      const finderPayout = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
-      const proRataPool = netReward - finderPayout;
+      const finderBonus = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
+      const proRataPool = netReward - finderBonus;
 
-      const nonFinderShares = totalShares > yourShares ? totalShares - yourShares : 0n;
-      const estIfFinder = finderPayout;
-      const estIfNotFinder = nonFinderShares > 0n
-        ? (proRataPool * yourShares) / nonFinderShares
+      // Under the new fairness rules, EVERY participant earns a pro-rata
+      // share (finder included). The finder additionally gets the bonus.
+      // So both previews are anchored on the same pro-rata calculation.
+      const proRataIfWon = totalShares > 0n
+        ? (proRataPool * yourShares) / totalShares
         : 0n;
+      const estIfFinder = finderBonus + proRataIfWon;
+      const estIfNotFinder = proRataIfWon;
 
       // Recent closed rounds for the activity strip in the UI.
       const recentClosedRows = (await app.pool.query<{
@@ -686,6 +723,116 @@ export async function poolRoutes(app: FastifyInstance) {
       };
     });
     reply.header('cache-control', 'private, max-age=0');
+    return body;
+  });
+
+  // ---- GET /pool/rounds -----------------------------------------------------
+  // Paginated history of CLOSED pool rounds, newest first. Powers the
+  // "view all" page so the visualizer / stats panels can keep their
+  // recent-payouts list short. The caller's per-round payout (if any) is
+  // included on each row.
+  //
+  // Cursor pagination uses the round id (BIGSERIAL) — simple, dense,
+  // monotonic. The `pool_rounds_ended_at_idx` index keeps this cheap
+  // even as the table grows.
+  const RoundsQuery = z.object({
+    cursor: z.string().regex(/^\d+$/).optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  });
+  app.get('/pool/rounds', async (req, reply) => {
+    if (!app.config.poolEnabled) {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
+    }
+    const qp = RoundsQuery.safeParse(req.query);
+    if (!qp.success) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
+    }
+    const { cursor, limit } = qp.data;
+    const session = app.readSession(req);
+
+    const params: unknown[] = [];
+    let cursorClause = '';
+    if (cursor) {
+      params.push(cursor);
+      cursorClause = `AND pr.id < $${params.length}::bigint`;
+    }
+    params.push(limit + 1);
+    const limitParam = `$${params.length}`;
+
+    const rows = (await app.pool.query<{
+      id: string;
+      started_at: Date;
+      ended_at: Date;
+      ended_by_pubkey: string;
+      ended_by_event_id: string | null;
+      reward_base_units: string;
+      treasury_cut_base_units: string;
+      finder_payout_base_units: string;
+      pro_rata_pool_base_units: string;
+      participant_count: number | null;
+      total_shares: string;
+      ended_by_display_name: string | null;
+    }>(
+      `SELECT pr.id::text AS id,
+              pr.started_at,
+              pr.ended_at,
+              pr.ended_by_pubkey,
+              pr.ended_by_event_id::text AS ended_by_event_id,
+              pr.reward_base_units::text AS reward_base_units,
+              pr.treasury_cut_base_units::text AS treasury_cut_base_units,
+              pr.finder_payout_base_units::text AS finder_payout_base_units,
+              pr.pro_rata_pool_base_units::text AS pro_rata_pool_base_units,
+              pr.participant_count,
+              pr.total_shares::text AS total_shares,
+              a.display_name AS ended_by_display_name
+         FROM pool_rounds pr
+    LEFT JOIN accounts a ON a.pubkey = pr.ended_by_pubkey
+        WHERE pr.ended_at IS NOT NULL
+          ${cursorClause}
+     ORDER BY pr.id DESC
+        LIMIT ${limitParam}`,
+      params,
+    )).rows;
+
+    const hasMore = rows.length > limit;
+    const pageRows = rows.slice(0, limit);
+
+    // Per-round caller payout in a single roundtrip (so each request is
+    // exactly 2 queries regardless of page size).
+    const yourPayouts: Record<string, string> = {};
+    if (session && pageRows.length > 0) {
+      const ids = pageRows.map((r) => r.id);
+      const r = await app.pool.query<{ round_id: string; payout_base_units: string }>(
+        `SELECT round_id::text AS round_id, payout_base_units::text AS payout_base_units
+           FROM pool_payouts
+          WHERE round_id = ANY($1::bigint[]) AND pubkey = $2`,
+        [ids, session.pubkey],
+      );
+      for (const row of r.rows) yourPayouts[row.round_id] = row.payout_base_units;
+    }
+
+    const body: PoolRoundsResponse = {
+      rounds: pageRows.map((r) => ({
+        round_id: r.id,
+        started_at: r.started_at.toISOString(),
+        ended_at: r.ended_at.toISOString(),
+        finder_pubkey: r.ended_by_pubkey,
+        ...(r.ended_by_display_name ? { finder_display_name: r.ended_by_display_name } : {}),
+        ...(r.ended_by_event_id ? { block_event_id: r.ended_by_event_id } : {}),
+        reward_base_units: r.reward_base_units,
+        treasury_cut_base_units: r.treasury_cut_base_units,
+        finder_payout_base_units: r.finder_payout_base_units,
+        pro_rata_pool_base_units: r.pro_rata_pool_base_units,
+        participant_count: r.participant_count ?? 0,
+        total_shares: r.total_shares,
+        ...(yourPayouts[r.id] ? { your_payout_base_units: yourPayouts[r.id] } : {}),
+      })),
+      ...(hasMore && pageRows.length > 0
+        ? { next_cursor: pageRows[pageRows.length - 1]!.round_id }
+        : {}),
+    };
+
+    reply.header('cache-control', 'public, max-age=3, stale-while-revalidate=15');
     return body;
   });
 }

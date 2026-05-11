@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
@@ -195,16 +196,30 @@ export function StatsPage() {
           </pre>
           {poolStats.recent_payouts.length > 0 && (
             <>
-              <div style={{ margin: '12px 0 4px', color: 'var(--dim)', fontSize: 11, letterSpacing: '0.14em' }}>
-                RECENT POOL ROUNDS
+              <div
+                style={{
+                  margin: '12px 0 4px',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'baseline',
+                  color: 'var(--dim)',
+                  fontSize: 11,
+                  letterSpacing: '0.14em',
+                }}
+              >
+                <span>RECENT POOL ROUNDS</span>
+                <Link
+                  to="/pool/history"
+                  style={{ letterSpacing: '0.06em', textTransform: 'none', fontSize: 12 }}
+                >
+                  [ view all ]
+                </Link>
               </div>
-              <pre style={{ margin: 0, fontSize: 12, color: 'var(--dim)' }}>
-{poolStats.recent_payouts.map((p) => {
-  const at = new Date(p.ended_at).toISOString().slice(11, 19) + ' UTC';
-  const finder = p.finder_display_name ? `@${p.finder_display_name}` : `${p.finder_pubkey.slice(0, 6)}…${p.finder_pubkey.slice(-4)}`;
-  return `  ${at}  #${p.round_id}  ${formatRpow(p.reward_base_units).padStart(11)} RPOW · ${p.participant_count} miner${p.participant_count === 1 ? '' : 's'} · won by ${finder}`;
-}).join('\n')}
-              </pre>
+              <div className="pool-rounds-list">
+                {poolStats.recent_payouts.map((p) => (
+                  <PoolRoundRow key={p.round_id} entry={p} />
+                ))}
+              </div>
             </>
           )}
         </Panel>
@@ -233,6 +248,40 @@ export function StatsPage() {
         )}
       </Panel>
     </>
+  );
+}
+
+/**
+ * Single closed-round row, with the finder identity rendered as a link
+ * to /explorer/account/:pubkey and the block tx id linked to the
+ * explorer detail view when present. The aim is to make recent-round
+ * data fully navigable rather than a static text dump.
+ */
+function PoolRoundRow({ entry }: { entry: PoolStatsResponse['recent_payouts'][number] }) {
+  const at = new Date(entry.ended_at).toISOString().slice(11, 19) + ' UTC';
+  const finderLabel = entry.finder_display_name
+    ? `@${entry.finder_display_name}`
+    : `${entry.finder_pubkey.slice(0, 6)}…${entry.finder_pubkey.slice(-4)}`;
+  const yours = entry.your_payout_base_units
+    ? ` · you +${formatRpow(entry.your_payout_base_units)} RPOW`
+    : '';
+  return (
+    <div className="pool-rounds-row">
+      <span className="pool-rounds-time">{at}</span>
+      <span className="pool-rounds-id">#{entry.round_id}</span>
+      <span className="pool-rounds-reward">{formatRpow(entry.reward_base_units)} RPOW</span>
+      <span className="pool-rounds-meta">
+        {entry.participant_count} miner{entry.participant_count === 1 ? '' : 's'} · won by{' '}
+        <Link
+          to={`/explorer/account/${entry.finder_pubkey}`}
+          title={entry.finder_pubkey}
+          className="pool-rounds-finder"
+        >
+          <code>{finderLabel}</code>
+        </Link>
+        {yours}
+      </span>
+    </div>
   );
 }
 
@@ -312,7 +361,9 @@ function RowFragment({
     <>
       <span className="lb-rank">{rank}</span>
       <span className="lb-identity" title={pubkey}>
-        <code>{label}</code>{' '}
+        <Link to={`/explorer/account/${pubkey}`} className="lb-identity-link">
+          <code>{label}</code>
+        </Link>{' '}
         <CopyButton text={pubkey} label="copy" />
       </span>
       <span className="lb-primary">{primary}</span>

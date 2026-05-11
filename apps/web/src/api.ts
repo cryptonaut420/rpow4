@@ -18,6 +18,7 @@ import type {
   FaucetClaimResponse,
   FaucetStatusResponse,
   PoolChallengeResponse,
+  PoolRoundsResponse,
   PoolShareRequestBody,
   PoolShareResponse,
   PoolStatsResponse,
@@ -120,10 +121,16 @@ export const api = {
     return call<ExplorerFeedResponse>('GET', `/explorer/feed${suffix ? `?${suffix}` : ''}`);
   },
   explorerTx: (id: string) => call<ExplorerTxResponse>('GET', `/explorer/tx/${encodeURIComponent(id)}`),
-  explorerAccount: (pubkey: string, cursor?: string, limit?: number) => {
+  explorerAccount: (
+    pubkey: string,
+    cursor?: string,
+    limit?: number,
+    type: 'all' | 'mint' | 'send' | 'receive' = 'all',
+  ) => {
     const qs = new URLSearchParams();
     if (cursor) qs.set('cursor', cursor);
     if (limit) qs.set('limit', String(limit));
+    if (type !== 'all') qs.set('type', type);
     const suffix = qs.toString();
     return call<ExplorerAccountResponse>('GET', `/explorer/account/${encodeURIComponent(pubkey)}${suffix ? `?${suffix}` : ''}`);
   },
@@ -136,6 +143,13 @@ export const api = {
   poolChallenge: () => call<PoolChallengeResponse>('POST', '/pool/challenge', {}),
   poolShare: (b: PoolShareRequestBody) => call<PoolShareResponse>('POST', '/pool/share', b),
   poolStats: () => call<PoolStatsResponse>('GET', '/pool/stats'),
+  poolRounds: (cursor?: string, limit?: number) => {
+    const qs = new URLSearchParams();
+    if (cursor) qs.set('cursor', cursor);
+    if (limit) qs.set('limit', String(limit));
+    const suffix = qs.toString();
+    return call<PoolRoundsResponse>('GET', `/pool/rounds${suffix ? `?${suffix}` : ''}`);
+  },
 
   // Trollbox (public read, signed write)
   trollbox: (cursor?: string, limit?: number) => {

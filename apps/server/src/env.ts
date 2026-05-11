@@ -103,17 +103,13 @@ const Schema = z.object({
   // share cleared network difficulty. The remaining (10000 - POOL_FINDER_BPS)
   // bps are split pro-rata among NON-finder shares. 2500 = 25%.
   POOL_FINDER_BPS: z.coerce.number().int().min(0).max(10000).default(2500),
-  // Share difficulty = network_difficulty - POOL_SHARE_BITS_OFFSET, floored
-  // at POOL_SHARE_MIN_BITS. A larger offset means more frequent shares per
-  // miner (finer contribution measurement, more server load); smaller means
-  // coarser. 10 bits ≈ ~1024 expected shares per network block.
-  POOL_SHARE_BITS_OFFSET: z.coerce.number().int().min(2).max(20).default(10),
-  // Floor on pool share difficulty. At network=24 / offset=10 the unclamped
-  // share target would be 14 bits, which on a 5MH/s browser produces ~76
-  // shares/sec/miner — a flood the server doesn't need. 20 bits keeps the
-  // worst-case rate near 5 shares/sec/miner; production at network=32
-  // with offset=10 lands above the floor naturally.
-  POOL_SHARE_MIN_BITS: z.coerce.number().int().min(8).max(40).default(20),
+  // Pool share difficulty in trailing zero bits. FIXED — does NOT track
+  // the network difficulty. Each share is exactly 2^POOL_SHARE_BITS
+  // expected hashes regardless of how high the network target climbs,
+  // which keeps share submission rates and payout granularity stable
+  // across the schedule's difficulty steps. Default 24 bits → ~10 s of
+  // hashing on a typical laptop per share.
+  POOL_SHARE_BITS: z.coerce.number().int().min(8).max(40).default(24),
   // Pool challenge lifetime. Worker auto-renews ~30s before expiry.
   POOL_CHALLENGE_TTL_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
 

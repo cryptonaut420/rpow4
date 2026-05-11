@@ -6,14 +6,16 @@
 -- Distribution rules at round close (see routes/pool.ts):
 --   * 2% of gross reward → treasury (POOL_FEE_BPS)
 --   * Of the remaining 98% (net):
---       - 25% (POOL_FINDER_BPS) → the miner whose share cleared network
---         difficulty (the "finder")
---       - 75% → split pro-rata across all NON-finder shares in the round
+--       - 25% (POOL_FINDER_BPS) → flat bonus to the miner whose share
+--         cleared network difficulty (the "finder")
+--       - 75% → split pro-rata across ALL shares in the round, the
+--         finder's own shares included
 --
--- The finder explicitly does NOT participate in the 75% pro-rata pool —
--- they get the flat 25% only. Solo mining is unaffected by these tables;
--- a solo miner who finds a block still gets 100% of the reward via the
--- existing /mint path.
+-- Every participant earns pro-rata; the finder additionally takes the
+-- flat 25% bonus on top. This avoids the perverse incentive where a
+-- heavy contributor earned more when *someone else* found the block.
+-- Solo mining is unaffected by these tables; a solo miner who finds a
+-- block still gets 100% of the reward via the existing /mint path.
 
 CREATE TABLE IF NOT EXISTS pool_rounds (
   id BIGSERIAL PRIMARY KEY,

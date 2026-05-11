@@ -21,6 +21,8 @@ const FeedQuerySchema = z.object({
 const AccountQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
+  /** Omit or `all` — show everything. Otherwise restricts the items list. */
+  type: z.enum(['all', 'mint', 'send', 'receive']).optional().default('all'),
 });
 
 function sendCachedJson(
@@ -215,9 +217,11 @@ export async function explorerRoutes(app: FastifyInstance) {
     if (!qp.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
     }
-    const { cursor, limit } = qp.data;
+    const { cursor, limit, type: itemType } = qp.data;
 
-    const cacheKey = cursor ? null : pubkey;
+    // Each filter variant has a distinct shape, so include it in the
+    // first-page cache key. Cursor pages skip the cache as before.
+    const cacheKey = cursor ? null : `${pubkey}|${itemType}`;
 
     const buildPage = async (): Promise<ExplorerAccountResponse | null> => {
       const acctResult = await app.pool.query<{
@@ -246,11 +250,19 @@ export async function explorerRoutes(app: FastifyInstance) {
       const acct = acctResult.rows[0]!;
 
       const cursorBigInt: bigint | null = cursor ? BigInt(cursor) : null;
-      const cursorFilter = cursorBigInt !== null ? `AND e.event_seq < $2::bigint` : '';
       const params: unknown[] = [pubkey];
-      if (cursorBigInt !== null) params.push(cursorBigInt.toString());
+      const filters: string[] = [];
+      if (cursorBigInt !== null) {
+        params.push(cursorBigInt.toString());
+        filters.push(`AND e.event_seq < $${params.length}::bigint`);
+      }
+      if (itemType !== 'all') {
+        params.push(itemType);
+        filters.push(`AND e.type = $${params.length}::text`);
+      }
       params.push(limit + 1);
       const limitParam = `$${params.length}`;
+      const filterSqlHot = filters.join(' ');
 
       const recent = await app.pool.query<{
         id: string | null;
@@ -274,7 +286,7 @@ export async function explorerRoutes(app: FastifyInstance) {
                 e.created_at AS at
          FROM account_recent_events e
          LEFT JOIN accounts a ON a.pubkey = e.counterparty_pubkey
-         WHERE e.pubkey = $1 ${cursorFilter}
+         WHERE e.pubkey = $1 ${filterSqlHot}
          ORDER BY e.event_seq DESC
          LIMIT ${limitParam}`,
         params,
@@ -286,33 +298,29 @@ export async function explorerRoutes(app: FastifyInstance) {
       if (rows.length < limit + 1) {
         const oldestHot = rows[rows.length - 1]?.event_seq ?? null;
         const histParams: unknown[] = [pubkey];
-        const filters: string[] = [];
+        const histFilters: string[] = [];
 
         if (cursorBigInt !== null) {
           histParams.push(cursorBigInt.toString());
-          filters.push(`AND event_seq < $${histParams.length}::bigint`);
+          histFilters.push(`AND event_seq < $${histParams.length}::bigint`);
         }
         if (oldestHot) {
           histParams.push(oldestHot);
-          filters.push(`AND event_seq < $${histParams.length}::bigint`);
+          histFilters.push(`AND event_seq < $${histParams.length}::bigint`);
         }
         histParams.push(limit + 1 - rows.length);
         const histLimitParam = `$${histParams.length}`;
-        const filterSql = filters.join(' ');
+        const filterSql = histFilters.join(' ');
 
-        const historical = await app.pool.query<{
-          id: string | null;
-          type: 'mint' | 'send' | 'receive';
-          event_seq: string;
-          amount: string;
-          fee_base_units: string;
-          memo: string | null;
-          counterparty_pubkey: string | null;
-          counterparty_display_name: string | null;
-          at: Date;
-        }>(
-          `WITH events AS (
-            (SELECT NULL::uuid AS id,
+        // Only include the union branches the requested filter cares
+        // about. The query is cheaper (fewer index probes) AND keeps the
+        // post-union LIMIT from being dominated by irrelevant branches.
+        const wantMint = itemType === 'all' || itemType === 'mint';
+        const wantSend = itemType === 'all' || itemType === 'send';
+        const wantReceive = itemType === 'all' || itemType === 'receive';
+        const branches: string[] = [];
+        if (wantMint) {
+          branches.push(`(SELECT NULL::uuid AS id,
                     'mint' AS type,
                     event_seq,
                     amount,
@@ -322,9 +330,10 @@ export async function explorerRoutes(app: FastifyInstance) {
                     created_at
              FROM ledger_events
              WHERE event_type='MINT' AND actor_pubkey=$1 ${filterSql}
-             ORDER BY event_seq DESC LIMIT ${histLimitParam})
-            UNION ALL
-            (SELECT id,
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
+        }
+        if (wantSend) {
+          branches.push(`(SELECT id,
                     'send' AS type,
                     event_seq,
                     amount,
@@ -334,9 +343,10 @@ export async function explorerRoutes(app: FastifyInstance) {
                     created_at
              FROM ledger_events
              WHERE event_type='TRANSFER' AND actor_pubkey=$1 ${filterSql}
-             ORDER BY event_seq DESC LIMIT ${histLimitParam})
-            UNION ALL
-            (SELECT id,
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
+        }
+        if (wantReceive) {
+          branches.push(`(SELECT id,
                     'receive' AS type,
                     event_seq,
                     amount,
@@ -346,25 +356,42 @@ export async function explorerRoutes(app: FastifyInstance) {
                     created_at
              FROM ledger_events
              WHERE event_type='TRANSFER' AND counterparty_pubkey=$1 ${filterSql}
-             ORDER BY event_seq DESC LIMIT ${histLimitParam})
-           )
-           SELECT ev.id::text AS id,
-                  ev.type::text AS type,
-                  ev.event_seq::text AS event_seq,
-                  ev.amount::text AS amount,
-                  ev.fee_base_units::text AS fee_base_units,
-                  ev.memo,
-                  ev.counterparty_pubkey,
-                  a.display_name AS counterparty_display_name,
-                  ev.created_at AS at
-           FROM events ev
-           LEFT JOIN accounts a ON a.pubkey = ev.counterparty_pubkey
-           ORDER BY ev.event_seq DESC
-           LIMIT ${histLimitParam}`,
-          histParams,
-        );
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
+        }
 
-        rows = [...rows, ...historical.rows];
+        if (branches.length > 0) {
+          const historical = await app.pool.query<{
+            id: string | null;
+            type: 'mint' | 'send' | 'receive';
+            event_seq: string;
+            amount: string;
+            fee_base_units: string;
+            memo: string | null;
+            counterparty_pubkey: string | null;
+            counterparty_display_name: string | null;
+            at: Date;
+          }>(
+            `WITH events AS (
+              ${branches.join('\n              UNION ALL\n              ')}
+             )
+             SELECT ev.id::text AS id,
+                    ev.type::text AS type,
+                    ev.event_seq::text AS event_seq,
+                    ev.amount::text AS amount,
+                    ev.fee_base_units::text AS fee_base_units,
+                    ev.memo,
+                    ev.counterparty_pubkey,
+                    a.display_name AS counterparty_display_name,
+                    ev.created_at AS at
+             FROM events ev
+             LEFT JOIN accounts a ON a.pubkey = ev.counterparty_pubkey
+             ORDER BY ev.event_seq DESC
+             LIMIT ${histLimitParam}`,
+            histParams,
+          );
+
+          rows = [...rows, ...historical.rows];
+        }
       }
 
       const hasMore = rows.length > limit;

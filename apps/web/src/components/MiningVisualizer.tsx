@@ -90,6 +90,19 @@ export interface MiningVisualizerProps {
    * and progress meter are otherwise identical to full mode.
    */
   compact?: boolean;
+  /**
+   * When provided, the headline "expected solve" line is computed from
+   * the pool's aggregate hashrate (vs. the personal `target` solve
+   * time). The user's own hashrate is still shown below as the share
+   * ETA so both numbers are visible. Pass undefined when mining solo.
+   */
+  poolHashratePerSec?: number;
+  /**
+   * Trailing-zero-bits required for an accepted share. When set, a
+   * second "your share" ETA line is shown beneath the pool ETA using
+   * the local hashrate.
+   */
+  shareDifficultyBits?: number;
 }
 
 interface WinFx {
@@ -137,7 +150,13 @@ function useMonoColCount(containerRef: React.RefObject<HTMLDivElement>): number 
   return cols;
 }
 
-export function MiningVisualizer({ target, handlesRef, compact = false }: MiningVisualizerProps) {
+export function MiningVisualizer({
+  target,
+  handlesRef,
+  compact = false,
+  poolHashratePerSec,
+  shareDifficultyBits,
+}: MiningVisualizerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cols = useMonoColCount(containerRef);
   const rainRows = compact ? RAIN_ROWS_COMPACT : RAIN_ROWS_FULL;
@@ -170,6 +189,8 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
   const progressBarNodeRef = useRef<HTMLSpanElement>(null);
   const progressPctNodeRef = useRef<HTMLSpanElement>(null);
   const expectedNodeRef = useRef<HTMLSpanElement>(null);
+  /** Only used when poolHashratePerSec is provided (pool mode). */
+  const shareEtaNodeRef = useRef<HTMLSpanElement>(null);
   const nonceNodeRef = useRef<HTMLSpanElement>(null);
   const hpsNodeRef = useRef<HTMLSpanElement>(null);
   const spinnerNodeRef = useRef<HTMLSpanElement>(null);
@@ -346,8 +367,23 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
       if (progressPctNodeRef.current) {
         progressPctNodeRef.current.textContent = `${(cdf * 100).toFixed(0)}%`;
       }
+      // The "expected solve" line has two flavours:
+      //
+      // - Solo (poolHashratePerSec === undefined): show the user's
+      //   personal expected time to clear `target`, using their own
+      //   hashrate. Unchanged from the original behaviour.
+      // - Pool (poolHashratePerSec set): the headline ETA is the
+      //   POOL's expected time to find a block (so we use the pool's
+      //   aggregate rate); the personal share-solve ETA shows below
+      //   it on a second line.
+      const isPoolMode = typeof poolHashratePerSec === 'number' && poolHashratePerSec > 0;
       if (expectedNodeRef.current) {
-        if (expectedHashes > 0 && hps > 0) {
+        if (isPoolMode && expectedHashes > 0) {
+          const poolHps = poolHashratePerSec!;
+          const poolExpectedSec = expectedHashes / poolHps;
+          expectedNodeRef.current.textContent =
+            `pool block ETA ~${formatDurationShort(poolExpectedSec)} @ ${formatHps(poolHps)}`;
+        } else if (expectedHashes > 0 && hps > 0) {
           const expectedSolveSec = expectedHashes / hps;
           const ratio = estHashes / expectedHashes;
           // Hashing is memoryless, so "ETA" in the dependency-pruning sense
@@ -360,6 +396,20 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
             `expected solve ~${formatDurationShort(expectedSolveSec)} @ ${formatHps(hps)}${overrun}`;
         } else {
           expectedNodeRef.current.textContent = active ? 'measuring rate…' : '—';
+        }
+      }
+
+      // Pool mode also shows the user's share solve ETA so they can
+      // compare "you submit roughly one share every X seconds" against
+      // "the pool finds a block every Y" without leaving the panel.
+      if (shareEtaNodeRef.current) {
+        if (isPoolMode && typeof shareDifficultyBits === 'number' && shareDifficultyBits > 0 && hps > 0) {
+          const shareHashes = Math.pow(2, shareDifficultyBits);
+          const shareEtaSec = shareHashes / hps;
+          shareEtaNodeRef.current.textContent =
+            `your share ~${formatDurationShort(shareEtaSec)} @ ${formatHps(hps)} (target ${shareDifficultyBits} bits)`;
+        } else {
+          shareEtaNodeRef.current.textContent = '';
         }
       }
 
@@ -404,7 +454,7 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
 
     frame = requestAnimationFrame(tick);
     return () => { if (frame !== null) cancelAnimationFrame(frame); };
-  }, [cols, target]);
+  }, [cols, target, poolHashratePerSec, shareDifficultyBits]);
 
   // --- Static layout structure ------------------------------------------------
   const railStyle = useMemo<React.CSSProperties>(() => ({
@@ -479,9 +529,14 @@ export function MiningVisualizer({ target, handlesRef, compact = false }: Mining
         </div>
         {/* Expected-solve ETA — useful in both modes so the user always
          * sees the headline "how long should this take" alongside the
-         * statistical CDF percentage above. */}
+         * statistical CDF percentage above. In pool mode the headline
+         * shows the pool block ETA; the user's share ETA appears on a
+         * second line beneath it. */}
         <div style={{ marginTop: 2, fontSize: 11, color: 'var(--dim)', textAlign: 'right' }}>
           <span ref={expectedNodeRef} />
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--dim)', textAlign: 'right', minHeight: 14 }}>
+          <span ref={shareEtaNodeRef} />
         </div>
       </div>
 

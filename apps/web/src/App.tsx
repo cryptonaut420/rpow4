@@ -18,6 +18,7 @@ import { HistoryPage } from './pages/History.js';
 import { ClaimPage } from './pages/Claim.js';
 import { RedeemPage } from './pages/Redeem.js';
 import { EcosystemPage } from './pages/Ecosystem.js';
+import { PoolHistoryPage } from './pages/PoolHistory.js';
 import { CopyButton } from './components/CopyButton.js';
 import { SupplyBar } from './components/SupplyBar.js';
 import { MiningBar } from './components/MiningBar.js';
@@ -116,6 +117,7 @@ export default function App() {
             <Route path="/history" element={<HistoryPage />} />
             <Route path="/docs" element={<DocsPage />} />
             <Route path="/ecosystem" element={<EcosystemPage />} />
+            <Route path="/pool/history" element={<PoolHistoryPage />} />
           </Routes>
         </main>
         <footer className="app-footer">

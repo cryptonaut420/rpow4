@@ -36,13 +36,16 @@ export type MiningMode = 'solo' | 'pool';
 const MODE_STORAGE_KEY = 'rpow.mining.mode';
 
 function loadMode(): MiningMode {
-  // Default: solo. Existing users keep their current behaviour
-  // unchanged when they upgrade — they have to opt in to the pool by
-  // clicking the MODE toggle. Once chosen, the preference persists.
+  // Default: pool. Pool mode pays out more often, has lower variance,
+  // and is the friendlier first experience for anyone who hasn't
+  // explicitly chosen. A previously-saved preference (including the
+  // earlier solo default) wins — once a user has clicked the MODE
+  // toggle, we honour their choice.
   try {
     const v = localStorage.getItem(MODE_STORAGE_KEY);
-    return v === 'pool' ? 'pool' : 'solo';
-  } catch { return 'solo'; }
+    if (v === 'solo' || v === 'pool') return v;
+  } catch { /* private mode / SSR */ }
+  return 'pool';
 }
 
 // Throttle background /me + /ledger refreshes during continuous mining

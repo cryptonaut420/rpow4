@@ -369,7 +369,18 @@ function TxView({ id }: { id: string }) {
 
 // ---- Account view -----------------------------------------------------------
 
+type AccountFilter = 'all' | 'mint' | 'send' | 'receive';
+
+function parseAccountFilter(searchParams: URLSearchParams): AccountFilter {
+  const t = searchParams.get('type');
+  if (t === 'mint' || t === 'send' || t === 'receive') return t;
+  return 'all';
+}
+
 function AccountView({ pubkey }: { pubkey: string }) {
+  const [searchParams] = useSearchParams();
+  const filter = parseAccountFilter(searchParams);
+
   const [account, setAccount] = useState<ExplorerAccountResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -381,21 +392,21 @@ function AccountView({ pubkey }: { pubkey: string }) {
     setError('');
     setAccount(null);
     loadedOnce.current = false;
-    api.explorerAccount(pubkey, undefined, PAGE_SIZE)
+    api.explorerAccount(pubkey, undefined, PAGE_SIZE, filter)
       .then((r) => {
         setAccount(r);
         loadedOnce.current = true;
       })
       .catch((e: any) => setError(e?.message ?? 'account not found'))
       .finally(() => setLoading(false));
-  }, [pubkey]);
+  }, [pubkey, filter]);
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
   const loadMore = () => {
     if (!account?.next_cursor || loadingMore) return;
     setLoadingMore(true);
-    api.explorerAccount(pubkey, account.next_cursor, PAGE_SIZE)
+    api.explorerAccount(pubkey, account.next_cursor, PAGE_SIZE, filter)
       .then((r) => {
         setAccount((prev) => prev ? {
           ...prev,
@@ -436,9 +447,12 @@ function AccountView({ pubkey }: { pubkey: string }) {
 
       {/* Transaction list */}
       <div style={{ marginTop: 16, marginBottom: 6, color: 'var(--dim)', fontSize: 12 }}>TRANSACTION HISTORY</div>
+      <AccountFilterTabs pubkey={pubkey} active={filter} />
 
       {account.items.length === 0 ? (
-        <div style={{ color: 'var(--dim)' }}>(no transactions)</div>
+        <div style={{ color: 'var(--dim)' }}>
+          {filter === 'all' ? '(no transactions)' : `(no ${filter} transactions)`}
+        </div>
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -456,6 +470,32 @@ function AccountView({ pubkey }: { pubkey: string }) {
         </>
       )}
     </>
+  );
+}
+
+/**
+ * Filter chips for the account transaction list. Renders four
+ * /explorer/account/:pubkey?type=… links and visually marks the active
+ * one. Implemented as links (not buttons) so each filter is a real URL
+ * the user can copy/share/back-button.
+ */
+function AccountFilterTabs({ pubkey, active }: { pubkey: string; active: AccountFilter }) {
+  const linkStyle = (isActive: boolean) => ({
+    borderBottom: isActive ? '1px solid var(--accent)' : '1px dotted var(--accent-dim)',
+    color: isActive ? 'var(--accent)' : 'var(--fg)',
+    opacity: isActive ? 1 : 0.75,
+    textDecoration: 'none',
+    fontSize: 12,
+  });
+  const base = `/explorer/account/${pubkey}`;
+  return (
+    <div style={{ marginBottom: 12, fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: '6px 12px', alignItems: 'center' }}>
+      <span style={{ color: 'var(--dim)' }}>show</span>
+      <Link to={base} style={linkStyle(active === 'all')}>[ all ]</Link>
+      <Link to={`${base}?type=mint`} style={linkStyle(active === 'mint')}>[ mints ]</Link>
+      <Link to={`${base}?type=send`} style={linkStyle(active === 'send')}>[ sends ]</Link>
+      <Link to={`${base}?type=receive`} style={linkStyle(active === 'receive')}>[ receives ]</Link>
+    </div>
   );
 }
 

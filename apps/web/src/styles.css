@@ -317,6 +317,54 @@ input:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); }
   font-size: 12px;
   white-space: nowrap;
 }
+.lb-identity-link {
+  color: var(--fg);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent-dim);
+}
+.lb-identity-link:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Recent pool rounds list shared between Stats and the Pool history page. */
+.pool-rounds-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.pool-rounds-row {
+  display: grid;
+  grid-template-columns: auto auto auto 1fr;
+  column-gap: 12px;
+  align-items: baseline;
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--dimmer);
+  white-space: nowrap;
+}
+.pool-rounds-row:last-child { border-bottom: none; }
+.pool-rounds-time { color: var(--dim); font-variant-numeric: tabular-nums; }
+.pool-rounds-id { color: var(--dim); }
+.pool-rounds-reward { color: var(--accent); font-variant-numeric: tabular-nums; }
+.pool-rounds-meta { color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.pool-rounds-finder {
+  color: var(--fg);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent-dim);
+}
+.pool-rounds-finder:hover {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+@media (max-width: 600px) {
+  .pool-rounds-row {
+    grid-template-columns: auto auto 1fr;
+    row-gap: 2px;
+    white-space: normal;
+  }
+  .pool-rounds-meta { grid-column: 1 / -1; white-space: normal; }
+}
 
 @media (max-width: 600px) {
   .leaderboard-header { display: none; }
