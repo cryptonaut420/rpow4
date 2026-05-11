@@ -20,6 +20,7 @@ import { RedeemPage } from './pages/Redeem.js';
 import { EcosystemPage } from './pages/Ecosystem.js';
 import { PoolHistoryPage } from './pages/PoolHistory.js';
 import { CopyButton } from './components/CopyButton.js';
+import { ScrollToTop } from './components/ScrollToTop.js';
 import { SupplyBar } from './components/SupplyBar.js';
 import { MiningBar } from './components/MiningBar.js';
 import { MiningProvider } from './mining/MiningProvider.js';
@@ -132,6 +133,7 @@ export default function App() {
         </footer>
       </div>
       <MiningBar />
+      <ScrollToTop />
       </MiningProvider>
     </HashRouter>
   );
