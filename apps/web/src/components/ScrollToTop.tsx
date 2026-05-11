@@ -10,11 +10,10 @@ export function ScrollToTop() {
     return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
-  if (!visible) return null;
-
   return (
     <button
       className="scroll-to-top"
+      style={{ opacity: visible ? 1 : 0, pointerEvents: visible ? 'auto' : 'none' }}
       onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
       aria-label="scroll to top"
       title="back to top"

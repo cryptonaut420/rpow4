@@ -767,7 +767,7 @@ main { margin-top: 4px; }
 /* ── Scroll-to-top button ─────────────────────────────────────────────────── */
 .scroll-to-top {
   position: fixed;
-  bottom: 60px;
+  top: 20px;
   right: 20px;
   z-index: 51;
 
@@ -782,13 +782,12 @@ main { margin-top: 4px; }
   cursor: pointer;
   letter-spacing: 0.04em;
 
-  /* Subtle glow matching the site's terminal aesthetic */
   box-shadow:
     0 0 10px var(--glow),
     0 2px 12px rgba(0, 0, 0, 0.5);
 
-  /* Smooth fade-in via React conditional render, slide up on hover */
   transition:
+    opacity 0.2s,
     color 0.15s,
     border-color 0.15s,
     box-shadow 0.15s,
@@ -812,7 +811,7 @@ main { margin-top: 4px; }
 
 @media (max-width: 600px) {
   .scroll-to-top {
-    bottom: 56px;
+    top: 12px;
     right: 12px;
     font-size: 12px;
     padding: 6px 9px;
