@@ -266,6 +266,11 @@ export function MiningBar() {
                 ? mining.poolStats.share_difficulty_bits
                 : undefined
             }
+            poolRoundStartedAt={
+              mining.mode === 'pool' && mining.poolStats?.current_round
+                ? mining.poolStats.current_round.started_at
+                : undefined
+            }
           />
         </div>
       </div>

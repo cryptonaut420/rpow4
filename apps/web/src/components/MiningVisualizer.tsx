@@ -103,6 +103,14 @@ export interface MiningVisualizerProps {
    * the local hashrate.
    */
   shareDifficultyBits?: number;
+  /**
+   * ISO timestamp of when the current pool round started. Combined with
+   * `poolHashratePerSec`, this lets the progress bar reflect the POOL's
+   * cumulative hashing toward the network target — instead of just the
+   * caller's personal hashes, which at network ≥ 30 bits would otherwise
+   * look stuck at 0% indefinitely.
+   */
+  poolRoundStartedAt?: string;
 }
 
 interface WinFx {
@@ -156,10 +164,20 @@ export function MiningVisualizer({
   compact = false,
   poolHashratePerSec,
   shareDifficultyBits,
+  poolRoundStartedAt,
 }: MiningVisualizerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cols = useMonoColCount(containerRef);
   const rainRows = compact ? RAIN_ROWS_COMPACT : RAIN_ROWS_FULL;
+
+  // Parse the round-start ISO once per change, not on every animation
+  // frame. `null` when no round info is supplied (solo mode) — the RAF
+  // tick then falls back to the personal CDF path.
+  const poolRoundStartedAtMs = useMemo<number | null>(() => {
+    if (!poolRoundStartedAt) return null;
+    const t = Date.parse(poolRoundStartedAt);
+    return Number.isFinite(t) ? t : null;
+  }, [poolRoundStartedAt]);
 
   // Refs hold all high-frequency state so the RAF loop never triggers React
   // re-renders. The parent's handles also write into refs, never into state.
@@ -334,16 +352,34 @@ export function MiningVisualizer({
       // more honest "how close are you" signal than `bestZeros / target`,
       // since one extra trailing zero doubles the expected work.
       //
-      // We extrapolate hashes between worker progress messages (which arrive
-      // every ~250 ms) using the measured hashrate so the bar moves smoothly.
+      // Source of "N hashes" differs by mode:
+      //   - Solo: the caller's own per-cycle hash count (extrapolated
+      //     between 250 ms worker progress ticks using the measured
+      //     local hashrate).
+      //   - Pool: the POOL's cumulative hashes since the current round
+      //     started, derived from the live pool hashrate. Using personal
+      //     hashes here would peg the bar at ~0% at high network bits
+      //     (2^34 hashes / 5 MH/s ≈ 57 minutes per expected block, so a
+      //     single miner barely registers). The pool aggregate matches
+      //     the "pool block ETA" line above so the two readouts agree.
       const hps = hpsRef.current;
       const expectedHashes = target > 0 ? Math.pow(2, target) : 0;
       const sinceProgressSec = lastProgressAtRef.current > 0
         ? Math.max(0, (now - lastProgressAtRef.current) / 1000)
         : 0;
-      const estHashes = active
-        ? cycleHashesRef.current + sinceProgressSec * hps
-        : cycleHashesRef.current;
+      const usePoolCdf =
+        typeof poolHashratePerSec === 'number' &&
+        poolHashratePerSec > 0 &&
+        poolRoundStartedAtMs !== null;
+      let estHashes: number;
+      if (usePoolCdf) {
+        const elapsedSec = Math.max(0, (Date.now() - poolRoundStartedAtMs!) / 1000);
+        estHashes = elapsedSec * poolHashratePerSec!;
+      } else {
+        estHashes = active
+          ? cycleHashesRef.current + sinceProgressSec * hps
+          : cycleHashesRef.current;
+      }
       const cdf = expectedHashes > 0 && estHashes > 0
         ? 1 - Math.exp(-estHashes / expectedHashes)
         : 0;
@@ -454,7 +490,7 @@ export function MiningVisualizer({
 
     frame = requestAnimationFrame(tick);
     return () => { if (frame !== null) cancelAnimationFrame(frame); };
-  }, [cols, target, poolHashratePerSec, shareDifficultyBits]);
+  }, [cols, target, poolHashratePerSec, shareDifficultyBits, poolRoundStartedAtMs]);
 
   // --- Static layout structure ------------------------------------------------
   const railStyle = useMemo<React.CSSProperties>(() => ({

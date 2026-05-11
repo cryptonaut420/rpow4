@@ -16,6 +16,13 @@
 -- heavy contributor earned more when *someone else* found the block.
 -- Solo mining is unaffected by these tables; a solo miner who finds a
 -- block still gets 100% of the reward via the existing /mint path.
+--
+-- Each payout is recorded on the public ledger as a MINT event with
+-- actor_pubkey = recipient (see /pool/share in routes/pool.ts). The
+-- treasury fee is also a MINT, but it does NOT increment the treasury's
+-- minted_base_units / blocks_mined so the leaderboard stays clean. The
+-- pool deliberately does NOT use TRANSFER events for payouts — pool
+-- mining is "special" issuance, not a redistribution of existing funds.
 
 CREATE TABLE IF NOT EXISTS pool_rounds (
   id BIGSERIAL PRIMARY KEY,

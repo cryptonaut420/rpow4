@@ -567,6 +567,10 @@ export interface PoolShareResponse {
   /** True when this share also cleared network difficulty and triggered
    * a block-win + round closeout. */
   block_won: boolean;
+  /** The finder's own MINT ledger event id, suitable as an explorer
+   * "block tx" link. Pool payouts are recorded as per-recipient MINTs
+   * (not transfers from a treasury), so each participant's MINT lives
+   * independently; this id is the one most users want to see. */
   block_event_id?: string;
   finder_pubkey?: string;
   reward_base_units?: string;
@@ -623,7 +627,9 @@ export interface PoolRoundEntry {
   ended_at: string;
   finder_pubkey: string;
   finder_display_name?: string;
-  /** The MINT ledger event id created when the block closed (explorer linkage). */
+  /** The finder's MINT ledger event id created when the block closed
+   * (explorer linkage). Pool payouts are issued as one MINT per
+   * recipient; this is the finder's. */
   block_event_id?: string;
   reward_base_units: string;
   treasury_cut_base_units: string;

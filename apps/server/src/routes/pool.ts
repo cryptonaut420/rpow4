@@ -202,7 +202,8 @@ export async function poolRoutes(app: FastifyInstance) {
             share_id: 'pending',
             zeros,
             round_id: roundId,
-            block_won: false,
+            block_won: false as const,
+            participant_pubkeys: [] as string[],
           };
         }
 
@@ -222,7 +223,8 @@ export async function poolRoutes(app: FastifyInstance) {
             share_id: 'pending',
             zeros,
             round_id: roundId,
-            block_won: false,
+            block_won: false as const,
+            participant_pubkeys: [] as string[],
           };
         }
 
@@ -352,83 +354,24 @@ export async function poolRoutes(app: FastifyInstance) {
         // What the finder actually takes home (bonus + their own pro-rata).
         const finderPayoutTotal = payouts.find((p) => p.isFinder)?.payout ?? finderBonus;
 
-        // ---- MINT event: actor = TREASURY, amount = full reward --------
-        const mintEventId = randomUUID();
-        await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [mintEventId]);
-
-        const issuedAt = new Date();
-        const sigForMint = signTokenPayload(
-          { id: mintEventId, owner_pubkey: TREASURY_PUBKEY, value: grossReward, issued_at: issuedAt.toISOString() },
-          app.config.signingPrivateKeyHex,
-        );
-
-        // Treasury balance bumps by the full reward (it's the temporary
-        // holder); we'll deduct each non-finder payout and the finder
-        // payout below as TRANSFERs out of treasury. Crucially we do NOT
-        // increment the treasury's `blocks_mined` or `minted_base_units`
-        // — the treasury is just a conduit; counting it as a miner would
-        // pollute the leaderboard with the entire pool's output.
-        await c.query(
-          `INSERT INTO account_balances(pubkey, spendable_base_units, events_count, updated_at)
-           VALUES($1, $2, 1, now())
-           ON CONFLICT (pubkey) DO UPDATE SET
-             spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
-             events_count = account_balances.events_count + 1,
-             updated_at = now()`,
-          [TREASURY_PUBKEY, grossReward.toString()],
-        );
-
-        // Credit the finder with the actual "mined a block" stat so the
-        // leaderboard reflects who did the lucky work, even though the
-        // funds flow through the treasury.
-        await c.query(
-          `UPDATE account_balances
-              SET blocks_mined = blocks_mined + 1,
-                  updated_at = now()
-            WHERE pubkey = $1`,
-          [s.pubkey],
-        );
-
+        // ---- Issuance accounting (single increment for the whole block) -
+        // The full gross reward enters circulation here, regardless of
+        // how the per-recipient MINT events split it below.
         await c.query(
           `UPDATE ledger_stats SET value = value + $1::bigint, updated_at = now() WHERE name='circulating_supply'`,
           [grossReward.toString()],
         );
 
-        const mintInsert = await c.query<LedgerEventRow>(
-          `WITH inserted AS (
-             INSERT INTO ledger_events(
-               id, event_type, actor_pubkey, amount, memo, server_sig, created_at
-             )
-             VALUES($1,'MINT',$2,$3,$4,$5,$6)
-             RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-                       amount, fee_base_units, memo,
-                       challenge_id, solution_nonce, idempotency_key,
-                       client_signature_base58, server_sig, created_at
-           ),
-           upd_event_id AS (
-             UPDATE ledger_event_ids ids
-             SET event_seq = i.event_seq
-             FROM inserted i
-             WHERE ids.id = i.id
-           )
-           SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-                  amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
-                  challenge_id, solution_nonce, idempotency_key,
-                  client_signature_base58, server_sig, created_at
-           FROM inserted`,
-          [
-            mintEventId,
-            TREASURY_PUBKEY,
-            grossReward.toString(),
-            `pool round #${roundId}`,
-            sigForMint,
-            issuedAt,
-          ],
-        );
-        await mirrorLedgerEventHot(c, mintInsert.rows[0]!);
+        const issuedAt = new Date();
 
-        // ---- Helper: TRANSFER from treasury to a recipient -------------
-        async function payoutTransfer(
+        // ---- Helper: emit a MINT event for a pool participant ----------
+        // Each pool payout is recorded as its own MINT event with
+        // actor_pubkey = recipient (no counterparty). This is what makes
+        // pool payouts show up as "mined" in account / explorer feeds
+        // instead of being indirect TRANSFERs from the treasury. The
+        // finder additionally gets blocks_mined += 1 so the "blocks
+        // mined" leaderboard reflects who actually found this block.
+        async function mintPoolPayout(
           recipient: string,
           amount: bigint,
           memo: string,
@@ -436,44 +379,38 @@ export async function poolRoutes(app: FastifyInstance) {
           shareCount: bigint,
         ): Promise<string | null> {
           if (amount === 0n) return null;
-          // Debit treasury (not under spendable check since we just
-          // credited it; conservative subtraction).
-          await c.query(
-            `UPDATE account_balances
-                SET spendable_base_units = spendable_base_units - $2::bigint,
-                    sent_base_units = sent_base_units + $2::bigint,
-                    updated_at = now()
-              WHERE pubkey = $1`,
-            [TREASURY_PUBKEY, amount.toString()],
-          );
-          // Credit recipient.
-          await c.query(
-            `INSERT INTO account_balances(pubkey, spendable_base_units, received_base_units, events_count, updated_at)
-             VALUES($1, $2, $2, 1, now())
-             ON CONFLICT (pubkey) DO UPDATE SET
-               spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
-               received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
-               events_count = account_balances.events_count + 1,
-               updated_at = now()`,
-            [recipient, amount.toString()],
-          );
-          await c.query(
-            `UPDATE ledger_stat_shards
-                SET value = value + $1::bigint, updated_at = now()
-              WHERE name='total_transferred'
-                AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
-            [amount.toString(), recipient],
+          const eventId = randomUUID();
+          await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [eventId]);
+          const serverSig = signTokenPayload(
+            { id: eventId, owner_pubkey: recipient, value: amount, issued_at: issuedAt.toISOString() },
+            app.config.signingPrivateKeyHex,
           );
 
-          const transferId = randomUUID();
-          await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [transferId]);
-          const tinsert = await c.query<LedgerEventRow>(
+          // Bump recipient's balance. Finder also gets blocks_mined++.
+          // We pass blocks_mined as a parameter so the same statement
+          // works for both the insert and update paths (the COALESCE
+          // pattern would be uglier).
+          await c.query(
+            `INSERT INTO account_balances(
+               pubkey, spendable_base_units, minted_base_units,
+               blocks_mined, events_count, updated_at
+             )
+             VALUES($1, $2, $2, $3, 1, now())
+             ON CONFLICT (pubkey) DO UPDATE SET
+               spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+               minted_base_units    = account_balances.minted_base_units    + EXCLUDED.minted_base_units,
+               blocks_mined         = account_balances.blocks_mined         + $3::int,
+               events_count         = account_balances.events_count         + 1,
+               updated_at = now()`,
+            [recipient, amount.toString(), isFinder ? 1 : 0],
+          );
+
+          const inserted = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
-                 id, event_type, actor_pubkey, counterparty_pubkey, amount,
-                 fee_base_units, memo, idempotency_key, client_signature_base58, created_at
+                 id, event_type, actor_pubkey, amount, memo, server_sig, created_at
                )
-               VALUES($1,'TRANSFER',$2,$3,$4,0,$5,NULL,NULL,$6)
+               VALUES($1,'MINT',$2,$3,$4,$5,$6)
                RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                          amount, fee_base_units, memo,
                          challenge_id, solution_nonce, idempotency_key,
@@ -484,43 +421,100 @@ export async function poolRoutes(app: FastifyInstance) {
                SET event_seq = i.event_seq
                FROM inserted i
                WHERE ids.id = i.id
-             ),
-             upd_transfer_count AS (
-               UPDATE app_counters SET value = value + 1
-                WHERE name='transfer_count'
              )
              SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                     amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
                     challenge_id, solution_nonce, idempotency_key,
                     client_signature_base58, server_sig, created_at
              FROM inserted`,
-            [transferId, TREASURY_PUBKEY, recipient, amount.toString(), memo, issuedAt],
+            [eventId, recipient, amount.toString(), memo, serverSig, issuedAt],
           );
-          await mirrorLedgerEventHot(c, tinsert.rows[0]!);
+          await mirrorLedgerEventHot(c, inserted.rows[0]!);
 
           await c.query(
-            `INSERT INTO pool_payouts(round_id, pubkey, share_count, payout_base_units, is_finder, transfer_event_id)
+            `INSERT INTO pool_payouts(round_id, pubkey, share_count, payout_base_units, is_finder, event_id)
              VALUES($1::bigint, $2, $3::bigint, $4::bigint, $5, $6)`,
-            [roundId, recipient, shareCount.toString(), amount.toString(), isFinder, transferId],
+            [roundId, recipient, shareCount.toString(), amount.toString(), isFinder, eventId],
           );
-          return transferId;
+          return eventId;
+        }
+
+        // ---- Helper: MINT the treasury fee -----------------------------
+        // The treasury receives a MINT too — but we deliberately do NOT
+        // increment its minted_base_units or blocks_mined, since the
+        // leaderboard would otherwise be dominated by the system
+        // account. spendable + events_count bump as usual.
+        async function mintTreasuryFee(amount: bigint, memo: string): Promise<string | null> {
+          if (amount === 0n) return null;
+          const eventId = randomUUID();
+          await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [eventId]);
+          const serverSig = signTokenPayload(
+            { id: eventId, owner_pubkey: TREASURY_PUBKEY, value: amount, issued_at: issuedAt.toISOString() },
+            app.config.signingPrivateKeyHex,
+          );
+          await c.query(
+            `INSERT INTO account_balances(pubkey, spendable_base_units, events_count, updated_at)
+             VALUES($1, $2, 1, now())
+             ON CONFLICT (pubkey) DO UPDATE SET
+               spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+               events_count = account_balances.events_count + 1,
+               updated_at = now()`,
+            [TREASURY_PUBKEY, amount.toString()],
+          );
+          const inserted = await c.query<LedgerEventRow>(
+            `WITH inserted AS (
+               INSERT INTO ledger_events(
+                 id, event_type, actor_pubkey, amount, memo, server_sig, created_at
+               )
+               VALUES($1,'MINT',$2,$3,$4,$5,$6)
+               RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                         amount, fee_base_units, memo,
+                         challenge_id, solution_nonce, idempotency_key,
+                         client_signature_base58, server_sig, created_at
+             ),
+             upd_event_id AS (
+               UPDATE ledger_event_ids ids
+               SET event_seq = i.event_seq
+               FROM inserted i
+               WHERE ids.id = i.id
+             )
+             SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                    amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
+                    challenge_id, solution_nonce, idempotency_key,
+                    client_signature_base58, server_sig, created_at
+             FROM inserted`,
+            [eventId, TREASURY_PUBKEY, amount.toString(), memo, serverSig, issuedAt],
+          );
+          await mirrorLedgerEventHot(c, inserted.rows[0]!);
+          return eventId;
         }
 
         // ---- Fan out payouts -------------------------------------------
-        // The finder's row gets a dedicated memo so explorer / activity
-        // feeds make it obvious WHY they got the bigger transfer.
+        // Each participant gets a MINT. The finder's memo distinguishes
+        // their bigger payout (bonus + pro-rata). The finder's MINT id
+        // is what we hand to the explorer as the "block event" link.
+        let finderEventId: string | null = null;
+        const participantPubkeys: string[] = [];
         for (const p of payouts) {
           const memo = p.isFinder
             ? `pool round #${roundId} (finder bonus + pro-rata)`
             : `pool round #${roundId}`;
-          await payoutTransfer(p.pubkey, p.payout, memo, p.isFinder, p.shareCount);
+          const eventId = await mintPoolPayout(p.pubkey, p.payout, memo, p.isFinder, p.shareCount);
+          if (p.isFinder) finderEventId = eventId;
+          if (eventId) participantPubkeys.push(p.pubkey);
+        }
+
+        // Treasury fee + dust as its own MINT. Always emit if non-zero
+        // so the on-chain accounting balances cleanly against gross.
+        if (finalTreasuryCut > 0n) {
+          await mintTreasuryFee(finalTreasuryCut, `pool round #${roundId} treasury fee`);
         }
 
         // ---- Close round + open the next one ---------------------------
         // `finder_payout_base_units` records the finder's TOTAL take for
-        // the round (bonus + their own pro-rata share), not just the
-        // 25% bonus. That's what the UI shows users when they ask "how
-        // much did the winner get?".
+        // the round (bonus + their own pro-rata share). `ended_by_event_id`
+        // points at the finder's own MINT event so the explorer "block
+        // tx" link lands on the recipient view the user expects.
         await c.query(
           `UPDATE pool_rounds
              SET ended_at = now(),
@@ -535,7 +529,7 @@ export async function poolRoutes(app: FastifyInstance) {
           [
             roundId,
             s.pubkey,
-            mintEventId,
+            finderEventId,
             grossReward.toString(),
             finalTreasuryCut.toString(),
             finderPayoutTotal.toString(),
@@ -550,11 +544,12 @@ export async function poolRoutes(app: FastifyInstance) {
           share_id: 'pending',
           zeros,
           round_id: roundId,
-          block_won: true,
-          block_event_id: mintEventId,
+          block_won: true as const,
+          ...(finderEventId ? { block_event_id: finderEventId } : {}),
           finder_pubkey: s.pubkey,
           reward_base_units: grossReward.toString(),
           your_payout_base_units: finderPayoutTotal.toString(),
+          participant_pubkeys: participantPubkeys,
         };
       },
       { onRetry: (err, attempt) => app.log.warn({ err, attempt, route: 'pool/share' }, 'tx retry') },
@@ -571,13 +566,16 @@ export async function poolRoutes(app: FastifyInstance) {
 
     if (result.block_won) {
       app.invalidateLedger();
-      app.invalidateAccount(s.pubkey);
       app.invalidateAccount(TREASURY_PUBKEY);
-      // Best-effort: invalidate all participants' caches so their feed
-      // refreshes. We don't have the list here without an extra query;
-      // the per-account cache TTL of 2s is short enough to be fine.
+      // Each participant's MINT lands on their own account view, so
+      // their cache needs to be invalidated explicitly. The list comes
+      // back from the tx so we don't need an extra query.
+      for (const pubkey of result.participant_pubkeys) app.invalidateAccount(pubkey);
     }
-    return result;
+    // `participant_pubkeys` is an internal hint for cache invalidation
+    // and isn't part of the wire response.
+    const { participant_pubkeys: _participants, ...wire } = result;
+    return wire;
   });
 
   // ---- GET /pool/stats ------------------------------------------------------
