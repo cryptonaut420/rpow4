@@ -828,7 +828,7 @@ export async function poolRoutes(app: FastifyInstance) {
         ...(yourPayouts[r.id] ? { your_payout_base_units: yourPayouts[r.id] } : {}),
       })),
       ...(hasMore && pageRows.length > 0
-        ? { next_cursor: pageRows[pageRows.length - 1]!.round_id }
+        ? { next_cursor: pageRows[pageRows.length - 1]!.id }
         : {}),
     };
 
