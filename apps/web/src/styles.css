@@ -185,23 +185,77 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
 .app-footer a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* ── Primary nav (header) ────────────────────────────────────────────────
- * Grouped sections with a quiet uppercase section label on the left of
- * each row; the bracketed link style is unchanged from the original
- * single-row nav so the page still reads "terminal".
- *
- *   wallet  · [ home ] [ send ] [ claim ] [ activity ]
- *   network · [ stats ] [ explorer ] [ faucet ] [ trollbox ]
- *   info    · [ about ] [ history ] [ docs ] [ ecosystem ]
- *   links   · [ predict ↗ ]
- *
- * The utility bar (user / theme) sits below on its own line, separated
- * by a dashed rule so session controls don't compete with navigation.
+ * Compact terminal dropdowns. The top row stays short, while each group
+ * opens a bracketed link panel in the same retro style.
  */
 .primary-nav {
   margin: 12px 0 0;
   display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 20;
+}
+.nav-menu {
+  position: relative;
+  flex-shrink: 0;
+}
+.nav-menu summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--fg);
+  opacity: 0.72;
+  border: 1px dashed transparent;
+  padding: 2px 7px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  user-select: none;
+  transition: opacity 100ms, color 100ms, border-color 100ms, background 100ms;
+}
+.nav-menu summary::-webkit-details-marker {
+  display: none;
+}
+.nav-menu:focus-within summary,
+.nav-menu:hover summary,
+.nav-menu[open] summary,
+.nav-menu.active summary {
+  opacity: 1;
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: rgba(127, 255, 212, 0.05);
+}
+.nav-menu-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 6px);
+  min-width: 170px;
+  display: none;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-dim);
+  background: rgba(8, 8, 10, 0.98);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.55), 0 0 16px var(--glow);
+}
+.nav-menu-panel::before {
+  content: attr(data-label);
+  display: block;
+  height: 0;
+}
+.nav-menu[open] .nav-menu-panel {
+  display: flex;
+}
+.nav-menu-panel a {
+  border-bottom: none;
+  color: var(--fg);
+  opacity: 0.78;
+  white-space: nowrap;
+}
+.nav-menu-panel a:hover,
+.nav-menu-panel a.active {
+  opacity: 1;
+  color: var(--accent);
 }
 
 .asset-bar {
@@ -1745,25 +1799,16 @@ main { margin-top: 4px; }
     font-size: 12px;
     line-height: 1.9;
   }
-  /* On phones the section label collapses to its own row above the
-   * bracketed links — preserves the grouping cue without eating column
-   * width that the actual links need. */
-  .nav-group {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0;
-    margin-bottom: 4px;
-    line-height: 1.55;
+  .primary-nav {
+    gap: 5px;
   }
-  .nav-group-label {
-    min-width: 0;
-    font-size: 9px;
-    margin-bottom: -2px;
+  .nav-menu summary {
+    font-size: 11px;
+    padding: 1px 6px;
   }
-  .nav-group > :not(.nav-group-label) {
-    /* Pull the bracketed links into their own wrapping flex row. */
-    display: inline-block;
-    margin-right: 8px;
+  .nav-menu-panel {
+    min-width: 150px;
+    padding: 7px 8px;
   }
   .utility-bar { font-size: 11px; }
   .utility-bar button { font-size: 11px; }

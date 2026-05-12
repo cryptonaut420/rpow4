@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type SyntheticEvent } from 'react';
 import { HashRouter, Route, Routes, NavLink, useLocation } from 'react-router-dom';
 import { applyTheme, loadTheme, nextTheme, type Theme } from './theme.js';
 import { useMe } from './hooks/useMe.js';
@@ -51,6 +51,7 @@ export default function App() {
 
 function AppShell() {
   const [theme, setTheme] = useState<Theme>(loadTheme());
+  const [openNav, setOpenNav] = useState<string | null>(null);
   useEffect(() => { applyTheme(theme); }, [theme]);
   const wallet = useWallet();
   const { selectedAsset, selectedSlug, assetPath, isDefaultAsset } = useAsset();
@@ -69,6 +70,27 @@ function AppShell() {
   }
 
   const signedIn = wallet.status === 'unlocked' && !!me;
+  const path = location.pathname;
+  const walletNavActive = path === '/'
+    || /^\/r\/[^/]+$/.test(path)
+    || /\/send$/.test(path)
+    || /\/activity$/.test(path)
+    || path === '/claim';
+  const networkNavActive = /\/stats$/.test(path)
+    || /\/explorer(\/|$)/.test(path)
+    || path === '/faucet'
+    || path === '/trollbox';
+  const tradeNavActive = /\/markets(\/|$)/.test(path) || /\/launch$/.test(path);
+  const infoNavActive = path === '/ledger'
+    || path === '/history'
+    || path === '/docs'
+    || path === '/ecosystem';
+  function navToggle(id: string) {
+    return (e: SyntheticEvent<HTMLDetailsElement>) => {
+      const isOpen = e.currentTarget.open;
+      setOpenNav((current) => (isOpen ? id : (current === id ? null : current)));
+    };
+  }
 
   return (
       <MiningProvider>
@@ -82,34 +104,54 @@ function AppShell() {
               : 'a modern tribute to a tribute to the original rpow by hal finney'}
           </div>
           <AssetBar />
-          <nav className="primary-nav" aria-label="primary">
-            <div className="nav-group">
-              <span className="nav-group-label">wallet</span>
-              <NavLink to={assetPath('/')}>[ home ]</NavLink>
-              <NavLink to={assetPath('/send')}>[ send ]</NavLink>
-              {/* Bearer claim tokens are an RPOW4.0-only feature for now. */}
-              {isDefaultAsset ? <NavLink to="/claim">[ claim ]</NavLink> : null}
-              <NavLink to={assetPath('/activity')}>[ activity ]</NavLink>
-            </div>
-            <div className="nav-group">
-              <span className="nav-group-label">network</span>
-              <NavLink to={assetPath('/stats')}>[ stats ]</NavLink>
-              <NavLink to={assetPath('/explorer')}>[ explorer ]</NavLink>
-              <NavLink to={assetPath('/markets')}>[ markets ]</NavLink>
-              {isDefaultAsset ? <NavLink to="/faucet">[ faucet ]</NavLink> : null}
-              {isDefaultAsset ? <NavLink to="/trollbox">[ trollbox ]</NavLink> : null}
-            </div>
-            <div className="nav-group">
-              <span className="nav-group-label">info</span>
-              <NavLink to="/ledger">[ about ]</NavLink>
-              <NavLink to="/history">[ history ]</NavLink>
-              <NavLink to="/docs">[ docs ]</NavLink>
-              <NavLink to="/ecosystem">[ ecosystem ]</NavLink>
-            </div>
-            <div className="nav-group">
-              <span className="nav-group-label">links</span>
-              <a href="https://rpowmarket.com/" target="_blank" rel="noopener noreferrer">[ predict ↗ ]</a>
-            </div>
+          <nav
+            className="primary-nav"
+            aria-label="primary"
+            onClick={(e) => {
+              if ((e.target as HTMLElement).closest('a')) setOpenNav(null);
+            }}
+          >
+            <details className={`nav-menu ${walletNavActive ? 'active' : ''}`} open={openNav === 'wallet'} onToggle={navToggle('wallet')}>
+              <summary>[ wallet ▾ ]</summary>
+              <div className="nav-menu-panel">
+                <NavLink to={assetPath('/')}>[ home ]</NavLink>
+                <NavLink to={assetPath('/send')}>[ send ]</NavLink>
+                <NavLink to={assetPath('/activity')}>[ activity ]</NavLink>
+                {/* Bearer claim tokens are an RPOW4.0-only feature for now. */}
+                {isDefaultAsset ? <NavLink to="/claim">[ claim ]</NavLink> : null}
+              </div>
+            </details>
+            <details className={`nav-menu ${networkNavActive ? 'active' : ''}`} open={openNav === 'network'} onToggle={navToggle('network')}>
+              <summary>[ network ▾ ]</summary>
+              <div className="nav-menu-panel">
+                <NavLink to={assetPath('/stats')}>[ stats ]</NavLink>
+                <NavLink to={assetPath('/explorer')}>[ explorer ]</NavLink>
+                {isDefaultAsset ? <NavLink to="/faucet">[ faucet ]</NavLink> : null}
+                {isDefaultAsset ? <NavLink to="/trollbox">[ trollbox ]</NavLink> : null}
+              </div>
+            </details>
+            <details className={`nav-menu ${tradeNavActive ? 'active' : ''}`} open={openNav === 'trade'} onToggle={navToggle('trade')}>
+              <summary>[ trade ▾ ]</summary>
+              <div className="nav-menu-panel">
+                <NavLink to={assetPath('/markets')}>[ markets ]</NavLink>
+                <NavLink to={assetPath('/launch')}>[ launch rpow ]</NavLink>
+              </div>
+            </details>
+            <details className={`nav-menu ${infoNavActive ? 'active' : ''}`} open={openNav === 'info'} onToggle={navToggle('info')}>
+              <summary>[ info ▾ ]</summary>
+              <div className="nav-menu-panel">
+                <NavLink to="/ledger">[ about ]</NavLink>
+                <NavLink to="/history">[ history ]</NavLink>
+                <NavLink to="/docs">[ docs ]</NavLink>
+                <NavLink to="/ecosystem">[ ecosystem ]</NavLink>
+              </div>
+            </details>
+            <details className="nav-menu" open={openNav === 'links'} onToggle={navToggle('links')}>
+              <summary>[ links ▾ ]</summary>
+              <div className="nav-menu-panel">
+                <a href="https://rpowmarket.com/" target="_blank" rel="noopener noreferrer">[ predict ↗ ]</a>
+              </div>
+            </details>
           </nav>
           <div className="utility-bar" aria-label="session controls">
             {signedIn ? (
