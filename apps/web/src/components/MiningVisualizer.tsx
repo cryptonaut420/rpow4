@@ -26,7 +26,7 @@ const HEX = '0123456789abcdef';
 const GLITCH = HEX + '!@#$%&*+=<>?/\\|~^';
 
 const RAIN_ROWS_FULL = 5;
-const RAIN_ROWS_COMPACT = 3;
+const RAIN_ROWS_COMPACT = 2;
 const RAIN_FPS = 18;       // chars cycled per second per row position
 const SPINNER = ['◐', '◓', '◑', '◒'];
 
@@ -504,13 +504,13 @@ export function MiningVisualizer({
     transition: 'opacity 200ms',
   }), []);
 
-  // Compact mode trims labels and padding but keeps every animated piece —
-  // hash rain, best-candidate row, progress bar, nonce/hps footer, and the
-  // win banner all still render. The user explicitly asked for the docked
-  // strip to look "EXACTLY like before, just condensed a bit."
-  const padding = compact ? '6px 10px' : '10px 12px';
+  // Compact mode trims the vertical footprint aggressively but keeps the
+  // recognisable animation: rain rows, live candidate, progress bar, nonce /
+  // rate footer, and win banner. Expanded mode keeps the full visualizer.
+  const padding = compact ? '3px 7px' : '10px 12px';
   const marginTop = compact ? 0 : 12;
-  const rowLineHeight = compact ? 1.15 : 1.25;
+  const rowLineHeight = compact ? 1.05 : 1.25;
+  const rainRowHeight = compact ? 13 : 22;
 
   return (
     <div
@@ -534,7 +534,7 @@ export function MiningVisualizer({
       )}
 
       {/* Rain rows */}
-      <div style={{ position: 'relative', minHeight: 22 * rainRows }}>
+      <div style={{ position: 'relative', minHeight: rainRowHeight * rainRows }}>
         {Array.from({ length: rainRows }).map((_, i) => (
           <pre
             key={i}
@@ -545,16 +545,25 @@ export function MiningVisualizer({
       </div>
 
       {/* Best hash + leading-zero count */}
-      <div style={{ marginTop: compact ? 4 : 8, fontSize: 12 }}>
+      <div style={{ marginTop: compact ? 2 : 8, fontSize: compact ? 10 : 12 }}>
         {!compact && (
           <div style={{ color: 'var(--dim)', fontSize: 10, letterSpacing: '0.18em' }}>
             ▌ BEST CANDIDATE
           </div>
         )}
-        <pre style={{ margin: '2px 0 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.3 }}>
+        <pre
+          style={{
+            margin: '1px 0 0 0',
+            whiteSpace: compact ? 'nowrap' : 'pre-wrap',
+            wordBreak: compact ? 'normal' : 'break-all',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            lineHeight: compact ? 1.1 : 1.3,
+          }}
+        >
           <span ref={bestHashNodeRef} />
         </pre>
-        <div style={{ marginTop: 4, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ marginTop: compact ? 1 : 4, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ color: 'var(--dim)' }}>
             zeros: <span ref={bestZerosNodeRef} style={{ color: 'var(--accent)', fontWeight: 'bold' }} /> / {target}
           </span>
@@ -568,16 +577,16 @@ export function MiningVisualizer({
          * statistical CDF percentage above. In pool mode the headline
          * shows the pool block ETA; the user's share ETA appears on a
          * second line beneath it. */}
-        <div style={{ marginTop: 2, fontSize: 11, color: 'var(--dim)', textAlign: 'right' }}>
+        <div style={{ marginTop: compact ? 0 : 2, fontSize: compact ? 10 : 11, color: 'var(--dim)', textAlign: 'right' }}>
           <span ref={expectedNodeRef} />
         </div>
-        <div style={{ fontSize: 11, color: 'var(--dim)', textAlign: 'right', minHeight: 14 }}>
+        <div style={{ display: compact ? 'none' : 'block', fontSize: 11, color: 'var(--dim)', textAlign: 'right', minHeight: 14 }}>
           <span ref={shareEtaNodeRef} />
         </div>
       </div>
 
       {/* Live status footer */}
-      <div style={{ marginTop: compact ? 4 : 8, fontSize: 11, color: 'var(--dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ marginTop: compact ? 2 : 8, fontSize: compact ? 10 : 11, color: 'var(--dim)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
         <span>nonce <span ref={nonceNodeRef} style={{ color: 'var(--fg)' }} /></span>
         <span><span ref={hpsNodeRef} style={{ color: 'var(--fg)' }} /> <span ref={spinnerNodeRef} style={{ color: 'var(--accent)' }} /></span>
       </div>

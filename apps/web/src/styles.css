@@ -1537,6 +1537,9 @@ main { margin-top: 4px; }
   display: flex;
   flex-direction: column;
 }
+.mining-bar[data-expanded='false'] .mining-bar-inner {
+  padding: 4px 16px 6px;
+}
 
 /* ── Top control strip ──────────────────────────────────────────────── */
 .mining-bar-strip {
@@ -1546,6 +1549,11 @@ main { margin-top: 4px; }
   padding: 4px 0 8px;
   font-size: 12px;
   flex-wrap: wrap;
+}
+.mining-bar[data-expanded='false'] .mining-bar-strip {
+  gap: 8px 10px;
+  padding: 2px 0 4px;
+  font-size: 11px;
 }
 
 .mining-status-pill {
@@ -1559,6 +1567,10 @@ main { margin-top: 4px; }
   color: var(--dim);
   background: rgba(0, 0, 0, 0.35);
   flex-shrink: 0;
+}
+.mining-bar[data-expanded='false'] .mining-status-pill {
+  padding: 2px 8px;
+  font-size: 10px;
 }
 .mining-status-pill.is-running {
   color: var(--accent);
@@ -1598,6 +1610,10 @@ main { margin-top: 4px; }
   flex-shrink: 0;
   transition: background 100ms, border-color 100ms, color 100ms;
 }
+.mining-bar[data-expanded='false'] .mining-mode-pill {
+  padding: 2px 8px;
+  font-size: 10px;
+}
 .mining-mode-pill strong {
   color: var(--fg);
   letter-spacing: 0.08em;
@@ -1624,6 +1640,10 @@ main { margin-top: 4px; }
   color: var(--fg);
   font-size: 12px;
 }
+.mining-bar[data-expanded='false'] .mining-bar-balance,
+.mining-bar[data-expanded='false'] .mining-bar-stat {
+  font-size: 11px;
+}
 .mining-bar-balance strong { color: var(--accent); }
 .mining-bar-label-text {
   color: var(--dim);
@@ -1638,6 +1658,10 @@ main { margin-top: 4px; }
   font-size: 11px;
   letter-spacing: 0.08em;
   flex-shrink: 0;
+}
+.mining-bar[data-expanded='false'] .mining-bar-action {
+  padding: 2px 9px;
+  font-size: 10px;
 }
 .mining-bar-action.go { color: var(--accent); border-color: var(--accent); }
 .mining-bar-action.stop { color: var(--error); border-color: var(--error); }
