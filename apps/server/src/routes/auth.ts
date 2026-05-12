@@ -9,6 +9,7 @@ import {
 } from '@rpow/shared';
 import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '../session.js';
 import { withTxRetry } from '../db.js';
+import { DEFAULT_ASSET_ID } from '../assets.js';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const DOMAIN = 'rpow4';
@@ -121,13 +122,14 @@ export async function authRoutes(app: FastifyInstance) {
       );
       if (inserted.rows[0]) {
         await c.query(
-          `INSERT INTO account_balances(pubkey) VALUES($1)
-           ON CONFLICT (pubkey) DO NOTHING`,
-          [envelope.pubkey],
+          `INSERT INTO account_balances(asset_id, pubkey) VALUES($1::uuid, $2)
+           ON CONFLICT (asset_id, pubkey) DO NOTHING`,
+          [DEFAULT_ASSET_ID, envelope.pubkey],
         );
         await c.query(
           `UPDATE ledger_stats SET value = value + 1, updated_at = now()
-           WHERE name='user_count'`,
+           WHERE asset_id=$1::uuid AND name='user_count'`,
+          [DEFAULT_ASSET_ID],
         );
         return true;
       }

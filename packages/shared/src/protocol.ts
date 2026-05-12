@@ -335,6 +335,161 @@ export interface SendResponse {
   transfer_id: string;
 }
 
+// ---- markets ----------------------------------------------------------------
+
+export type MarketSide = 'buy' | 'sell';
+export type MarketOrderType = 'limit' | 'market';
+export type MarketOrderStatus = 'open' | 'partially_filled' | 'filled' | 'cancelled' | 'expired' | 'rejected';
+
+export interface MarketSummary {
+  id: string;
+  symbol: string;
+  status: 'active' | 'paused' | 'archived';
+  base_asset: AssetSummary;
+  quote_asset: AssetSummary;
+  taker_fee_bps: number;
+  last_price_quote_base_units?: string;
+  best_bid_quote_base_units?: string;
+  best_ask_quote_base_units?: string;
+  /**
+   * Price at the first trade in the last 24h, used as the anchor for the
+   * 24h % change displayed in the UI. Absent when no trade occurred in
+   * that window.
+   */
+  open_price_24h_quote_base_units?: string;
+  volume_24h_base_units: string;
+  volume_24h_quote_base_units: string;
+  trade_count_24h: number;
+  created_at: string;
+}
+
+export interface MarketsResponse {
+  markets: MarketSummary[];
+  default_quote_asset_slug: string;
+}
+
+export interface MarketDetailResponse {
+  market: MarketSummary;
+}
+
+export interface MarketBookLevel {
+  price_quote_base_units: string;
+  base_amount_base_units: string;
+  quote_amount_base_units: string;
+  order_count: number;
+}
+
+export interface MarketBookResponse {
+  market_id: string;
+  bids: MarketBookLevel[];
+  asks: MarketBookLevel[];
+  at: string;
+}
+
+export interface MarketTrade {
+  id: string;
+  market_id: string;
+  price_quote_base_units: string;
+  base_amount_base_units: string;
+  quote_amount_base_units: string;
+  taker_side: MarketSide;
+  fee_base_units: string;
+  created_at: string;
+}
+
+export interface MarketTradesResponse {
+  trades: MarketTrade[];
+  next_cursor?: string;
+}
+
+export interface MarketCandle {
+  bucket_start: string;
+  open_quote_base_units: string;
+  high_quote_base_units: string;
+  low_quote_base_units: string;
+  close_quote_base_units: string;
+  volume_base_units: string;
+  volume_quote_base_units: string;
+  trade_count: number;
+}
+
+export interface MarketCandlesResponse {
+  market_id: string;
+  interval: '1m' | '5m' | '1h' | '1d';
+  candles: MarketCandle[];
+}
+
+export interface MarketBalanceSide {
+  asset_id: string;
+  asset_slug: string;
+  asset_code: string;
+  spendable_base_units: string;
+  locked_base_units: string;
+}
+
+export interface MarketBalancesResponse {
+  market_id: string;
+  base: MarketBalanceSide;
+  quote: MarketBalanceSide;
+}
+
+export interface MarketOrder {
+  id: string;
+  market_id: string;
+  owner_pubkey: string;
+  side: MarketSide;
+  order_type: MarketOrderType;
+  price_quote_base_units?: string;
+  original_base_units: string;
+  remaining_base_units: string;
+  reserved_asset_id?: string;
+  reserved_remaining_base_units: string;
+  status: MarketOrderStatus;
+  client_order_id: string;
+  created_at: string;
+  updated_at: string;
+  cancelled_at?: string;
+}
+
+export interface MarketOrdersResponse {
+  orders: MarketOrder[];
+  next_cursor?: string;
+}
+
+export interface MarketOrderCreateRequestBody {
+  market_id: string;
+  side: MarketSide;
+  order_type: MarketOrderType;
+  price_quote_base_units?: string;
+  base_amount_base_units: string;
+  /** Optional slippage/safety cap for market buys. */
+  max_quote_base_units?: string;
+  client_order_id: string;
+  client_signature_base58: string;
+}
+
+export interface MarketOrderCreateResponse {
+  ok: true;
+  order: MarketOrder;
+  trades: MarketTrade[];
+  filled_base_units: string;
+  spent_quote_base_units: string;
+  received_quote_base_units: string;
+  fee_base_units: string;
+}
+
+export interface MarketOrderCancelRequestBody {
+  market_id: string;
+  order_id: string;
+  client_signature_base58: string;
+}
+
+export interface MarketOrderCancelResponse {
+  ok: true;
+  order: MarketOrder;
+  released_base_units: string;
+}
+
 // ---- errors -----------------------------------------------------------------
 
 export type ApiErrorCode =
@@ -352,6 +507,11 @@ export type ApiErrorCode =
   | 'NAME_NOT_FOUND'
   | 'SIGNUP_EXPIRED'
   | 'SUPPLY_EXHAUSTED'
+  | 'MARKET_NOT_FOUND'
+  | 'MARKET_PAUSED'
+  | 'ORDER_NOT_FOUND'
+  | 'ORDER_NOT_OPEN'
+  | 'ORDER_WOULD_NOT_FILL'
   | 'INTERNAL';
 
 export interface ApiError { error: ApiErrorCode; message: string; retry_after?: number }

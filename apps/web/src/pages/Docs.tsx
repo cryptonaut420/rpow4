@@ -1194,6 +1194,311 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
         },
       ],
     },
+    {
+      id: 'markets',
+      title: 'Internal markets (spot trading)',
+      intro: (
+        <p style={{ margin: '0 0 8px 0' }}>
+          Every custom RPOW that launches opens an order-book spot market
+          against RPOW4.0. Orders are reserved on placement: a buy locks
+          quote (RPOW4.0), a sell locks base. The matching engine runs with
+          price-time priority. Taker fees are taken from the quote leg and
+          credited to the platform treasury; the default fee is{' '}
+          <code>0 bps</code>. Read endpoints are public; write endpoints need
+          a session cookie <i>and</i> an Ed25519 signature over the canonical
+          request body.
+        </p>
+      ),
+      endpoints: [
+        {
+          id: 'markets-list',
+          method: 'GET',
+          path: '/markets',
+          auth: 'public',
+          summary: 'All active markets with 24h volume, last price, best bid/ask.',
+          description: '24h volume and trade count are computed from market_trades. Sorted by 24h volume desc.',
+          response: `{
+  "markets": [
+    {
+      "id": "9e...",
+      "symbol": "DOGE/RPOW4.0",
+      "status": "active",
+      "base_asset":  { "id": "...", "slug": "doge", "display_code": "RPOW4.1", "nickname": "DOGE", ... },
+      "quote_asset": { "id": "...", "slug": "rpow4", "display_code": "RPOW4.0", "nickname": "RPOW4.0", ... },
+      "taker_fee_bps": 0,
+      "last_price_quote_base_units": "1500000000",
+      "best_bid_quote_base_units": "1490000000",
+      "best_ask_quote_base_units": "1510000000",
+      "open_price_24h_quote_base_units": "1450000000",     // first trade in window; null if none
+      "volume_24h_base_units": "12500000000",
+      "volume_24h_quote_base_units": "18750000000",
+      "trade_count_24h": 42,
+      "created_at": "2026-05-09T18:00:00Z"
+    }
+  ],
+  "default_quote_asset_slug": "rpow4"
+}`,
+          curl: `curl '${B}/markets'`,
+          js: `const { markets } = await fetch('${B}/markets').then(r => r.json());`,
+        },
+        {
+          id: 'market-detail',
+          method: 'GET',
+          path: '/markets/:market_id',
+          auth: 'public',
+          summary: 'Full summary for a single market (same fields as the list).',
+          description: 'Returns 404 / MARKET_NOT_FOUND if no market matches.',
+          response: `{ "market": { /* same shape as /markets[] */ } }`,
+          curl: `curl '${B}/markets/9e.../'`,
+          js: `const { market } = await fetch('${B}/markets/9e...').then(r => r.json());`,
+        },
+        {
+          id: 'market-book',
+          method: 'GET',
+          path: '/markets/:market_id/book',
+          auth: 'public',
+          summary: 'Aggregated order book: top 20 price levels on each side.',
+          description: 'Levels group all resting limit orders at the same price. quote_amount_base_units is cumulative quote = ceil(base * price / 1e9) summed per level. Use these strings as bigints; some products multiply prices that overflow JS Number.',
+          response: `{
+  "market_id": "9e...",
+  "bids": [
+    { "price_quote_base_units": "1490000000",
+      "base_amount_base_units": "5000000000",
+      "quote_amount_base_units": "7450000000",
+      "order_count": 3 }
+  ],
+  "asks": [
+    { "price_quote_base_units": "1510000000",
+      "base_amount_base_units": "3500000000",
+      "quote_amount_base_units": "5285000000",
+      "order_count": 2 }
+  ],
+  "at": "2026-05-12T17:33:01Z"
+}`,
+          curl: `curl '${B}/markets/9e.../book'`,
+          js: `const book = await fetch('${B}/markets/9e.../book').then(r => r.json());`,
+        },
+        {
+          id: 'market-trades',
+          method: 'GET',
+          path: '/markets/:market_id/trades',
+          auth: 'public',
+          summary: 'Recent fills, newest first.',
+          description: '`taker_side` indicates who crossed the spread (buy or sell).',
+          request: {
+            kind: 'query',
+            example: `limit: number  (1..100, default 50)`,
+          },
+          response: `{
+  "trades": [
+    { "id": "a1...",
+      "market_id": "9e...",
+      "price_quote_base_units": "1505000000",
+      "base_amount_base_units": "1000000000",
+      "quote_amount_base_units": "1505000000",
+      "taker_side": "buy",
+      "fee_base_units": "0",
+      "created_at": "2026-05-12T17:32:11Z" }
+  ]
+}`,
+          curl: `curl '${B}/markets/9e.../trades?limit=40'`,
+          js: `const { trades } = await fetch('${B}/markets/9e.../trades').then(r => r.json());`,
+        },
+        {
+          id: 'market-candles',
+          method: 'GET',
+          path: '/markets/:market_id/candles',
+          auth: 'public',
+          summary: 'OHLC + volume buckets for the price chart.',
+          description: 'Built on the fly from market_trades. Cheap for typical depths because rows are pre-indexed by (market_id, created_at).',
+          request: {
+            kind: 'query',
+            example: `interval: '1m' | '5m' | '1h' | '1d'   (default '1m')
+limit:    number  (1..240, default 80)`,
+          },
+          response: `{
+  "market_id": "9e...",
+  "interval": "1m",
+  "candles": [
+    { "bucket_start": "2026-05-12T17:00:00Z",
+      "open_quote_base_units":  "1495000000",
+      "high_quote_base_units":  "1510000000",
+      "low_quote_base_units":   "1490000000",
+      "close_quote_base_units": "1505000000",
+      "volume_base_units":      "12000000000",
+      "volume_quote_base_units":"18060000000",
+      "trade_count": 6 }
+  ]
+}`,
+          curl: `curl '${B}/markets/9e.../candles?interval=5m&limit=120'`,
+          js: `const { candles } = await fetch('${B}/markets/9e.../candles?interval=1h').then(r => r.json());`,
+        },
+        {
+          id: 'market-balances',
+          method: 'GET',
+          path: '/markets/:market_id/balances',
+          auth: 'session',
+          summary: 'Your spendable and locked balances for this pair.',
+          description: '`locked_base_units` reflects funds reserved by your open orders on this asset. Spendable + locked equals your true holding.',
+          response: `{
+  "market_id": "9e...",
+  "base":  { "asset_id": "...", "asset_slug": "doge", "asset_code": "RPOW4.1",
+             "spendable_base_units": "8000000000", "locked_base_units": "2000000000" },
+  "quote": { "asset_id": "...", "asset_slug": "rpow4", "asset_code": "RPOW4.0",
+             "spendable_base_units": "5000000000", "locked_base_units": "0" }
+}`,
+          curl: `curl '${B}/markets/9e.../balances' -b cookies.txt`,
+          js: `const bal = await fetch('${B}/markets/9e.../balances', { credentials: 'include' }).then(r => r.json());`,
+        },
+        {
+          id: 'market-my-orders',
+          method: 'GET',
+          path: '/markets/:market_id/my-orders',
+          auth: 'session',
+          summary: 'Your last 100 orders on this market, newest first.',
+          description: 'Includes open, partially_filled, filled, cancelled, expired, and rejected. Filter client-side by status as needed.',
+          response: `{
+  "orders": [
+    { "id": "b2...",
+      "market_id": "9e...",
+      "owner_pubkey": "Bz7K...",
+      "side": "buy",
+      "order_type": "limit",
+      "price_quote_base_units": "1500000000",
+      "original_base_units":  "2000000000",
+      "remaining_base_units": "1000000000",
+      "reserved_asset_id": "...",
+      "reserved_remaining_base_units": "1500000000",
+      "status": "partially_filled",
+      "client_order_id": "c0...",
+      "created_at": "2026-05-12T17:30:00Z",
+      "updated_at": "2026-05-12T17:32:11Z" }
+  ]
+}`,
+          curl: `curl '${B}/markets/9e.../my-orders' -b cookies.txt`,
+          js: `const { orders } = await fetch('${B}/markets/9e.../my-orders', { credentials: 'include' }).then(r => r.json());`,
+        },
+        {
+          id: 'market-create-order',
+          method: 'POST',
+          path: '/markets/:market_id/orders',
+          auth: 'session + sig',
+          summary: 'Place a limit or market order. Funds are reserved atomically.',
+          description: (
+            <>
+              <p style={{ margin: '0 0 8px' }}>
+                Sign the body (sans <code>client_signature_base58</code>) with
+                action <code>market.order.create</code>. The server validates,
+                reserves quote (buy) or base (sell), runs the matching loop,
+                and returns the resulting order + fills in the same response.
+              </p>
+              <p style={{ margin: '0 0 8px' }}>
+                <code>client_order_id</code> is an idempotency token — repeating
+                the exact same body returns the original result without
+                double-placing. Use <code>crypto.randomUUID()</code>.
+              </p>
+              <p style={{ margin: 0 }}>
+                Market buys may supply <code>max_quote_base_units</code> as a
+                slippage cap. Market sells fill until the size or liquidity
+                runs out and may be partially filled.
+              </p>
+            </>
+          ),
+          request: {
+            kind: 'body',
+            example: `{
+  "market_id": "9e...",
+  "side": "buy",                                 // 'buy' | 'sell'
+  "order_type": "limit",                         // 'limit' | 'market'
+  "price_quote_base_units": "1500000000",        // limit only — required
+  "base_amount_base_units": "2000000000",        // size in BASE units
+  "max_quote_base_units": "3010000000",          // optional, market buys
+  "client_order_id": "...",                      // uuid; idempotency key
+  "client_signature_base58": "..."               // sign body minus this field
+}`,
+          },
+          response: `{
+  "ok": true,
+  "order": { /* MarketOrder shape; see /my-orders */ },
+  "trades": [ { /* MarketTrade for each fill */ } ],
+  "filled_base_units":   "1000000000",
+  "spent_quote_base_units":  "1505000000",
+  "received_quote_base_units": "0",
+  "fee_base_units": "0"
+}`,
+          errors: [
+            { status: 400, code: 'BAD_REQUEST', when: 'missing/invalid field, limit without price, market with price, or amounts overflow backend precision' },
+            { status: 400, code: 'MARKET_PAUSED', when: 'market.status is not active' },
+            { status: 400, code: 'INSUFFICIENT_BALANCE', when: 'reservation exceeds spendable balance on the reserved asset' },
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+            { status: 401, code: 'INVALID_SIGNATURE', when: 'signature does not verify against the session pubkey' },
+            { status: 404, code: 'MARKET_NOT_FOUND', when: 'market_id is unknown or archived' },
+          ],
+          curl: `curl -X POST '${B}/markets/9e.../orders' \\
+  -H 'content-type: application/json' \\
+  -b cookies.txt \\
+  -d '{ ...signed body... }'`,
+          js: `import { signCanonical } from '@rpow/shared';
+
+const body = {
+  market_id, side: 'buy', order_type: 'limit',
+  price_quote_base_units: '1500000000',
+  base_amount_base_units: '2000000000',
+  client_order_id: crypto.randomUUID(),
+};
+const wire = { ...body,
+  client_signature_base58: signCanonical('market.order.create', body, priv),
+};
+const res = await fetch(\`${B}/markets/\${market_id}/orders\`, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(wire),
+}).then(r => r.json());`,
+        },
+        {
+          id: 'market-cancel-order',
+          method: 'POST',
+          path: '/markets/:market_id/orders/:order_id/cancel',
+          auth: 'session + sig',
+          summary: 'Cancel a resting open or partially filled order; releases the locked balance.',
+          description: 'Sign with action market.order.cancel. Idempotent — cancelling an already-cancelled order returns ok:true with released_base_units=0.',
+          request: {
+            kind: 'body',
+            example: `{
+  "market_id": "9e...",
+  "order_id":  "b2...",
+  "client_signature_base58": "..."
+}`,
+          },
+          response: `{
+  "ok": true,
+  "order": { /* MarketOrder, status now 'cancelled' */ },
+  "released_base_units": "1000000000"
+}`,
+          errors: [
+            { status: 400, code: 'BAD_REQUEST', when: 'invalid body or order does not belong to this market' },
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+            { status: 401, code: 'INVALID_SIGNATURE', when: 'signature does not verify' },
+            { status: 404, code: 'ORDER_NOT_FOUND', when: 'order does not exist or is not yours' },
+          ],
+          curl: `curl -X POST '${B}/markets/9e.../orders/b2.../cancel' \\
+  -H 'content-type: application/json' \\
+  -b cookies.txt \\
+  -d '{ ...signed body... }'`,
+          js: `const body = { market_id, order_id };
+const wire = { ...body,
+  client_signature_base58: signCanonical('market.order.cancel', body, priv),
+};
+const res = await fetch(\`${B}/markets/\${market_id}/orders/\${order_id}/cancel\`, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(wire),
+}).then(r => r.json());`,
+        },
+      ],
+    },
   ];
 }
 
@@ -1338,7 +1643,8 @@ export function DocsPage() {
           don't have to re-implement this. Action names are an enum:{' '}
           <code>'auth.session'</code>, <code>'mint'</code>,{' '}
           <code>'transfer'</code>, <code>'account.set_display_name'</code>,{' '}
-          <code>'account.signup'</code>.
+          <code>'account.signup'</code>, <code>'market.order.create'</code>,{' '}
+          <code>'market.order.cancel'</code>.
         </p>
         <CodeBlock
           label="example: signing a /send body"
@@ -1394,6 +1700,9 @@ const wire = { ...body, client_signature_base58 };`}
             { status: 410, code: 'SUPPLY_EXHAUSTED', when: '21M cap reached' },
             { status: 429, code: 'COOLDOWN_ACTIVE', when: 'faucet cooldown for this pubkey or IP' },
             { status: 503, code: 'TREASURY_DRY', when: 'treasury cannot fund a faucet claim' },
+            { status: 404, code: 'MARKET_NOT_FOUND', when: 'market_id is unknown or archived' },
+            { status: 404, code: 'ORDER_NOT_FOUND', when: 'cancel target order_id is not yours or does not exist' },
+            { status: 400, code: 'MARKET_PAUSED', when: 'market.status is not active' },
           ]}
         />
       </Panel>

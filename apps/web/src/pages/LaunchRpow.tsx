@@ -114,8 +114,9 @@ export function LaunchRpowPage() {
   if (!signedIn) {
     return (
       <Panel title="LAUNCH NEW RPOW">
-        <div style={{ color: 'var(--dim)', marginBottom: 8 }}>
-          you need to login before launching a new mineable rpow.
+        <div className="launch-login-card">
+          <strong>creator login required</strong>
+          <span>Launching burns RPOW4.0 and creates a real mineable asset plus its RPOW4.0 trading market.</span>
         </div>
         <div>
           <Link to={`/login?returnTo=${encodeURIComponent(assetPath('/launch'))}`}>[ login to launch ]</Link>
@@ -128,24 +129,29 @@ export function LaunchRpowPage() {
     const url = shareUrl(launched.slug);
     return (
       <Panel title="ASSET LAUNCHED">
-        <pre style={{ margin: 0 }}>
-{`  > ${launched.display_code} :: ${launched.nickname}
-  > slug          : ${launched.slug}
-  > supply mode   : ${launched.supply_mode}
-  > burn paid     : ${formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4
-  > mining algo   : ${launched.mining_algo}`}
-        </pre>
-        <div style={{ marginTop: 14, paddingTop: 10, borderTop: '1px dashed var(--accent-dim)' }}>
-          <div style={{ color: 'var(--dim)', fontSize: 12, marginBottom: 6 }}>
-            share this link so others can mine it:
+        <div className="launch-success">
+          <div>
+            <span className="launch-kicker">live asset</span>
+            <h2>{launched.display_code} :: {launched.nickname}</h2>
+            <p>Mining, explorer views, transfers, and the {launched.display_code}/RPOW4.0 market are active.</p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <code style={{ wordBreak: 'break-all', fontSize: 12 }}>{url}</code>
+          <div className="launch-success-grid">
+            <span>slug<strong>{launched.slug}</strong></span>
+            <span>supply<strong>{launched.supply_mode}</strong></span>
+            <span>burn paid<strong>{formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4</strong></span>
+            <span>algo<strong>{launched.mining_algo}</strong></span>
+          </div>
+        </div>
+        <div className="launch-share">
+          <span>share link</span>
+          <div>
+            <code>{url}</code>
             <CopyButton text={url} />
           </div>
         </div>
-        <div style={{ marginTop: 14 }}>
+        <div className="launch-actions">
           <button onClick={() => nav(`/r/${launched.slug}`)}>[ open {launched.display_code} ]</button>{' '}
+          <button onClick={() => nav(`/r/${launched.slug}/markets`)}>[ open market ]</button>{' '}
           <button onClick={() => { setLaunched(null); setNickname(''); setDescription(''); }}>
             [ launch another ]
           </button>
@@ -191,22 +197,45 @@ export function LaunchRpowPage() {
     submitting || nickname.trim().length < 3 || errors.length > 0 || !hasBurnFunds;
 
   return (
-    <>
+    <div className="launch-page">
       <Panel title="LAUNCH NEW RPOW">
-        <div style={{ color: 'var(--dim)', marginBottom: 12, fontSize: 12, lineHeight: 1.6 }}>
-          Burn <strong style={{ color: 'var(--fg)' }}>{formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4</strong>{' '}
-          to mint a new mineable asset family. The defaults below mirror RPOW4.0
-          (21M cap, 50-RPOW reward, 210k-block halving). Anything you change is
-          locked into your asset's tokenomics — there is no edit-after-launch.
-          {hasBurnFunds ? null : (
-            <div style={{ color: 'var(--error)', marginTop: 8 }}>
-              you need at least {formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4 to launch
-              (current balance: {formatRpow(me!.balance_base_units)} RPOW4).
-            </div>
-          )}
+        <div className="launch-hero">
+          <div>
+            <span className="launch-kicker">new mineable market</span>
+            <h1>Create an RPOW asset</h1>
+            <p>
+              Burn <strong>{formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4</strong> to create a mineable token,
+              an asset URL, and a live RPOW4.0 trading pair. Defaults mirror RPOW4.0.
+            </p>
+          </div>
+          <div className="launch-steps">
+            <span><strong>1</strong> burn RPOW4</span>
+            <span><strong>2</strong> lock tokenomics</span>
+            <span><strong>3</strong> market opens</span>
+          </div>
         </div>
 
-        <div className="form-grid">
+        {hasBurnFunds ? null : (
+          <div className="launch-warning">
+              you need at least {formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4 to launch
+              (current balance: {formatRpow(me!.balance_base_units)} RPOW4).
+          </div>
+        )}
+
+        <div className="launch-metrics">
+          <span>burn fee<strong>{formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4</strong></span>
+          <span>your RPOW4<strong>{formatRpow(me!.balance_base_units)}</strong></span>
+          <span>market pair<strong>new asset / RPOW4.0</strong></span>
+          <span>transfer fee<strong>0 for custom RPOWs</strong></span>
+        </div>
+
+        <div className="launch-form">
+          <section className="launch-section">
+            <div className="launch-section-head">
+              <strong>Identity</strong>
+              <span>Name and describe the asset users will mine and trade.</span>
+            </div>
+            <div className="form-grid">
           <label>
             nickname
             <input
@@ -225,6 +254,15 @@ export function LaunchRpowPage() {
               placeholder="optional, up to 280 chars"
             />
           </label>
+            </div>
+          </section>
+
+          <section className="launch-section">
+            <div className="launch-section-head">
+              <strong>Supply and rewards</strong>
+              <span>These rules are permanent after launch.</span>
+            </div>
+            <div className="form-grid">
           <label>
             supply
             <select value={supplyMode} onChange={(e) => setSupplyMode(e.target.value as 'capped' | 'unlimited')}>
@@ -263,6 +301,15 @@ export function LaunchRpowPage() {
               />
             </label>
           ) : null}
+            </div>
+          </section>
+
+          <section className="launch-section">
+            <div className="launch-section-head">
+              <strong>Mining and pool</strong>
+              <span>Choose the proof-of-work profile and when pools are allowed.</span>
+            </div>
+            <div className="form-grid">
           <label>
             starting difficulty (bits)
             <input
@@ -322,38 +369,49 @@ export function LaunchRpowPage() {
               />
             </label>
           ) : null}
+            </div>
+          </section>
+
+          <section className="launch-section">
+            <div className="launch-section-head">
+              <strong>Founder allocation</strong>
+              <span>Optional capped-supply genesis allocation. Treasury automatically receives 10% of it.</span>
+            </div>
+            <div className="form-grid">
           {supplyMode === 'capped' ? (
             <label>
               founder allocation (whole, max 20% of supply)
               <input value={founderWhole} onChange={(e) => setFounderWhole(e.target.value)} />
             </label>
           ) : null}
+            </div>
+          </section>
         </div>
 
-        <pre style={{ marginTop: 14 }}>
-{`  > launch burn      : ${formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4 (irreversible)
-  > creator genesis  : ${formatRpow(creatorPreview.toString())} (90% of allocation)
-  > treasury cut     : ${formatRpow(treasuryPreview.toString())} (10% of allocation)
-  > supply           : ${supplyMode === 'unlimited' ? 'uncapped' : `${maxSupplyWhole} whole units max`}
-  > reward schedule  : ${rewardSchedule === 'none' ? 'constant ' + rewardWhole + ' / block' : `${rewardWhole} / block, halves every ${rewardInterval.toLocaleString()} blocks`}
-  > difficulty curve : ${difficultyStart} → ${difficultyMax} bits, +1 every ${difficultyStep.toLocaleString()} blocks
-  > pool mining      : ${poolEnabled ? `enabled${poolThreshold ? ` at ≥${poolThreshold} bits` : ''}` : 'disabled'}
-  > mining algo      : ${miningAlgo}`}
-        </pre>
+        <div className="launch-preview">
+          <span>launch burn<strong>{formatRpow(LAUNCH_BURN_BASE_UNITS)} RPOW4, irreversible</strong></span>
+          <span>creator genesis<strong>{formatRpow(creatorPreview.toString())}</strong></span>
+          <span>treasury cut<strong>{formatRpow(treasuryPreview.toString())}</strong></span>
+          <span>supply<strong>{supplyMode === 'unlimited' ? 'uncapped' : `${maxSupplyWhole} max`}</strong></span>
+          <span>reward<strong>{rewardSchedule === 'none' ? `constant ${rewardWhole} / block` : `${rewardWhole} / block, halves every ${rewardInterval.toLocaleString()} blocks`}</strong></span>
+          <span>difficulty<strong>{difficultyStart} to {difficultyMax} bits, +1 / {difficultyStep.toLocaleString()} blocks</strong></span>
+          <span>pool mining<strong>{poolEnabled ? `enabled${poolThreshold ? ` at >=${poolThreshold} bits` : ''}` : 'disabled'}</strong></span>
+          <span>mining algo<strong>{miningAlgo}</strong></span>
+        </div>
 
         {errors.length > 0 ? (
-          <ul style={{ marginTop: 10, color: 'var(--error)', fontSize: 12, paddingLeft: 18 }}>
+          <ul className="launch-errors">
             {errors.map((e) => <li key={e}>{e}</li>)}
           </ul>
         ) : null}
         {status ? <div className="error" style={{ marginTop: 8 }}>error: {status}</div> : null}
 
-        <div style={{ marginTop: 12 }}>
+        <div className="launch-actions">
           <button onClick={submit} disabled={submitDisabled}>
             [ {submitting ? 'launching...' : 'burn + launch'} ]
           </button>
         </div>
       </Panel>
-    </>
+    </div>
   );
 }

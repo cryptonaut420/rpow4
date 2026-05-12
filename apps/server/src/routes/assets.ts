@@ -274,6 +274,12 @@ export async function assetsRoutes(app: FastifyInstance) {
       if (input.pool_enabled) {
         await c.query(`INSERT INTO pool_rounds(asset_id, started_at) VALUES($1::uuid, now())`, [assetId]);
       }
+      await c.query(
+        `INSERT INTO markets(id, base_asset_id, quote_asset_id, symbol, status, taker_fee_bps)
+         VALUES(gen_random_uuid(), $1::uuid, $2::uuid, $3, 'active', 0)
+         ON CONFLICT (base_asset_id, quote_asset_id) DO NOTHING`,
+        [assetId, DEFAULT_ASSET_ID, `${displayCode}/RPOW4.0`],
+      );
 
       async function creditGenesis(pubkey: string, amount: bigint) {
         if (amount <= 0n) return;

@@ -27,6 +27,17 @@ import type {
   LedgerEventsResponse,
   LedgerResponse,
   LookupResponse,
+  MarketBalancesResponse,
+  MarketBookResponse,
+  MarketCandlesResponse,
+  MarketDetailResponse,
+  MarketOrderCancelRequestBody,
+  MarketOrderCancelResponse,
+  MarketOrderCreateRequestBody,
+  MarketOrderCreateResponse,
+  MarketOrdersResponse,
+  MarketTradesResponse,
+  MarketsResponse,
   MeResponse,
   MintRequestBody,
   MintResponse,
@@ -197,6 +208,20 @@ export const api = {
     const suffix = qs.toString();
     return call<PoolRoundsResponse>('GET', `${assetPath(assetSlug, '/pool/rounds')}${suffix ? `?${suffix}` : ''}`);
   },
+
+  // Internal RPOW markets
+  markets: () => call<MarketsResponse>('GET', '/markets', undefined, { cache: 'no-store' }),
+  market: (marketId: string) => call<MarketDetailResponse>('GET', `/markets/${encodeURIComponent(marketId)}`, undefined, { cache: 'no-store' }),
+  marketBook: (marketId: string) => call<MarketBookResponse>('GET', `/markets/${encodeURIComponent(marketId)}/book`, undefined, { cache: 'no-store' }),
+  marketTrades: (marketId: string, limit = 50) => call<MarketTradesResponse>('GET', `/markets/${encodeURIComponent(marketId)}/trades?limit=${limit}`, undefined, { cache: 'no-store' }),
+  marketCandles: (marketId: string, interval: '1m' | '5m' | '1h' | '1d' = '1m', limit = 80) =>
+    call<MarketCandlesResponse>('GET', `/markets/${encodeURIComponent(marketId)}/candles?interval=${interval}&limit=${limit}`, undefined, { cache: 'no-store' }),
+  marketBalances: (marketId: string) => call<MarketBalancesResponse>('GET', `/markets/${encodeURIComponent(marketId)}/balances`, undefined, { cache: 'no-store' }),
+  myMarketOrders: (marketId: string) => call<MarketOrdersResponse>('GET', `/markets/${encodeURIComponent(marketId)}/my-orders`, undefined, { cache: 'no-store' }),
+  createMarketOrder: (marketId: string, b: MarketOrderCreateRequestBody) =>
+    call<MarketOrderCreateResponse>('POST', `/markets/${encodeURIComponent(marketId)}/orders`, b),
+  cancelMarketOrder: (marketId: string, orderId: string, b: MarketOrderCancelRequestBody) =>
+    call<MarketOrderCancelResponse>('POST', `/markets/${encodeURIComponent(marketId)}/orders/${encodeURIComponent(orderId)}/cancel`, b),
 
   // Trollbox (public read, signed write)
   trollbox: (cursor?: string, limit?: number) => {

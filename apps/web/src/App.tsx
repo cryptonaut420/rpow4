@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { HashRouter, Route, Routes, NavLink } from 'react-router-dom';
+import { HashRouter, Route, Routes, NavLink, useLocation } from 'react-router-dom';
 import { applyTheme, loadTheme, nextTheme, type Theme } from './theme.js';
 import { useMe } from './hooks/useMe.js';
 import { useWallet } from './wallet/WalletProvider.js';
@@ -20,6 +20,7 @@ import { RedeemPage } from './pages/Redeem.js';
 import { EcosystemPage } from './pages/Ecosystem.js';
 import { PoolHistoryPage } from './pages/PoolHistory.js';
 import { LaunchRpowPage } from './pages/LaunchRpow.js';
+import { MarketsPage } from './pages/Markets.js';
 import { CopyButton } from './components/CopyButton.js';
 import { AssetBar } from './components/AssetBar.js';
 import { ScrollToTop } from './components/ScrollToTop.js';
@@ -54,6 +55,12 @@ function AppShell() {
   const wallet = useWallet();
   const { selectedAsset, selectedSlug, assetPath, isDefaultAsset } = useAsset();
   const { me } = useMe(selectedSlug);
+  const location = useLocation();
+  // The markets page needs the full viewport — order book + chart + ticket
+  // does not fit in a 78ch reading column. Detect the route here so the
+  // chrome (header, footer, nav) can stretch with it instead of the page
+  // forcing a horizontal scroll inside a too-narrow shell.
+  const isWidePage = /^\/(r\/[^/]+\/)?markets(\/|$)/.test(location.pathname);
 
   async function logout() {
     try { await api.logout(); } catch { /* ignore */ }
@@ -65,7 +72,7 @@ function AppShell() {
 
   return (
       <MiningProvider>
-      <div className="app-shell">
+      <div className={`app-shell ${isWidePage ? 'app-shell-wide' : ''}`.trim()}>
         <header>
           <pre style={{ margin: 0 }}>{HEADER}</pre>
           <SupplyBar />
@@ -88,6 +95,7 @@ function AppShell() {
               <span className="nav-group-label">network</span>
               <NavLink to={assetPath('/stats')}>[ stats ]</NavLink>
               <NavLink to={assetPath('/explorer')}>[ explorer ]</NavLink>
+              <NavLink to={assetPath('/markets')}>[ markets ]</NavLink>
               {isDefaultAsset ? <NavLink to="/faucet">[ faucet ]</NavLink> : null}
               {isDefaultAsset ? <NavLink to="/trollbox">[ trollbox ]</NavLink> : null}
             </div>
@@ -141,6 +149,10 @@ function AppShell() {
             <Route path="/r/:assetSlug/explorer/tx/:id" element={<ExplorerPage />} />
             <Route path="/explorer/account/:pubkey" element={<ExplorerPage />} />
             <Route path="/r/:assetSlug/explorer/account/:pubkey" element={<ExplorerPage />} />
+            <Route path="/markets" element={<MarketsPage />} />
+            <Route path="/r/:assetSlug/markets" element={<MarketsPage />} />
+            <Route path="/markets/:marketId" element={<MarketsPage />} />
+            <Route path="/r/:assetSlug/markets/:marketId" element={<MarketsPage />} />
             <Route path="/faucet" element={<FaucetPage />} />
             <Route path="/trollbox" element={<TrollboxPage />} />
             <Route path="/claim" element={<ClaimPage />} />
