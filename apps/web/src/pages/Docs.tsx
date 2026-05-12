@@ -1198,16 +1198,24 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
       id: 'markets',
       title: 'Internal markets (spot trading)',
       intro: (
-        <p style={{ margin: '0 0 8px 0' }}>
-          Every custom RPOW that launches opens an order-book spot market
-          against RPOW4.0. Orders are reserved on placement: a buy locks
-          quote (RPOW4.0), a sell locks base. The matching engine runs with
-          price-time priority. Taker fees are taken from the quote leg and
-          credited to the platform treasury; the default fee is{' '}
-          <code>0 bps</code>. Read endpoints are public; write endpoints need
-          a session cookie <i>and</i> an Ed25519 signature over the canonical
-          request body.
-        </p>
+        <>
+          <p style={{ margin: '0 0 8px 0' }}>
+            Every custom RPOW that launches opens an order-book spot market
+            against RPOW4.0. Orders are reserved on placement: a limit buy
+            locks quote (RPOW4.0), a limit sell locks base, and market orders
+            debit spendable balances as they fill. The matching engine runs
+            with price-time priority. Taker fees are taken from the quote leg
+            and credited to the platform treasury; the default fee is{' '}
+            <code>0 bps</code>.
+          </p>
+          <p style={{ margin: '0 0 8px 0' }}>
+            Bot integrations should treat every amount and price as a decimal
+            bigint string in base units (<code>1 coin = 1e9 base units</code>).
+            Read endpoints are public and safe to poll. Write endpoints require
+            both the <code>rpow4_session</code> cookie and an Ed25519 signature
+            over the canonical order body.
+          </p>
+        </>
       ),
       endpoints: [
         {
@@ -1216,7 +1224,7 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
           path: '/markets',
           auth: 'public',
           summary: 'All active markets with 24h volume, last price, best bid/ask.',
-          description: '24h volume and trade count are computed from market_trades. Sorted by 24h volume desc.',
+          description: '24h volume and trade count are computed from market_trades. Sorted by the base asset sequence number so RPOW4.1, RPOW4.2, ... stay stable for UIs and bots.',
           response: `{
   "markets": [
     {
@@ -1236,7 +1244,7 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
       "created_at": "2026-05-09T18:00:00Z"
     }
   ],
-  "default_quote_asset_slug": "rpow4"
+  "default_quote_asset_slug": "rpow4-0"
 }`,
           curl: `curl '${B}/markets'`,
           js: `const { markets } = await fetch('${B}/markets').then(r => r.json());`,
@@ -1247,9 +1255,12 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
           path: '/markets/:market_id',
           auth: 'public',
           summary: 'Full summary for a single market (same fields as the list).',
-          description: 'Returns 404 / MARKET_NOT_FOUND if no market matches.',
+          description: 'Returns 404 / MARKET_NOT_FOUND if no market matches. Use this before placing orders if your bot stores market IDs across restarts.',
           response: `{ "market": { /* same shape as /markets[] */ } }`,
-          curl: `curl '${B}/markets/9e.../'`,
+          errors: [
+            { status: 404, code: 'MARKET_NOT_FOUND', when: 'market_id is unknown or archived' },
+          ],
+          curl: `curl '${B}/markets/9e...'`,
           js: `const { market } = await fetch('${B}/markets/9e...').then(r => r.json());`,
         },
         {
@@ -1257,8 +1268,8 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
           method: 'GET',
           path: '/markets/:market_id/book',
           auth: 'public',
-          summary: 'Aggregated order book: top 20 price levels on each side.',
-          description: 'Levels group all resting limit orders at the same price. quote_amount_base_units is cumulative quote = ceil(base * price / 1e9) summed per level. Use these strings as bigints; some products multiply prices that overflow JS Number.',
+          summary: 'Aggregated order book: top 25 price levels on each side.',
+          description: 'Levels group all resting limit orders at the same price. Bids are sorted high-to-low; asks are sorted low-to-high. quote_amount_base_units is cumulative quote = ceil(base * price / 1e9) summed per level. Use these strings as bigints; multiplying base*price can overflow JS Number.',
           response: `{
   "market_id": "9e...",
   "bids": [
@@ -1284,7 +1295,7 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
           path: '/markets/:market_id/trades',
           auth: 'public',
           summary: 'Recent fills, newest first.',
-          description: '`taker_side` indicates who crossed the spread (buy or sell).',
+          description: '`taker_side` indicates who crossed the spread (buy or sell). Poll this endpoint for trade tape updates; there is no websocket stream yet.',
           request: {
             kind: 'query',
             example: `limit: number  (1..100, default 50)`,
@@ -1310,7 +1321,7 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
           path: '/markets/:market_id/candles',
           auth: 'public',
           summary: 'OHLC + volume buckets for the price chart.',
-          description: 'Built on the fly from market_trades. Cheap for typical depths because rows are pre-indexed by (market_id, created_at).',
+          description: 'Built on the fly from market_trades. Empty buckets are omitted. Young markets may have many trades but only one candle if all trades occurred in the same bucket; use /trades for tick-by-tick display.',
           request: {
             kind: 'query',
             example: `interval: '1m' | '5m' | '1h' | '1d'   (default '1m')
@@ -1347,6 +1358,10 @@ limit:    number  (1..240, default 80)`,
   "quote": { "asset_id": "...", "asset_slug": "rpow4", "asset_code": "RPOW4.0",
              "spendable_base_units": "5000000000", "locked_base_units": "0" }
 }`,
+          errors: [
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+            { status: 404, code: 'MARKET_NOT_FOUND', when: 'market_id is unknown or archived' },
+          ],
           curl: `curl '${B}/markets/9e.../balances' -b cookies.txt`,
           js: `const bal = await fetch('${B}/markets/9e.../balances', { credentials: 'include' }).then(r => r.json());`,
         },
@@ -1356,7 +1371,7 @@ limit:    number  (1..240, default 80)`,
           path: '/markets/:market_id/my-orders',
           auth: 'session',
           summary: 'Your last 100 orders on this market, newest first.',
-          description: 'Includes open, partially_filled, filled, cancelled, expired, and rejected. Filter client-side by status as needed.',
+          description: 'Includes open, partially_filled, filled, cancelled, expired, and rejected. Poll this after order placement/cancel and filter client-side by status as needed.',
           response: `{
   "orders": [
     { "id": "b2...",
@@ -1375,6 +1390,9 @@ limit:    number  (1..240, default 80)`,
       "updated_at": "2026-05-12T17:32:11Z" }
   ]
 }`,
+          errors: [
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+          ],
           curl: `curl '${B}/markets/9e.../my-orders' -b cookies.txt`,
           js: `const { orders } = await fetch('${B}/markets/9e.../my-orders', { credentials: 'include' }).then(r => r.json());`,
         },
@@ -1400,7 +1418,9 @@ limit:    number  (1..240, default 80)`,
               <p style={{ margin: 0 }}>
                 Market buys may supply <code>max_quote_base_units</code> as a
                 slippage cap. Market sells fill until the size or liquidity
-                runs out and may be partially filled.
+                runs out and may be partially filled. Market orders never rest
+                on the book; unfilled residual size is discarded and the order
+                becomes <code>partially_filled</code> or <code>rejected</code>.
               </p>
             </>
           ),
@@ -1462,7 +1482,7 @@ const res = await fetch(\`${B}/markets/\${market_id}/orders\`, {
           path: '/markets/:market_id/orders/:order_id/cancel',
           auth: 'session + sig',
           summary: 'Cancel a resting open or partially filled order; releases the locked balance.',
-          description: 'Sign with action market.order.cancel. Idempotent — cancelling an already-cancelled order returns ok:true with released_base_units=0.',
+          description: 'Sign with action market.order.cancel. Only your own open or partially filled orders release funds. Cancelling an already-terminal order that still belongs to you returns ok:true with released_base_units=0; unknown or someone else’s orders return ORDER_NOT_FOUND.',
           request: {
             kind: 'body',
             example: `{
@@ -1502,6 +1522,104 @@ const res = await fetch(\`${B}/markets/\${market_id}/orders/\${order_id}/cancel\
   ];
 }
 
+function BotTradingQuickstart({ apiBase }: { apiBase: string }) {
+  return (
+    <Panel title="BOT TRADING QUICKSTART">
+      <div id="bot-trading" style={{ scrollMarginTop: 24 }} />
+      <p style={{ margin: '4px 0 8px' }}>
+        This is the minimum loop for an external trading bot. There is no API
+        key system yet: bots authenticate the same way wallets do, by holding an
+        Ed25519 private key, getting a session cookie, and signing every order
+        body with <code>market.order.create</code> or{' '}
+        <code>market.order.cancel</code>.
+      </p>
+      <ol style={{ margin: '0 0 10px 0', paddingLeft: 24, lineHeight: 1.7 }}>
+        <li>Load or create an Ed25519 keypair. Keep the private key off the frontend.</li>
+        <li>Call <code>POST /auth/challenge</code>, sign the envelope as <code>auth.session</code>, then call <code>POST /auth/session</code> and retain the <code>rpow4_session</code> cookie.</li>
+        <li>Discover markets with <code>GET /markets</code>. Store <code>market.id</code>, not the display symbol.</li>
+        <li>Poll <code>/book</code>, <code>/trades</code>, and optionally <code>/candles</code>. Use bigint math for every amount and price.</li>
+        <li>Check <code>/balances</code> before placing orders. Remember open orders move funds from <code>spendable_base_units</code> to <code>locked_base_units</code>.</li>
+        <li>Create orders with a fresh UUID <code>client_order_id</code>. Reusing the same ID returns the original result, which makes retries safe.</li>
+        <li>Poll <code>/my-orders</code> after creates/cancels and reconcile fills from both the order status and returned trades.</li>
+      </ol>
+      <CodeBlock
+        label="bot skeleton"
+        language="js"
+        code={`import { mnemonicToKeypair, signCanonical } from '@rpow/shared';
+
+const API = '${apiBase}';
+const kp = mnemonicToKeypair(process.env.RPOW_BOT_MNEMONIC);
+
+async function json(path, init = {}) {
+  const res = await fetch(API + path, {
+    ...init,
+    headers: {
+      ...(init.body ? { 'content-type': 'application/json' } : {}),
+      ...(init.headers ?? {}),
+    },
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(\`\${res.status} \${body.error ?? 'ERROR'}: \${body.message ?? path}\`);
+  return { body, headers: res.headers };
+}
+
+// Node fetch does not keep cookies automatically. In production use a cookie jar;
+// this minimal example captures the single rpow4_session cookie.
+async function login() {
+  const challenge = await json('/auth/challenge', {
+    method: 'POST',
+    body: JSON.stringify({ pubkey: kp.publicKeyBase58 }),
+  });
+  const { envelope, envelope_mac } = challenge.body;
+  const signature_base58 = signCanonical('auth.session', envelope, kp.secretKey);
+  const session = await json('/auth/session', {
+    method: 'POST',
+    body: JSON.stringify({ envelope, envelope_mac, signature_base58 }),
+  });
+  return session.headers.get('set-cookie')?.split(';')[0] ?? '';
+}
+
+const cookie = await login();
+const { markets } = (await json('/markets')).body;
+const market = markets[0];
+
+const [book, balances] = await Promise.all([
+  json(\`/markets/\${market.id}/book\`).then(r => r.body),
+  json(\`/markets/\${market.id}/balances\`, { headers: { cookie } }).then(r => r.body),
+]);
+
+// Example: post a small limit buy at the current best bid.
+const body = {
+  market_id: market.id,
+  side: 'buy',
+  order_type: 'limit',
+  price_quote_base_units: market.best_bid_quote_base_units ?? '1000000000',
+  base_amount_base_units: '1000000000',
+  client_order_id: crypto.randomUUID(),
+};
+
+const order = await json(\`/markets/\${market.id}/orders\`, {
+  method: 'POST',
+  headers: { cookie },
+  body: JSON.stringify({
+    ...body,
+    client_signature_base58: signCanonical('market.order.create', body, kp.secretKey),
+  }),
+});
+
+console.log(order.body.order.status, order.body.filled_base_units);`}
+      />
+      <p className="dim" style={{ margin: '4px 0 0', fontSize: 12 }}>
+        Operational notes: keep polling modest (the UI uses ~1.5s while visible),
+        handle <code>401</code> by refreshing the session, handle{' '}
+        <code>400 BAD_REQUEST</code> precision errors by reducing size/price,
+        and use <code>max_quote_base_units</code> on market buys if your bot has
+        any slippage tolerance.
+      </p>
+    </Panel>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Page entry: assembles conventions + per-section endpoint blocks. Reads the
 // API base URL for curl/JS examples. Production docs should point at the
@@ -1523,7 +1641,8 @@ export function DocsPage() {
         <p style={{ margin: '0 0 6px 0' }}>
           Public REST API for rpow4. Everything you can do in the web UI you
           can do over HTTP — read network state, mine, send, manage your
-          wallet, explore accounts and transactions.
+          wallet, explore accounts and transactions, and trade internal RPOW
+          markets from your own bots.
         </p>
         <p className="dim" style={{ margin: '4px 0 0 0', fontSize: 13 }}>
           base url:{' '}
@@ -1542,6 +1661,10 @@ export function DocsPage() {
           <li>
             <TocLink id="signing">How to sign a request</TocLink>{' '}
             <span className="dim">— canonical messages, Ed25519, base58</span>
+          </li>
+          <li>
+            <TocLink id="bot-trading">Bot trading quickstart</TocLink>{' '}
+            <span className="dim">— session cookies, polling, signed orders</span>
           </li>
           {sections.map((s) => (
             <li key={s.id}>
@@ -1669,6 +1792,8 @@ const wire = { ...body, client_signature_base58 };`}
           algorithm is &lt;30 lines.
         </p>
       </Panel>
+
+      <BotTradingQuickstart apiBase={apiBase} />
 
       {sections.map((section) => (
         <Panel key={section.id} title={section.title.toUpperCase()}>
