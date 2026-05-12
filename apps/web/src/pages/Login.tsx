@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
@@ -24,6 +24,7 @@ export function LoginPage() {
   const wallet = useWallet();
   const { me, refresh } = useMe();
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [mode, setMode] = useState<'simple' | 'advanced'>(
     wallet.status === 'locked' ? 'advanced' : 'simple',
   );
@@ -46,7 +47,7 @@ export function LoginPage() {
 
   async function onDone() {
     await refresh();
-    nav('/');
+    nav(searchParams.get('returnTo') || '/');
   }
 
   return (

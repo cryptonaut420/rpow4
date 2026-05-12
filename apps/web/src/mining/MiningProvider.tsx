@@ -16,6 +16,7 @@ import { formatRpow } from '../lib/format.js';
 import { estimateHashrate, type HashrateEstimate } from '../lib/hashrate.js';
 import type { MiningVisualizerHandles } from '../components/MiningVisualizer.js';
 import type { LedgerResponse, MeResponse, PoolStatsResponse } from '@rpow/shared';
+import { useAsset } from '../assets/AssetProvider.js';
 
 // ---------------------------------------------------------------------------
 // MiningProvider
@@ -122,7 +123,13 @@ export function useMining(): MiningContextValue {
 
 export function MiningProvider({ children }: { children: ReactNode }) {
   const wallet = useWallet();
-  const { me, refresh } = useMe();
+  const { selectedSlug } = useAsset();
+  const { me, refresh } = useMe(selectedSlug);
+  // Track the slug a fresh mining run was started against so we can detect
+  // mid-run asset switches and abort cleanly. Without this guard the worker
+  // would happily keep submitting shares against the previously-selected
+  // asset, which is confusing and wastes CPU.
+  const activeAssetSlugRef = useRef<string>(selectedSlug);
 
   const [status, setStatus] = useState<MiningStatus>('idle');
   const [target, setTarget] = useState<number | null>(null);
@@ -176,8 +183,8 @@ export function MiningProvider({ children }: { children: ReactNode }) {
   // Pull halving info on mount and after each successful refresh batch
   // so the "next halving at" countdown stays roughly current.
   const refreshLedger = useCallback(() => {
-    api.ledger().then(setLedger).catch(() => {});
-  }, []);
+    api.ledger(selectedSlug).then(setLedger).catch(() => {});
+  }, [selectedSlug]);
 
   useEffect(() => {
     refreshLedger();
@@ -232,6 +239,21 @@ export function MiningProvider({ children }: { children: ReactNode }) {
     }
   }, [wallet.status, status, tearDownMining]);
 
+  // If the user switches asset while mining, the worker holds a challenge
+  // for the previous asset and would happily keep submitting against it
+  // until exit. Tear down the worker on asset change so the user can press
+  // [ MINE ] again to start a fresh run on the new asset.
+  useEffect(() => {
+    if (status !== 'mining') {
+      activeAssetSlugRef.current = selectedSlug;
+      return;
+    }
+    if (activeAssetSlugRef.current !== selectedSlug) {
+      tearDownMining();
+      activeAssetSlugRef.current = selectedSlug;
+    }
+  }, [selectedSlug, status, tearDownMining]);
+
   // Combined throttled balance + ledger refresh. Pass `force: true` to
   // bypass the throttle (e.g. on STOP).
   const refreshAccount = useCallback((opts: { force?: boolean } = {}) => {
@@ -254,7 +276,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
 
     let ch;
     try {
-      ch = await api.challenge();
+      ch = await api.challenge(selectedSlug);
     } catch (err: any) {
       sessionStoppedAtRef.current = performance.now();
       vizHandlesRef.current?.setActive(false);
@@ -312,8 +334,12 @@ export function MiningProvider({ children }: { children: ReactNode }) {
       if (m.type === 'found') {
         w.terminate(); workerRef.current = null;
         try {
-          const mintBody = { challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce };
+          const assetId = (ch as any).asset_id as string | undefined;
+          const mintBody = assetId
+            ? { asset_id: assetId, challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce }
+            : { challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce };
           const r = await api.mint({
+            ...(assetId ? { asset_id: assetId } : {}),
             challenge_id: ch.challenge_id,
             nonce_prefix: ch.nonce_prefix,
             difficulty_bits: ch.difficulty_bits,
@@ -322,7 +348,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
             challenge_mac: ch.challenge_mac,
             solution_nonce: m.solution_nonce,
             client_signature_base58: wallet.sign('mint', mintBody),
-          });
+          } as any, selectedSlug);
           totalHashesRef.current += BigInt(m.hashes);
           currentCycleHashesRef.current = 0n;
           sessionMintedRef.current += 1;
@@ -376,7 +402,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
 
     let ch;
     try {
-      ch = await api.poolChallenge();
+      ch = await api.poolChallenge(selectedSlug);
     } catch (err: any) {
       // If the operator disabled the pool, fall through to solo so the
       // user keeps mining instead of getting stuck in an error state.
@@ -462,8 +488,12 @@ export function MiningProvider({ children }: { children: ReactNode }) {
         const shareWork = BigInt(Math.max(1, Math.pow(2, ch.share_difficulty_bits)));
         totalHashesRef.current += shareWork;
         try {
-          const sigBody = { challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce };
+          const assetId = (ch as any).asset_id as string | undefined;
+          const sigBody = assetId
+            ? { asset_id: assetId, challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce }
+            : { challenge_id: ch.challenge_id, solution_nonce: m.solution_nonce };
           const r = await api.poolShare({
+            ...(assetId ? { asset_id: assetId } : {}),
             challenge_id: ch.challenge_id,
             nonce_prefix: ch.nonce_prefix,
             network_difficulty_bits: ch.network_difficulty_bits,
@@ -473,7 +503,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
             challenge_mac: ch.challenge_mac,
             solution_nonce: m.solution_nonce,
             client_signature_base58: wallet.sign('pool.share', sigBody),
-          });
+          } as any, selectedSlug);
           // Count any accepted share against the run.
           sessionSharesRef.current += 1;
           if (r.block_won) {
@@ -496,7 +526,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
             }
             refreshAccount();
             // Round closeout invalidates pool stats; refetch eagerly.
-            api.poolStats().then(setPoolStats).catch(() => {});
+            api.poolStats(selectedSlug).then(setPoolStats).catch(() => {});
           }
         } catch (err: any) {
           const code = err?.error;
@@ -596,7 +626,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     const tick = () => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      api.poolStats()
+      api.poolStats(selectedSlug)
         .then((r) => {
           if (cancelled) return;
           // Detect rounds we participated in that closed since the last
@@ -648,7 +678,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
       window.clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [mode]);
+  }, [mode, selectedSlug]);
 
   // Memoize the context value so consumers don't re-render on every
   // unrelated provider state change. Refs are stable across renders, so

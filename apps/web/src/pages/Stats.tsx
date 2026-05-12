@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { CopyButton } from '../components/CopyButton.js';
 import { api } from '../api.js';
+import { useAsset } from '../assets/AssetProvider.js';
 import { usePageMeta } from '../hooks/usePageMeta.js';
 import type {
   LeaderboardEntry,
@@ -61,7 +62,13 @@ function formatHashrateCompact(hps: number): string {
 }
 
 export function StatsPage() {
-  usePageMeta('Stats', 'RPOW4 network statistics, mining leaderboards, and richest accounts on the network.');
+  const { selectedSlug, selectedAsset, assetPath } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  const assetNickname = selectedAsset?.nickname ?? assetCode;
+  usePageMeta(
+    `${assetCode} Stats`,
+    `${assetCode} (${assetNickname}) network statistics, mining leaderboards, and richest accounts.`,
+  );
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
   const [poolStats, setPoolStats] = useState<PoolStatsResponse | null>(null);
   // Cache both sort variants once they've been fetched so flipping the
@@ -74,7 +81,7 @@ export function StatsPage() {
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      api.ledger()
+      api.ledger(selectedSlug)
         .then((l) => { if (!cancelled) setLedger(l); })
         .catch((e: unknown) => {
           if (cancelled) return;
@@ -87,27 +94,27 @@ export function StatsPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [selectedSlug]);
 
   // Pool stats: refresh on a tighter cadence than ledger because the
   // round + active-miner count change every share submission.
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      api.poolStats()
+      api.poolStats(selectedSlug)
         .then((r) => { if (!cancelled) setPoolStats(r); })
         .catch(() => { /* tolerate transient failures */ });
     };
     load();
     const id = window.setInterval(load, 5_000);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, []);
+  }, [selectedSlug]);
 
   useEffect(() => {
     let cancelled = false;
     const loadBoth = (isInitial: boolean) => {
       if (isInitial) setLoadingBoard(true);
-      Promise.all([api.leaderboard('balance'), api.leaderboard('minted')])
+      Promise.all([api.leaderboard('balance', selectedSlug), api.leaderboard('minted', selectedSlug)])
         .then(([balance, minted]) => {
           if (cancelled) return;
           setBoards({ balance, minted });
@@ -129,7 +136,7 @@ export function StatsPage() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [selectedSlug]);
 
   if (error) {
     return <Panel title="STATS"><div className="error">{error}</div></Panel>;
@@ -139,6 +146,7 @@ export function StatsPage() {
   }
 
   const totalMinted = formatRpow(ledger.total_minted_base_units);
+  const totalBurned = formatRpow(ledger.total_burned_base_units ?? '0');
   const totalTransferred = formatRpow(ledger.total_transferred_base_units);
   const circulating = formatRpow(ledger.circulating_supply_base_units);
   const reward = formatRpow(ledger.current_reward_base_units);
@@ -151,40 +159,52 @@ export function StatsPage() {
   const faucetClaimCount = formatNumber(ledger.faucet_claim_count ?? '0');
   const faucetTotalClaimed = formatRpow(ledger.faucet_total_claimed_base_units ?? '0');
 
+  const isDefaultAsset = !selectedAsset || selectedAsset.system_default === true;
+  const supplyMode = ledger.supply_mode ?? 'capped';
+  const capLabel =
+    supplyMode === 'unlimited' || !ledger.max_supply_base_units
+      ? 'uncapped'
+      : `cap ${formatNumber((BigInt(ledger.max_supply_base_units) / 1_000_000_000n).toString())}`;
+  const hasBurns = BigInt(ledger.total_burned_base_units ?? '0') > 0n;
+
+  // Lines are conditional so RPOW4-only metrics (faucet, trollbox)
+  // disappear cleanly on user-launched assets that don't expose them.
+  const networkLines = [
+    `  BLOCK HEIGHT        : ${formatNumber(ledger.block_height)}`,
+    `  TRANSFERS           : ${formatNumber(ledger.transfer_count)}`,
+    `  ACCOUNTS            : ${formatNumber(ledger.user_count)}`,
+    ``,
+    `  TOTAL MINTED        : ${totalMinted} ${assetCode}   (${capLabel})`,
+    hasBurns ? `  TOTAL BURNED        : ${totalBurned} ${assetCode}` : null,
+    `  TOTAL TRANSFERRED   : ${totalTransferred} ${assetCode}`,
+    `  CIRCULATING SUPPLY  : ${circulating} ${assetCode}`,
+    ``,
+    `  CURRENT REWARD      : ${reward} ${assetCode} per block (halving #${ledger.halving_index})`,
+    `  CURRENT DIFFICULTY  : ${ledger.current_difficulty_bits} trailing zero bits`,
+    `  NEXT HALVING        : in ${blocksToHalving} blocks`,
+    `  NEXT DIFFICULTY +1  : in ${blocksToDiffStep} blocks (cap ${ledger.difficulty_max_bits})`,
+    ``,
+    `  SEND FEE            : ${currentFee} ${assetCode} per transfer`,
+    isDefaultAsset ? `  TROLLBOX POST FEE   : ${currentTrollboxFee} ${assetCode} per post` : null,
+    `  TOTAL FEES EARNED   : ${totalFees} ${assetCode}`,
+    `  TREASURY BALANCE    : ${treasuryBalance} ${assetCode}`,
+    ``,
+    isDefaultAsset ? `  FAUCET CLAIMS       : ${faucetClaimCount}` : null,
+    isDefaultAsset ? `  FAUCET DRIPPED      : ${faucetTotalClaimed} ${assetCode}` : null,
+    isDefaultAsset ? `` : null,
+    isDefaultAsset ? `  TROLLBOX MESSAGES   : ${formatNumber(ledger.trollbox_message_count)}` : null,
+  ].filter((line) => line !== null);
+
   const board = boards[sort];
 
   return (
     <>
-      <Panel title="NETWORK STATS">
-        <pre style={{ margin: 0 }}>
-{`  BLOCK HEIGHT        : ${formatNumber(ledger.block_height)}
-  TRANSFERS           : ${formatNumber(ledger.transfer_count)}
-  ACCOUNTS            : ${formatNumber(ledger.user_count)}
-
-  TOTAL MINTED        : ${totalMinted} RPOW   (cap 21,000,000)
-  TOTAL TRANSFERRED   : ${totalTransferred} RPOW
-  CIRCULATING SUPPLY  : ${circulating} RPOW
-
-  CURRENT REWARD      : ${reward} RPOW per block (halving #${ledger.halving_index})
-  CURRENT DIFFICULTY  : ${ledger.current_difficulty_bits} trailing zero bits
-  NEXT HALVING        : in ${blocksToHalving} blocks
-  NEXT DIFFICULTY +1  : in ${blocksToDiffStep} blocks (cap ${ledger.difficulty_max_bits})
-
-  SEND FEE            : ${currentFee} RPOW per transfer
-  TROLLBOX POST FEE   : ${currentTrollboxFee} RPOW per post
-  TOTAL FEES EARNED   : ${totalFees} RPOW
-  TREASURY BALANCE    : ${treasuryBalance} RPOW
-
-  FAUCET CLAIMS       : ${faucetClaimCount}
-  FAUCET DRIPPED      : ${faucetTotalClaimed} RPOW
-
-  TROLLBOX MESSAGES   : ${formatNumber(ledger.trollbox_message_count)}
-`}
-        </pre>
+      <Panel title={`${assetCode} · ${assetNickname.toUpperCase()} STATS`}>
+        <pre style={{ margin: 0 }}>{networkLines.join('\n') + '\n'}</pre>
       </Panel>
 
       {poolStats && poolStats.enabled && (
-        <Panel title="MINING POOL">
+        <Panel title={`${assetCode} MINING POOL`}>
           <pre style={{ margin: 0 }}>
 {`  POOL HASHRATE       : ${formatHashrateCompact(poolStats.pool_hashrate_hps)}
   ACTIVE MINERS       : ${formatNumber(poolStats.active_miners)}
@@ -209,7 +229,7 @@ export function StatsPage() {
               >
                 <span>RECENT POOL ROUNDS</span>
                 <Link
-                  to="/pool/history"
+                  to={assetPath('/pool/history')}
                   style={{ letterSpacing: '0.06em', textTransform: 'none', fontSize: 12 }}
                 >
                   [ view all ]
@@ -225,7 +245,7 @@ export function StatsPage() {
         </Panel>
       )}
 
-      <Panel title={SORT_LABELS[sort].panel}>
+      <Panel title={`${assetCode} · ${SORT_LABELS[sort].panel}`}>
         <div style={{ marginBottom: 10 }}>
           <SortTab active={sort === 'balance'} onClick={() => setSort('balance')} label={SORT_LABELS.balance.tab} />
           {' '}
@@ -244,6 +264,7 @@ export function StatsPage() {
             entries={board.entries}
             generatedAt={board.generated_at}
             totalMintedBaseUnits={ledger.total_minted_base_units}
+            assetCode={assetCode}
           />
         )}
       </Panel>
@@ -263,13 +284,13 @@ function PoolRoundRow({ entry }: { entry: PoolStatsResponse['recent_payouts'][nu
     ? `@${entry.finder_display_name}`
     : `${entry.finder_pubkey.slice(0, 6)}…${entry.finder_pubkey.slice(-4)}`;
   const yours = entry.your_payout_base_units
-    ? ` · you +${formatRpow(entry.your_payout_base_units)} RPOW`
+    ? ` · you +${formatRpow(entry.your_payout_base_units)}`
     : '';
   return (
     <div className="pool-rounds-row">
       <span className="pool-rounds-time">{at}</span>
       <span className="pool-rounds-id">#{entry.round_id}</span>
-      <span className="pool-rounds-reward">{formatRpow(entry.reward_base_units)} RPOW</span>
+      <span className="pool-rounds-reward">{formatRpow(entry.reward_base_units)}</span>
       <span className="pool-rounds-meta">
         {entry.participant_count} miner{entry.participant_count === 1 ? '' : 's'} · won by{' '}
         <Link
@@ -300,20 +321,21 @@ function SortTab({ active, onClick, label }: { active: boolean; onClick: () => v
 }
 
 function LeaderboardTable({
-  sort, entries, generatedAt, totalMintedBaseUnits,
+  sort, entries, generatedAt, totalMintedBaseUnits, assetCode,
 }: {
   sort: LeaderboardSort;
   entries: LeaderboardEntry[];
   generatedAt: string;
   totalMintedBaseUnits: string;
+  assetCode: string;
 }) {
   const headerLabel = SORT_LABELS[sort].primary;
   return (
     <>
       <pre className="leaderboard-header">
 {sort === 'balance'
-  ? `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (RPOW)   MINED`
-  : `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (RPOW)   BLOCKS`}
+  ? `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (${assetCode})   MINED`
+  : `  RANK   IDENTITY                                        ${headerLabel.padStart(14)} (${assetCode})   BLOCKS`}
       </pre>
       <div className="leaderboard-grid">
         {entries.map((e) => {

@@ -153,7 +153,7 @@ describe('POST /mint', () => {
     await setMintedSupplyBaseUnits(ctx, CAP_BASE_UNITS - REWARD_BASE_UNITS);
 
     const wallets: TestWallet[] = [];
-    const challenges: Array<{ challenge_id: string; nonce_prefix: string; difficulty_bits: number }> = [];
+    const challenges: Array<Awaited<ReturnType<typeof getChallenge>>> = [];
     for (let i = 0; i < 5; i++) {
       const w = await loginAsRandomWallet(ctx.app);
       wallets.push(w);

@@ -29,6 +29,19 @@ export const MINT_DIFFICULTY_STEP_BLOCKS = 50_000;
 export const MINT_DIFFICULTY_MAX_BITS = 50;
 export const MINT_MAX_SUPPLY_RPOW = 21_000_000;
 
+/**
+ * Reward reduction policy. RPOW4.0 uses `halving_by_blocks` (Bitcoin-exact).
+ * Custom assets may opt out with `none` so the starting reward is held forever,
+ * which is what users see in the "no reduction" launch-form preset.
+ */
+export type RewardScheduleType =
+  | 'none'
+  | 'halving_by_blocks'
+  | 'percent_by_blocks'
+  | 'fixed_by_blocks';
+
+export type RewardReductionType = 'none' | 'percent' | 'fixed';
+
 export interface ScheduleOpts {
   baseRewardBaseUnits?: bigint;
   halvingIntervalBlocks?: number;
@@ -36,6 +49,16 @@ export interface ScheduleOpts {
   difficultyStepBlocks?: number;
   difficultyMaxBits?: number;
   maxSupplyRpow?: number;
+  maxSupplyBaseUnits?: bigint;
+  rewardScheduleType?: RewardScheduleType;
+  /**
+   * Used by `percent_by_blocks` (basis-points-style integer in `[0,100]` for
+   * percent semantics) and `fixed_by_blocks` (base units to subtract per
+   * step). Ignored otherwise. Defaults to 50 (percent) which is identical to
+   * the canonical halving for RPOW4.0.
+   */
+  rewardReductionValue?: bigint;
+  rewardReductionType?: RewardReductionType;
 }
 
 export interface ScheduleInfo {
@@ -66,6 +89,9 @@ interface Resolved {
   difficultyStepBlocks: bigint;
   difficultyMaxBits: number;
   maxSupplyBaseUnits: bigint;
+  rewardScheduleType: RewardScheduleType;
+  rewardReductionType: RewardReductionType;
+  rewardReductionValue: bigint;
 }
 
 function resolve(opts?: ScheduleOpts): Resolved {
@@ -75,6 +101,9 @@ function resolve(opts?: ScheduleOpts): Resolved {
   const difficultyStepBlocks = opts?.difficultyStepBlocks ?? MINT_DIFFICULTY_STEP_BLOCKS;
   const difficultyMaxBits = opts?.difficultyMaxBits ?? MINT_DIFFICULTY_MAX_BITS;
   const maxSupplyRpow = opts?.maxSupplyRpow ?? MINT_MAX_SUPPLY_RPOW;
+  const rewardScheduleType = opts?.rewardScheduleType ?? 'halving_by_blocks';
+  const rewardReductionType = opts?.rewardReductionType ?? 'percent';
+  const rewardReductionValue = opts?.rewardReductionValue ?? 50n;
 
   if (halvingIntervalBlocks <= 0) throw new Error('halvingIntervalBlocks must be positive');
   if (difficultyStepBlocks <= 0) throw new Error('difficultyStepBlocks must be positive');
@@ -88,8 +117,30 @@ function resolve(opts?: ScheduleOpts): Resolved {
     difficultyStartBits,
     difficultyStepBlocks: BigInt(difficultyStepBlocks),
     difficultyMaxBits,
-    maxSupplyBaseUnits: BigInt(maxSupplyRpow) * BASE_UNITS_PER_RPOW,
+    maxSupplyBaseUnits: opts?.maxSupplyBaseUnits ?? BigInt(maxSupplyRpow) * BASE_UNITS_PER_RPOW,
+    rewardScheduleType,
+    rewardReductionType,
+    rewardReductionValue,
   };
+}
+
+function applyReduction(reward: bigint, r: Resolved): bigint {
+  switch (r.rewardScheduleType) {
+    case 'none':
+      return reward;
+    case 'halving_by_blocks':
+      return reward / 2n;
+    case 'percent_by_blocks': {
+      const pct = r.rewardReductionValue;
+      if (pct <= 0n) return reward;
+      if (pct >= 100n) return 0n;
+      return (reward * (100n - pct)) / 100n;
+    }
+    case 'fixed_by_blocks': {
+      const next = reward - r.rewardReductionValue;
+      return next < 0n ? 0n : next;
+    }
+  }
 }
 
 function nonNegBlock(h: bigint): bigint {
@@ -99,15 +150,19 @@ function nonNegBlock(h: bigint): bigint {
 /**
  * Reward (in base units) for a block mined at height `blockHeight`. The
  * very first mint is at height 0; the reward is constant within a
- * halving window and is integer-floored at each halving boundary.
+ * reduction window and is integer-floored at each boundary.
+ *
+ * Reduction policy is governed by `rewardScheduleType` (default
+ * `halving_by_blocks` for RPOW4.0). `none` keeps the starting reward forever.
  */
 export function currentRewardForBlock(blockHeight: bigint, opts?: ScheduleOpts): bigint {
   const r = resolve(opts);
+  if (r.rewardScheduleType === 'none') return r.baseRewardBaseUnits;
   const h = nonNegBlock(blockHeight);
-  const halvings = h / r.halvingIntervalBlocks;
+  const reductions = h / r.halvingIntervalBlocks;
   let reward = r.baseRewardBaseUnits;
-  for (let i = 0n; i < halvings; i++) {
-    reward = reward / 2n;
+  for (let i = 0n; i < reductions; i++) {
+    reward = applyReduction(reward, r);
     if (reward === 0n) return 0n;
   }
   return reward;
@@ -138,7 +193,9 @@ export function scheduleInfoForBlock(
   const halvings = h / r.halvingIntervalBlocks;
   const halvingIndex = Number(halvings);
   const reward = currentRewardForBlock(h, opts);
-  const nextReward = reward === 0n ? 0n : reward / 2n;
+  const nextReward = r.rewardScheduleType === 'none'
+    ? reward
+    : (reward === 0n ? 0n : applyReduction(reward, r));
   const nextHalvingAtBlock = (halvings + 1n) * r.halvingIntervalBlocks;
   const blocksToNextHalving = nextHalvingAtBlock - h;
 

@@ -9,6 +9,7 @@ import { useWallet } from '../wallet/WalletProvider.js';
 import { formatRpow, parseRpowToBaseUnits } from '../lib/format.js';
 import { isValidPubkeyBase58, shortPubkey, validateDisplayName } from '@rpow/shared';
 import type { LedgerResponse, SendRequestBody } from '@rpow/shared';
+import { useAsset } from '../assets/AssetProvider.js';
 
 type Resolution =
   | { kind: 'idle' }
@@ -31,9 +32,14 @@ function tryParseAmount(raw: string): bigint | null {
 }
 
 export function SendPage() {
-  usePageMeta('Send', 'Send RPOW4 tokens to any account by public key or display name. Preview fees before confirming.');
   const wallet = useWallet();
-  const { me, refresh } = useMe();
+  const { selectedSlug, selectedAsset } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  usePageMeta(
+    `Send ${assetCode}`,
+    `Send ${assetCode} tokens to any account by public key or display name. Preview fees before confirming.`,
+  );
+  const { me, refresh } = useMe(selectedSlug);
   const [ledger, setLedger] = useState<LedgerResponse | null>(null);
   // Prefill recipient/amount/memo from the URL so other pages can deep-link
   // to a partially-filled send (e.g. the faucet's "donate to treasury" CTA).
@@ -52,9 +58,9 @@ export function SendPage() {
 
   useEffect(() => {
     let cancelled = false;
-    api.ledger().then((l) => { if (!cancelled) setLedger(l); }).catch(() => {});
+    api.ledger(selectedSlug).then((l) => { if (!cancelled) setLedger(l); }).catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [selectedSlug]);
 
   // Debounced recipient resolution.
   useEffect(() => {
@@ -151,21 +157,22 @@ export function SendPage() {
       const totalRpow = formatRpow(totalNeeded);
       setStatus('error');
       setError(feeBu > 0n
-        ? `insufficient balance — ${totalRpow} RPOW needed (${formatRpow(amount_base_units)} + ${feeRpow} fee), you have ${formatRpow(me.balance_base_units)}`
-        : `amount exceeds your balance of ${formatRpow(me.balance_base_units)} RPOW`
+        ? `insufficient balance — ${totalRpow} ${assetCode} needed (${formatRpow(amount_base_units)} + ${feeRpow} fee), you have ${formatRpow(me.balance_base_units)}`
+        : `amount exceeds your balance of ${formatRpow(me.balance_base_units)} ${assetCode}`
       );
       return;
     }
 
     const trimmedMemo = memo.trim();
     const sigBody: Record<string, string> = { recipient_pubkey: resolvedPubkey, amount_base_units, idempotency_key: crypto.randomUUID() };
+    if (selectedAsset) sigBody.asset_id = selectedAsset.id;
     if (trimmedMemo) sigBody.memo = trimmedMemo;
 
     try {
       const r = await api.send({
         ...sigBody,
         client_signature_base58: wallet.sign('transfer', sigBody),
-      } as SendRequestBody);
+      } as SendRequestBody, selectedSlug);
       setStatus('sent');
       setTransferId(r.transfer_id);
       setSentFee(r.fee_base_units);
@@ -181,7 +188,7 @@ export function SendPage() {
       setStatus('error');
       const code = err?.error ?? 'INTERNAL';
       const msgMap: Record<string, string> = {
-        INSUFFICIENT_BALANCE: `not enough balance — remember the ${formatRpow(networkFee.toString())} RPOW fee is deducted on top of the amount`,
+        INSUFFICIENT_BALANCE: `not enough balance — remember the ${formatRpow(networkFee.toString())} ${assetCode} fee is deducted on top of the amount`,
         BAD_REQUEST: err?.message ?? 'bad request',
         INVALID_SIGNATURE: 'wallet signature did not verify (try unlocking again)',
         UNAUTHORIZED: 'session expired — sign in again',
@@ -192,19 +199,19 @@ export function SendPage() {
 
   return (
     <>
-      <Panel title="SEND">
+      <Panel title={`SEND ${assetCode}`}>
         <div style={{ marginBottom: 10, color: 'var(--dim)', fontSize: 12 }}>
-          balance: <strong style={{ color: 'var(--fg)' }}>{formatRpow(me.balance_base_units)} RPOW</strong>
+          balance: <strong style={{ color: 'var(--fg)' }}>{formatRpow(me.balance_base_units)} {assetCode}</strong>
           {fee > 0n && (
             <span>
-              {' '}· network fee: <strong style={{ color: 'var(--fg)' }}>{formatRpow(fee)} RPOW</strong>
-              {' '}· max sendable: <strong style={{ color: 'var(--fg)' }}>{formatRpow(maxSendable)} RPOW</strong>
+              {' '}· network fee: <strong style={{ color: 'var(--fg)' }}>{formatRpow(fee)} {assetCode}</strong>
+              {' '}· max sendable: <strong style={{ color: 'var(--fg)' }}>{formatRpow(maxSendable)} {assetCode}</strong>
             </span>
           )}
           {fee === 0n && networkFee > 0n && me.send_fees_waived && (
             <span>
               {' '}· network fee waived for this account (max sendable:{' '}
-              <strong style={{ color: 'var(--fg)' }}>{formatRpow(maxSendable)} RPOW</strong>)
+              <strong style={{ color: 'var(--fg)' }}>{formatRpow(maxSendable)} {assetCode}</strong>)
             </span>
           )}
         </div>
@@ -235,7 +242,7 @@ export function SendPage() {
               onChange={(e) => setAmount(e.target.value)}
               placeholder="e.g. 0.5"
               style={{ width: '14ch' }}
-            /> RPOW{' '}
+            /> {assetCode}{' '}
             {maxSendable > 0n && (
               <button type="button" onClick={handleMax} style={{ fontSize: 11, padding: '1px 6px' }}>
                 [ max ]
@@ -249,7 +256,7 @@ export function SendPage() {
               {amountBu === null
                 ? 'invalid amount — use up to 9 decimal places (e.g. 0.5)'
                 : <>
-                    total: {formatRpow(totalBu!)} RPOW
+                    total: {formatRpow(totalBu!)} {assetCode}
                     {fee > 0n && <> ({formatRpow(amountBu)} + {formatRpow(fee)} fee)</>}
                     {!canAfford && ' — exceeds balance'}
                   </>
@@ -288,11 +295,11 @@ export function SendPage() {
         {status === 'sent' && sentTo && (
           <div style={{ marginTop: 12 }}>
             <div style={{ color: 'var(--accent)' }}>
-              sent {sentAmt} RPOW → <code>{sentTo.display_name ?? sentTo.pubkey}</code>
+              sent {sentAmt} {assetCode} → <code>{sentTo.display_name ?? sentTo.pubkey}</code>
             </div>
             <div style={{ color: 'var(--dim)', fontSize: 12, marginTop: 4 }}>
               {sentTo.display_name && <>recipient pubkey: <code>{sentTo.pubkey}</code><br /></>}
-              {sentFee !== '0' && <>fee: {formatRpow(sentFee)} RPOW<br /></>}
+              {sentFee !== '0' && <>fee: {formatRpow(sentFee)} {assetCode}<br /></>}
               transfer id: <code>{transferId}</code>{' '}
               <CopyButton text={transferId} />
             </div>
@@ -322,7 +329,7 @@ export function SendPage() {
           <CopyButton text={me.pubkey} />
         </div>
         <div style={{ color: 'var(--dim)', fontSize: 12, marginTop: 6 }}>
-          share either with anyone who wants to send you RPOW.
+          share either with anyone who wants to send you {assetCode}.
         </div>
       </Panel>
     </>

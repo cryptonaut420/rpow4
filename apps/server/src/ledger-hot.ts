@@ -2,9 +2,10 @@ import type { PoolClient } from 'pg';
 import { TREASURY_PUBKEY } from '@rpow/shared';
 
 export interface LedgerEventRow {
+  asset_id: string;
   event_seq: string;
   id: string;
-  event_type: 'MINT' | 'TRANSFER';
+  event_type: 'MINT' | 'TRANSFER' | 'BURN' | 'GENESIS_ALLOCATION';
   actor_pubkey: string;
   counterparty_pubkey: string | null;
   amount: string;
@@ -35,14 +36,15 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
 
   await c.query(
     `INSERT INTO ledger_recent_events(
-       event_seq, id, event_type, actor_pubkey, counterparty_pubkey, amount,
+       asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey, amount,
        fee_base_units, memo,
        challenge_id, solution_nonce, idempotency_key, client_signature_base58,
        server_sig, created_at
      )
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (event_seq) DO NOTHING`,
     [
+      event.asset_id,
       event.event_seq,
       event.id,
       event.event_type,
@@ -60,13 +62,14 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
     ],
   );
 
-  if (event.event_type === 'MINT') {
+  if (event.event_type === 'MINT' || event.event_type === 'GENESIS_ALLOCATION') {
     await insertAccountRecentRows(c, [
       {
+        assetId: event.asset_id,
         id: event.id,
         pubkey: event.actor_pubkey,
         eventSeq: event.event_seq,
-        type: 'mint',
+        type: event.event_type === 'MINT' ? 'mint' : 'genesis',
         amount: event.amount,
         feeBaseUnits: '0',
         memo: null,
@@ -75,7 +78,26 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
         createdAt: event.created_at,
       },
     ]);
-    if (shouldTrimAccount) await trimAccountRecent(c, event.actor_pubkey);
+    if (shouldTrimAccount) await trimAccountRecent(c, event.asset_id, event.actor_pubkey);
+  } else if (event.event_type === 'BURN') {
+    if (event.actor_pubkey !== TREASURY_PUBKEY) {
+      await insertAccountRecentRows(c, [
+        {
+          assetId: event.asset_id,
+          id: event.id,
+          pubkey: event.actor_pubkey,
+          eventSeq: event.event_seq,
+          type: 'burn',
+          amount: event.amount,
+          feeBaseUnits: '0',
+          memo: event.memo,
+          counterpartyPubkey: null,
+          clientSignatureBase58: event.client_signature_base58,
+          createdAt: event.created_at,
+        },
+      ]);
+      if (shouldTrimAccount) await trimAccountRecent(c, event.asset_id, event.actor_pubkey);
+    }
   } else {
     // Sender + recipient mirrored in a single multi-row INSERT. The
     // treasury never gets an activity feed entry — neither for fee
@@ -85,6 +107,7 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
     const rows: AccountRecentRow[] = [];
     if (event.actor_pubkey !== TREASURY_PUBKEY) {
       rows.push({
+        assetId: event.asset_id,
         id: event.id,
         pubkey: event.actor_pubkey,
         eventSeq: event.event_seq,
@@ -99,6 +122,7 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
     }
     if (event.counterparty_pubkey && event.counterparty_pubkey !== TREASURY_PUBKEY) {
       rows.push({
+        assetId: event.asset_id,
         id: event.id,
         pubkey: event.counterparty_pubkey,
         eventSeq: event.event_seq,
@@ -114,10 +138,10 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
     if (rows.length > 0) await insertAccountRecentRows(c, rows);
     if (shouldTrimAccount) {
       if (event.counterparty_pubkey && event.counterparty_pubkey !== TREASURY_PUBKEY) {
-        await trimAccountRecent(c, event.counterparty_pubkey);
+        await trimAccountRecent(c, event.asset_id, event.counterparty_pubkey);
       }
       if (event.actor_pubkey !== TREASURY_PUBKEY) {
-        await trimAccountRecent(c, event.actor_pubkey);
+        await trimAccountRecent(c, event.asset_id, event.actor_pubkey);
       }
     }
   }
@@ -141,10 +165,11 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
 }
 
 interface AccountRecentRow {
+  assetId: string;
   id: string;
   pubkey: string;
   eventSeq: string;
-  type: 'mint' | 'send' | 'receive';
+  type: 'mint' | 'send' | 'receive' | 'burn' | 'genesis';
   amount: string;
   feeBaseUnits: string;
   memo: string | null;
@@ -162,8 +187,9 @@ async function insertAccountRecentRows(
   const valuesSql: string[] = [];
   for (const row of rows) {
     const i = params.length;
-    valuesSql.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 5},$${i + 6},$${i + 7},$${i + 8},$${i + 9},$${i + 10})`);
+    valuesSql.push(`($${i + 1},$${i + 2},$${i + 3},$${i + 4},$${i + 5},$${i + 6},$${i + 7},$${i + 8},$${i + 9},$${i + 10},$${i + 11})`);
     params.push(
+      row.assetId,
       row.id,
       row.pubkey,
       row.eventSeq,
@@ -178,27 +204,28 @@ async function insertAccountRecentRows(
   }
   await c.query(
     `INSERT INTO account_recent_events(
-       id, pubkey, event_seq, type, amount, fee_base_units, memo,
+       asset_id, id, pubkey, event_seq, type, amount, fee_base_units, memo,
        counterparty_pubkey, client_signature_base58, created_at
      )
      VALUES ${valuesSql.join(',')}
-     ON CONFLICT (pubkey, event_seq, type) DO NOTHING`,
+     ON CONFLICT (asset_id, pubkey, event_seq, type) DO NOTHING`,
     params,
   );
 }
 
-async function trimAccountRecent(c: PoolClient, pubkey: string): Promise<void> {
+async function trimAccountRecent(c: PoolClient, assetId: string, pubkey: string): Promise<void> {
   await c.query(
     `DELETE FROM account_recent_events
-     WHERE pubkey=$1
+     WHERE asset_id=$1::uuid
+       AND pubkey=$2
        AND event_seq < (
          SELECT event_seq
          FROM account_recent_events
-         WHERE pubkey=$1
+         WHERE asset_id=$1::uuid AND pubkey=$2
          ORDER BY event_seq DESC
-         OFFSET $2
+         OFFSET $3
          LIMIT 1
        )`,
-    [pubkey, ACCOUNT_RECENT_LIMIT],
+    [assetId, pubkey, ACCOUNT_RECENT_LIMIT],
   );
 }

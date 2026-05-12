@@ -9,6 +9,7 @@ import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { api } from '../api.js';
 import { formatRpow } from '../lib/format.js';
+import { useAsset } from '../assets/AssetProvider.js';
 
 function WalletHistoryBlurb() {
   return (
@@ -32,9 +33,14 @@ function WalletHistoryBlurb() {
 }
 
 export function WalletPage() {
-  usePageMeta('Wallet', 'Manage your RPOW4 wallet. View your balance, public key, and account details.');
   const wallet = useWallet();
-  const { me, loading, refresh } = useMe();
+  const { selectedSlug, selectedAsset, assetPath } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  usePageMeta(
+    `${assetCode} Wallet`,
+    `Manage your ${assetCode} wallet. View your balance, public key, and account details.`,
+  );
+  const { me, loading, refresh } = useMe(selectedSlug);
   const nav = useNavigate();
 
   if (wallet.status === 'loading' || loading) return <Panel><div>loading...</div></Panel>;
@@ -45,7 +51,7 @@ export function WalletPage() {
         <Panel title="WALLET">
           <div>not signed in.</div>
           <div style={{ marginTop: 8 }}>
-            <Link to="/login">[ {wallet.status === 'locked' ? 'unlock wallet' : 'create or import wallet'} ]</Link>
+            <Link to={`/login?returnTo=${encodeURIComponent(assetPath('/'))}`}>[ {wallet.status === 'locked' ? 'unlock wallet' : 'create or import wallet'} ]</Link>
           </div>
         </Panel>
         <WalletHistoryBlurb />
@@ -70,15 +76,15 @@ export function WalletPage() {
     try { await api.logout(); } catch { /* ignore */ }
     await wallet.forget();
     await refresh();
-    nav('/login');
+    nav(`/login?returnTo=${encodeURIComponent(assetPath('/'))}`);
   }
 
   return (
     <>
       <SaveWalletPrompt />
-      <Panel title="WALLET">
+      <Panel title={`${assetCode} WALLET`}>
         <pre style={{ margin: 0 }}>
-{`  > BALANCE     : ${formatRpow(me.balance_base_units)} RPOW
+{`  > BALANCE     : ${formatRpow(me.balance_base_units)} ${assetCode}
   > MINTED      : ${formatRpow(me.minted_base_units)}
   > SENT        : ${formatRpow(me.sent_base_units)}
   > RECEIVED    : ${formatRpow(me.received_base_units)}
@@ -93,8 +99,8 @@ export function WalletPage() {
           <DisplayNameEditor current={me.display_name} onChanged={refresh} />
         </div>
         <div style={{ marginTop: 12 }}>
-          <Link to="/send">[ SEND ]</Link>{' '}
-          <Link to="/activity">[ ACTIVITY ]</Link>{' '}
+          <Link to={assetPath('/send')}>[ SEND ]</Link>{' '}
+          <Link to={assetPath('/activity')}>[ ACTIVITY ]</Link>{' '}
           <button onClick={logout} title="end session and lock wallet (encrypted backup is preserved)">
             [ LOGOUT ]
           </button>

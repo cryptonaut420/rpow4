@@ -2,13 +2,14 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { canonicalJson } from '@rpow/shared';
 
 export interface MintChallengeEnvelope {
+  asset_id: string;
   challenge_id: string;
   user_pubkey: string;
   nonce_prefix: string;
   difficulty_bits: number;
   issued_at: string;
   expires_at: string;
-  domain: 'rpow4.mint';
+  domain: 'rpow4.asset.mint.v1';
 }
 
 export function macMintChallenge(envelope: MintChallengeEnvelope, secret: string): string {

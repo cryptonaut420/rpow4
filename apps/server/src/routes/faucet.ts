@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { TREASURY_PUBKEY } from '@rpow/shared';
 import { withTxRetry } from '../db.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
+import { DEFAULT_ASSET_ID } from '../assets.js';
 
 interface CooldownRow {
   last_claimed_at: Date;
@@ -78,8 +79,8 @@ export async function faucetRoutes(app: FastifyInstance) {
       const treasuryRow = await app.pool.query<{ balance: string }>(
         `SELECT spendable_base_units::text AS balance
            FROM account_balances
-          WHERE pubkey = $1`,
-        [TREASURY_PUBKEY],
+          WHERE asset_id=$1::uuid AND pubkey = $2`,
+        [DEFAULT_ASSET_ID, TREASURY_PUBKEY],
       );
       const treasuryBalance = treasuryRow.rows[0]?.balance ?? '0';
       const treasuryBalanceBigInt = BigInt(treasuryBalance);
@@ -230,8 +231,8 @@ export async function faucetRoutes(app: FastifyInstance) {
                 SET spendable_base_units = spendable_base_units - $2::bigint,
                     sent_base_units = sent_base_units + $2::bigint,
                     updated_at = now()
-              WHERE pubkey = $1 AND spendable_base_units >= $2::bigint`,
-            [TREASURY_PUBKEY, claimAmount.toString()],
+              WHERE asset_id=$1::uuid AND pubkey = $2 AND spendable_base_units >= $3::bigint`,
+            [DEFAULT_ASSET_ID, TREASURY_PUBKEY, claimAmount.toString()],
           );
           if (debit.rowCount === 0) {
             return {
@@ -251,20 +252,21 @@ export async function faucetRoutes(app: FastifyInstance) {
           if (recipientInsert.rows[0]) {
             await c.query(
               `UPDATE ledger_stats SET value = value + 1, updated_at = now()
-                WHERE name='user_count'`,
+                WHERE asset_id=$1::uuid AND name='user_count'`,
+              [DEFAULT_ASSET_ID],
             );
           }
 
           // Credit the recipient + bump events_count for /activity total_count.
           await c.query(
-            `INSERT INTO account_balances(pubkey, spendable_base_units, received_base_units, events_count, updated_at)
-                  VALUES($1, $2, $2, 1, now())
-              ON CONFLICT (pubkey) DO UPDATE SET
+            `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
+                  VALUES($1::uuid, $2, $3, $3, 1, now())
+              ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                 spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
                 received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
                 events_count = account_balances.events_count + 1,
                 updated_at = now()`,
-            [recipient, claimAmount.toString()],
+            [DEFAULT_ASSET_ID, recipient, claimAmount.toString()],
           );
 
           // Stat shard for total_transferred. The shard key is the recipient
@@ -274,8 +276,9 @@ export async function faucetRoutes(app: FastifyInstance) {
             `UPDATE ledger_stat_shards
                 SET value = value + $1::bigint, updated_at = now()
               WHERE name='total_transferred'
+                AND asset_id=$3::uuid
                 AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
-            [claimAmount.toString(), recipient],
+            [claimAmount.toString(), recipient, DEFAULT_ASSET_ID],
           );
 
           const transferId = randomUUID();
@@ -284,8 +287,8 @@ export async function faucetRoutes(app: FastifyInstance) {
           const memo = 'faucet claim';
 
           await c.query(
-            `INSERT INTO ledger_event_ids(id) VALUES($1)`,
-            [transferId],
+            `INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`,
+            [transferId, DEFAULT_ASSET_ID],
           );
 
           // Insert the TRANSFER event + propagate event_seq + bump
@@ -294,11 +297,11 @@ export async function faucetRoutes(app: FastifyInstance) {
           const inserted = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
-                 id, event_type, actor_pubkey, counterparty_pubkey, amount,
+                 asset_id, id, event_type, actor_pubkey, counterparty_pubkey, amount,
                  fee_base_units, memo, idempotency_key, client_signature_base58, created_at
                )
-               VALUES($1,'TRANSFER',$2,$3,$4,0,$5,NULL,NULL,$6)
-               RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+               VALUES($1::uuid,$2,'TRANSFER',$3,$4,$5,0,$6,NULL,NULL,$7)
+               RETURNING asset_id::text, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                          amount, fee_base_units, memo, challenge_id, solution_nonce,
                          idempotency_key, client_signature_base58, server_sig, created_at
              ),
@@ -310,14 +313,14 @@ export async function faucetRoutes(app: FastifyInstance) {
              ),
              upd_transfer_count AS (
                UPDATE app_counters SET value = value + 1
-                WHERE name='transfer_count'
+                WHERE asset_id=$1::uuid AND name='transfer_count'
              )
-             SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+             SELECT asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                     amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
                     challenge_id, solution_nonce, idempotency_key,
                     client_signature_base58, server_sig, created_at
                FROM inserted`,
-            [transferId, TREASURY_PUBKEY, recipient, claimAmount.toString(), memo, createdAt],
+            [DEFAULT_ASSET_ID, transferId, TREASURY_PUBKEY, recipient, claimAmount.toString(), memo, createdAt],
           );
           const event = inserted.rows[0]!;
           await mirrorLedgerEventHot(c, event);
@@ -326,9 +329,9 @@ export async function faucetRoutes(app: FastifyInstance) {
           // (pubkey, claimed_at DESC) and (ip, claimed_at DESC) so this
           // insert is the only persistent state we need for cooldowns.
           await c.query(
-            `INSERT INTO faucet_claims(id, pubkey, ip, amount_base_units, transfer_event_id, claimed_at)
-                  VALUES($1, $2, $3, $4, $5, $6)`,
-            [claimId, recipient, ip, claimAmount.toString(), transferId, createdAt],
+            `INSERT INTO faucet_claims(asset_id, id, pubkey, ip, amount_base_units, transfer_event_id, claimed_at)
+                  VALUES($1::uuid, $2, $3, $4, $5, $6, $7)`,
+            [DEFAULT_ASSET_ID, claimId, recipient, ip, claimAmount.toString(), transferId, createdAt],
           );
 
           return {

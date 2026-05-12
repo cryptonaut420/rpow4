@@ -1,10 +1,11 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { ActivityResponse } from '@rpow/shared';
+import { resolveAsset } from '../assets.js';
 
 interface ActivityRow {
   id: string | null;
-  type: 'mint' | 'send' | 'receive';
+  type: 'mint' | 'send' | 'receive' | 'burn' | 'genesis';
   event_seq: string;
   amount: string;
   fee_base_units: string;
@@ -20,14 +21,18 @@ const QuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   // Optional event-type filter. Applied at the database level so pages
   // stay full and pagination cursors stay correct when filtering. Omitting
-  // the param (or 'all') returns every event.
-  type: z.enum(['mint', 'send', 'receive', 'all']).optional().default('all'),
+  // the param (or 'all') returns every event. 'burn' surfaces burns
+  // (e.g. RPOW4 launch fees); 'genesis' surfaces founder allocations on
+  // newly-launched assets.
+  type: z.enum(['mint', 'send', 'receive', 'burn', 'genesis', 'all']).optional().default('all'),
 });
 
 export async function activityRoutes(app: FastifyInstance) {
-  app.get('/activity', async (req, reply) => {
+  const handler = async (req: FastifyRequest<{ Querystring: z.infer<typeof QuerySchema> }>, reply: FastifyReply) => {
     const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
 
     const qp = QuerySchema.safeParse(req.query);
     if (!qp.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
@@ -37,7 +42,7 @@ export async function activityRoutes(app: FastifyInstance) {
     // Subsequent pages are not cached — once an event_seq is in the past it
     // won't change. The `type` filter is part of the key so toggling filter
     // tabs on the UI doesn't return stale cross-filter data.
-    const cacheKey = cursor ? null : `${s.pubkey}|${type}`;
+    const cacheKey = cursor ? null : `${asset.id}|${s.pubkey}|${type}`;
     const needsCache = cacheKey !== null;
 
     const buildPage = async (): Promise<ActivityResponse> => {
@@ -46,8 +51,8 @@ export async function activityRoutes(app: FastifyInstance) {
         `SELECT spendable_base_units::text AS balance,
                 events_count::text AS total_count
          FROM account_balances
-         WHERE pubkey=$1`,
-        [s.pubkey],
+         WHERE asset_id=$1::uuid AND pubkey=$2`,
+        [asset.id, s.pubkey],
       );
       const balanceBaseUnits = balanceRow.rows[0]?.balance ?? '0';
       const totalCount = parseInt(balanceRow.rows[0]?.total_count ?? '0', 10);
@@ -56,7 +61,7 @@ export async function activityRoutes(app: FastifyInstance) {
       // previous page. We fetch events with event_seq strictly less than
       // the cursor so pages don't overlap.
       const cursorBigInt: bigint | null = cursor ? BigInt(cursor) : null;
-      const params: unknown[] = [s.pubkey];
+      const params: unknown[] = [asset.id, s.pubkey];
       const filters: string[] = [];
       if (cursorBigInt !== null) {
         params.push(cursorBigInt.toString());
@@ -83,7 +88,7 @@ export async function activityRoutes(app: FastifyInstance) {
                 a.display_name AS counterparty_display_name
          FROM account_recent_events e
          LEFT JOIN accounts a ON a.pubkey = e.counterparty_pubkey
-         WHERE e.pubkey=$1 ${filterSqlHot}
+         WHERE e.asset_id=$1::uuid AND e.pubkey=$2 ${filterSqlHot}
          ORDER BY e.event_seq DESC
          LIMIT ${limitParam}`,
         params,
@@ -95,7 +100,7 @@ export async function activityRoutes(app: FastifyInstance) {
       // accounts or near the cursor boundary), fall back to partitioned history.
       if (rows.length < limit + 1) {
         const oldestHot = rows[rows.length - 1]?.event_seq ?? null;
-        const histParams: unknown[] = [s.pubkey];
+        const histParams: unknown[] = [asset.id, s.pubkey];
         const filters: string[] = [];
 
         if (cursorBigInt !== null) {
@@ -123,7 +128,39 @@ export async function activityRoutes(app: FastifyInstance) {
                   created_at AS at,
                   event_seq AS event_seq_sort
            FROM ledger_events
-           WHERE event_type='MINT' AND actor_pubkey=$1 ${filterSql}
+           WHERE asset_id=$1::uuid AND event_type IN ('MINT','GENESIS_ALLOCATION') AND actor_pubkey=$2 ${filterSql}
+           ORDER BY event_seq DESC
+           LIMIT ${histLimitParam})`);
+        }
+        if (type === 'genesis') {
+          branches.push(`(SELECT id,
+                  'genesis' AS type,
+                  event_seq::text AS event_seq,
+                  amount::text AS amount,
+                  '0'::text AS fee_base_units,
+                  memo,
+                  NULL::text AS counterparty_pubkey,
+                  client_signature_base58,
+                  created_at AS at,
+                  event_seq AS event_seq_sort
+           FROM ledger_events
+           WHERE asset_id=$1::uuid AND event_type='GENESIS_ALLOCATION' AND actor_pubkey=$2 ${filterSql}
+           ORDER BY event_seq DESC
+           LIMIT ${histLimitParam})`);
+        }
+        if (type === 'all' || type === 'burn') {
+          branches.push(`(SELECT id,
+                  'burn' AS type,
+                  event_seq::text AS event_seq,
+                  amount::text AS amount,
+                  '0'::text AS fee_base_units,
+                  memo,
+                  NULL::text AS counterparty_pubkey,
+                  client_signature_base58,
+                  created_at AS at,
+                  event_seq AS event_seq_sort
+           FROM ledger_events
+           WHERE asset_id=$1::uuid AND event_type='BURN' AND actor_pubkey=$2 ${filterSql}
            ORDER BY event_seq DESC
            LIMIT ${histLimitParam})`);
         }
@@ -139,7 +176,7 @@ export async function activityRoutes(app: FastifyInstance) {
                   created_at AS at,
                   event_seq AS event_seq_sort
            FROM ledger_events
-           WHERE event_type='TRANSFER' AND actor_pubkey=$1 ${filterSql}
+           WHERE asset_id=$1::uuid AND event_type='TRANSFER' AND actor_pubkey=$2 ${filterSql}
            ORDER BY event_seq DESC
            LIMIT ${histLimitParam})`);
         }
@@ -155,7 +192,7 @@ export async function activityRoutes(app: FastifyInstance) {
                   created_at AS at,
                   event_seq AS event_seq_sort
            FROM ledger_events
-           WHERE event_type='TRANSFER' AND counterparty_pubkey=$1 ${filterSql}
+           WHERE asset_id=$1::uuid AND event_type='TRANSFER' AND counterparty_pubkey=$2 ${filterSql}
            ORDER BY event_seq DESC
            LIMIT ${histLimitParam})`);
         }
@@ -212,5 +249,8 @@ export async function activityRoutes(app: FastifyInstance) {
 
     reply.header('cache-control', 'private, max-age=0');
     return body;
-  });
+  };
+
+  app.get('/activity', handler);
+  app.get('/assets/:asset_slug/activity', handler);
 }

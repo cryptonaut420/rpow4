@@ -1,6 +1,7 @@
 import { useEffect, useReducer, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useMining } from '../mining/MiningProvider.js';
+import { useAsset } from '../assets/AssetProvider.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { MiningVisualizer } from './MiningVisualizer.js';
 import { Panel } from './Panel.js';
@@ -40,6 +41,8 @@ function formatHashrateCompact(hps: number): string {
 export function MiningBar() {
   const wallet = useWallet();
   const mining = useMining();
+  const { selectedAsset } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
   const location = useLocation();
   const [expanded, setExpanded] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
@@ -124,7 +127,7 @@ export function MiningBar() {
 
   const sessionRewardLabel =
     mining.ledger && sessionMinted > 0
-      ? ` (+${formatRpow(BigInt(mining.ledger.current_reward_base_units) * BigInt(sessionMinted))} RPOW)`
+      ? ` (+${formatRpow(BigInt(mining.ledger.current_reward_base_units) * BigInt(sessionMinted))} ${assetCode})`
       : '';
 
   return (
@@ -154,6 +157,7 @@ export function MiningBar() {
               lastTokenId={lastTokenId}
               mode={mining.mode}
               poolStats={mining.poolStats}
+              assetCode={assetCode}
             />
           </div>
         )}
@@ -182,7 +186,7 @@ export function MiningBar() {
 
           <span className="mining-bar-balance" title="your spendable balance">
             <span className="mining-bar-label-text">BALANCE</span>{' '}
-            <strong>{formatRpow(me.balance_base_units)}</strong> RPOW
+            <strong>{formatRpow(me.balance_base_units)}</strong> {assetCode}
           </span>
 
           {running && mining.mode === 'solo' && (
@@ -200,7 +204,7 @@ export function MiningBar() {
               <span className="mining-bar-label-text">RUN</span>{' '}
               {fmtElapsed()} · {sessionShares} share{sessionShares === 1 ? '' : 's'}
               {sessionPoolPayout > 0n
-                ? ` · +${formatRpow(sessionPoolPayout)} RPOW`
+                ? ` · +${formatRpow(sessionPoolPayout)} ${assetCode}`
                 : ''}
             </span>
           )}
@@ -296,9 +300,12 @@ interface ExpandedDetailsProps {
   lastTokenId: string;
   mode: ReturnType<typeof useMining>['mode'];
   poolStats: ReturnType<typeof useMining>['poolStats'];
+  assetCode: string;
 }
 
 function ExpandedDetails(props: ExpandedDetailsProps) {
+  const { assetPath } = useAsset();
+  const { assetCode } = props;
   let rewardBlock = '';
   if (props.ledger) {
     const currentReward = formatRpow(props.ledger.current_reward_base_units);
@@ -308,11 +315,11 @@ function ExpandedDetails(props: ExpandedDetailsProps) {
       ? formatDuration(expectedSecondsAt(props.ledger.current_difficulty_bits, props.bench.hps))
       : '—';
     rewardBlock = `  BLOCK HEIGHT      : ${formatCount(props.ledger.block_height)}
-  CURRENT REWARD    : ${currentReward} RPOW per solution  (halving #${props.ledger.halving_index})
+  CURRENT REWARD    : ${currentReward} ${assetCode} per solution  (halving #${props.ledger.halving_index})
   CURRENT DIFFICULTY: ${props.ledger.current_difficulty_bits} trailing zero bits
   YOUR HASHRATE     : ${yourRate}  (~${eta} per solution on this CPU)
   NEXT HALVING AT   : block ${formatCount(props.ledger.next_halving_at_block)}  (${formatCount(props.ledger.blocks_to_next_halving)} to go)
-  NEXT REWARD       : ${props.ledger.is_capped ? 'CAPPED' : `${nextReward} RPOW`}
+  NEXT REWARD       : ${props.ledger.is_capped ? 'CAPPED' : `${nextReward} ${assetCode}`}
   NEXT DIFFICULTY   : +1 bit at block ${formatCount(props.ledger.next_difficulty_at_block)}  (${formatCount(props.ledger.blocks_to_next_difficulty_step)} to go)
 
 `;
@@ -332,8 +339,8 @@ function ExpandedDetails(props: ExpandedDetailsProps) {
   FINDER BONUS      : ${(ps.finder_bps / 100).toFixed(2)}% of net to the lucky miner
   CURRENT ROUND     : #${cur?.id ?? '—'}  ${formatCount(totalShares)} share${totalShares === '1' ? '' : 's'} total
   YOUR SHARES       : ${formatCount(youShares)}
-  EST. IF YOU FIND  : +${ifFinder} RPOW
-  EST. POOL PAYOUT  : +${ifPro} RPOW
+  EST. IF YOU FIND  : +${ifFinder} ${assetCode}
+  EST. POOL PAYOUT  : +${ifPro} ${assetCode}
 
 `;
   }
@@ -380,17 +387,17 @@ function ExpandedDetails(props: ExpandedDetailsProps) {
         </Panel>
       )}
 
-      <Panel title={props.mode === 'pool' ? 'MINE · POOL' : 'MINE · SOLO'}>
+      <Panel title={`${assetCode} ${props.mode === 'pool' ? 'MINE · POOL' : 'MINE · SOLO'}`}>
         <pre style={{ margin: 0 }}>
-{`  BALANCE           : ${formatRpow(props.meBalance)} RPOW
-  TOTAL MINTED      : ${formatRpow(props.meMinted)} RPOW
+{`  BALANCE           : ${formatRpow(props.meBalance)} ${assetCode}
+  TOTAL MINTED      : ${formatRpow(props.meMinted)} ${assetCode}
 
 ${rewardBlock}${poolBlock}  TARGET            : ${props.target || '--'} trailing zero bits
   HASHES (session)  : ${formatCount(props.totalHashes)}
   RATE              : ${props.fmtRate}
   ELAPSED           : ${props.fmtElapsed}
   STATUS            : ${props.status.toUpperCase()}
-  ${props.mode === 'pool' ? 'BLOCKS THIS RUN ' : 'MINED THIS RUN  '}  : ${formatCount(props.sessionMinted)}${props.sessionRewardLabel}${props.mode === 'pool' ? `\n  SHARES THIS RUN   : ${formatCount(props.sessionShares)}\n  POOL EARNED       : +${formatRpow(props.sessionPoolPayout)} RPOW` : ''}${props.error ? `\n  ERROR             : ${props.error}` : ''}
+  ${props.mode === 'pool' ? 'BLOCKS THIS RUN ' : 'MINED THIS RUN  '}  : ${formatCount(props.sessionMinted)}${props.sessionRewardLabel}${props.mode === 'pool' ? `\n  SHARES THIS RUN   : ${formatCount(props.sessionShares)}\n  POOL EARNED       : +${formatRpow(props.sessionPoolPayout)} ${assetCode}` : ''}${props.error ? `\n  ERROR             : ${props.error}` : ''}
 `}
         </pre>
         {props.lastTokenId && (
@@ -412,7 +419,7 @@ ${rewardBlock}${poolBlock}  TARGET            : ${props.target || '--'} trailing
                 <div key={p.round_id} className="pool-rounds-row">
                   <span className="pool-rounds-time">{at}</span>
                   <span className="pool-rounds-id">#{p.round_id}</span>
-                  <span className="pool-rounds-reward">{formatRpow(p.reward_base_units)} RPOW</span>
+                  <span className="pool-rounds-reward">{formatRpow(p.reward_base_units)} {assetCode}</span>
                   <span className="pool-rounds-meta">
                     {p.participant_count} miner{p.participant_count === 1 ? '' : 's'} · won by{' '}
                     <Link
@@ -423,7 +430,7 @@ ${rewardBlock}${poolBlock}  TARGET            : ${props.target || '--'} trailing
                       <code>{finder}</code>
                     </Link>
                     {p.your_payout_base_units
-                      ? ` · you +${formatRpow(p.your_payout_base_units)} RPOW`
+                      ? ` · you +${formatRpow(p.your_payout_base_units)} ${assetCode}`
                       : ''}
                   </span>
                 </div>
@@ -431,7 +438,7 @@ ${rewardBlock}${poolBlock}  TARGET            : ${props.target || '--'} trailing
             })}
           </div>
           <div style={{ marginTop: 8, fontSize: 12 }}>
-            <Link to="/pool/history">[ view all pool rounds ]</Link>
+            <Link to={assetPath('/pool/history')}>[ view all pool rounds ]</Link>
           </div>
         </Panel>
       )}

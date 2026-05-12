@@ -12,6 +12,7 @@ import { withTxRetry } from '../db.js';
 import { feeAtHalving } from '../schedule.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
 import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
+import { DEFAULT_ASSET_ID } from '../assets.js';
 
 const MAX_TROLLBOX_LIMIT = 100;
 const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
@@ -57,8 +58,8 @@ async function selectMessageByIdem(
             m.created_at
        FROM trollbox_messages m
        LEFT JOIN accounts a ON a.pubkey = m.author_pubkey
-      WHERE m.author_pubkey = $1 AND m.idempotency_key = $2`,
-    [author, idem],
+      WHERE m.asset_id=$1::uuid AND m.author_pubkey = $2 AND m.idempotency_key = $3`,
+    [DEFAULT_ASSET_ID, author, idem],
   );
   return r.rows[0] ?? null;
 }
@@ -111,11 +112,11 @@ export async function trollboxRoutes(app: FastifyInstance) {
     const cacheKey = `${cursor ?? ''}|${limit}`;
 
     const cached = await app.caches.trollboxFeed.get(cacheKey, async () => {
-      const params: unknown[] = [];
+      const params: unknown[] = [DEFAULT_ASSET_ID];
       let cursorFilter = '';
       if (cursor) {
         params.push(cursor);
-        cursorFilter = `WHERE m.seq < $${params.length}::bigint`;
+        cursorFilter = `AND m.seq < $${params.length}::bigint`;
       }
       params.push(limit + 1);
       const limitParam = `$${params.length}`;
@@ -131,6 +132,7 @@ export async function trollboxRoutes(app: FastifyInstance) {
                 m.created_at
            FROM trollbox_messages m
            LEFT JOIN accounts a ON a.pubkey = m.author_pubkey
+           WHERE m.asset_id=$1::uuid
            ${cursorFilter}
            ORDER BY m.seq DESC
            LIMIT ${limitParam}`,
@@ -143,8 +145,9 @@ export async function trollboxRoutes(app: FastifyInstance) {
       // right one bit per halving, capped at 0.
       const metaRow = await app.pool.query<{ trollbox_count: string; block_height: string }>(
         `SELECT
-           COALESCE((SELECT value FROM app_counters WHERE name='trollbox_message_count'), 0)::text AS trollbox_count,
-           COALESCE((SELECT value FROM app_counters WHERE name='block_height'), 0)::text AS block_height`,
+           COALESCE((SELECT value FROM app_counters WHERE asset_id=$1::uuid AND name='trollbox_message_count'), 0)::text AS trollbox_count,
+           COALESCE((SELECT value FROM app_counters WHERE asset_id=$1::uuid AND name='block_height'), 0)::text AS block_height`,
+        [DEFAULT_ASSET_ID],
       );
       const totalCount = metaRow.rows[0]?.trollbox_count ?? '0';
       const blockHeight = BigInt(metaRow.rows[0]?.block_height ?? '0');
@@ -245,7 +248,8 @@ export async function trollboxRoutes(app: FastifyInstance) {
           // user-paid network cost. block_height only moves up, so a
           // slightly stale read is always lenient (never overcharges).
           const heightRow = await c.query<{ value: string }>(
-            `SELECT value::text FROM app_counters WHERE name='block_height'`,
+            `SELECT value::text FROM app_counters WHERE asset_id=$1::uuid AND name='block_height'`,
+            [DEFAULT_ASSET_ID],
           );
           const blockHeight = BigInt(heightRow.rows[0]?.value ?? '0');
           const halvingIndex = Number(blockHeight / BigInt(app.config.halvingIntervalBlocks));
@@ -290,8 +294,8 @@ export async function trollboxRoutes(app: FastifyInstance) {
                       sent_base_units = sent_base_units + $2::bigint,
                       events_count = events_count + 1,
                       updated_at = now()
-                WHERE pubkey=$1 AND spendable_base_units >= $2::bigint`,
-              [author, fee.toString()],
+                WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+              [DEFAULT_ASSET_ID, author, fee.toString()],
             );
             if (debit.rowCount === 0) {
               return {
@@ -307,25 +311,25 @@ export async function trollboxRoutes(app: FastifyInstance) {
               `UPDATE account_balances
                   SET events_count = events_count + 1,
                       updated_at = now()
-                WHERE pubkey=$1`,
-              [author],
+                WHERE asset_id=$1::uuid AND pubkey=$2`,
+              [DEFAULT_ASSET_ID, author],
             );
           }
 
           // Credit treasury. No events_count bump — treasury has no feed.
           if (fee > 0n) {
             await c.query(
-              `INSERT INTO account_balances(pubkey, spendable_base_units, updated_at)
-                    VALUES($1, $2, now())
-                ON CONFLICT (pubkey) DO UPDATE SET
+              `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, updated_at)
+                    VALUES($1::uuid, $2, $3, now())
+                ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                   spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
                   updated_at = now()`,
-              [TREASURY_PUBKEY, fee.toString()],
+              [DEFAULT_ASSET_ID, TREASURY_PUBKEY, fee.toString()],
             );
           }
 
           const transferId = randomUUID();
-          await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [transferId]);
+          await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [transferId, DEFAULT_ASSET_ID]);
 
           const createdAt = new Date();
           const memo = 'trollbox post';
@@ -336,11 +340,11 @@ export async function trollboxRoutes(app: FastifyInstance) {
           const inserted = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
-                 id, event_type, actor_pubkey, counterparty_pubkey, amount,
+                 asset_id, id, event_type, actor_pubkey, counterparty_pubkey, amount,
                  fee_base_units, memo, idempotency_key, client_signature_base58, created_at
                )
-               VALUES($1,'TRANSFER',$2,$3,$4,0,$5,NULL,$6,$7)
-               RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+               VALUES($1::uuid,$2,'TRANSFER',$3,$4,$5,0,$6,NULL,$7,$8)
+               RETURNING asset_id::text, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                          amount, fee_base_units, memo,
                          challenge_id, solution_nonce, idempotency_key,
                          client_signature_base58, server_sig, created_at
@@ -353,22 +357,23 @@ export async function trollboxRoutes(app: FastifyInstance) {
              ),
              upd_transfer_count AS (
                UPDATE app_counters SET value = value + 1
-                WHERE name='transfer_count'
+                WHERE asset_id=$1::uuid AND name='transfer_count'
              ),
              upd_fees AS (
-               UPDATE app_counters SET value = value + $4::bigint
-                WHERE name='total_fees_collected' AND $4::bigint > 0
+               UPDATE app_counters SET value = value + $5::bigint
+                WHERE asset_id=$1::uuid AND name='total_fees_collected' AND $5::bigint > 0
              ),
              upd_trollbox_count AS (
                UPDATE app_counters SET value = value + 1
-                WHERE name='trollbox_message_count'
+                WHERE asset_id=$1::uuid AND name='trollbox_message_count'
              )
-             SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+             SELECT asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                     amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
                     challenge_id, solution_nonce, idempotency_key,
                     client_signature_base58, server_sig, created_at
                FROM inserted`,
             [
+              DEFAULT_ASSET_ID,
               transferId,
               author,
               TREASURY_PUBKEY,
@@ -388,8 +393,9 @@ export async function trollboxRoutes(app: FastifyInstance) {
               `UPDATE ledger_stat_shards
                   SET value = value + $1::bigint, updated_at = now()
                 WHERE name='total_transferred'
+                  AND asset_id=$3::uuid
                   AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
-              [fee.toString(), transferId],
+              [fee.toString(), transferId, DEFAULT_ASSET_ID],
             );
           }
 
@@ -398,11 +404,12 @@ export async function trollboxRoutes(app: FastifyInstance) {
           // ledger event behind. The whole tx rolls back together.
           const messageInsert = await c.query(
             `INSERT INTO trollbox_messages(
-               author_pubkey, body, fee_base_units, fee_event_id,
+               asset_id, author_pubkey, body, fee_base_units, fee_event_id,
                idempotency_key, client_signature_base58, created_at
              )
-             VALUES($1,$2,$3,$4,$5,$6,$7)`,
+             VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8)`,
             [
+              DEFAULT_ASSET_ID,
               author,
               body,
               fee.toString(),

@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
 import type {
@@ -6,23 +6,44 @@ import type {
   ExplorerTxResponse,
   ExplorerAccountResponse,
 } from '@rpow/shared';
+import { resolveAsset } from '../assets.js';
 
 const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Map the database's uppercase event_type onto the wire-format type used
+ * by the explorer feed / tx detail. The wire types intentionally stay
+ * narrow ('mint' | 'transfer' | 'burn' | 'genesis_allocation') so the UI
+ * can branch on a single string.
+ */
+function wireTypeFromEvent(eventType: string): 'mint' | 'transfer' | 'burn' | 'genesis_allocation' {
+  switch (eventType) {
+    case 'MINT': return 'mint';
+    case 'BURN': return 'burn';
+    case 'GENESIS_ALLOCATION': return 'genesis_allocation';
+    default: return 'transfer';
+  }
+}
+
 const FeedQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
-  /** Omit or `all` — show both. `mint` / `transfer` restrict the feed. */
-  type: z.enum(['all', 'mint', 'transfer']).optional().default('all'),
+  /**
+   * Omit or `all` — show every type. `mint` / `transfer` / `burn` /
+   * `genesis_allocation` restrict the feed. `genesis_allocation` is
+   * mostly relevant for newly-launched assets that seeded a founder
+   * allocation; `burn` is the launch fee for the default RPOW4.0 asset.
+   */
+  type: z.enum(['all', 'mint', 'transfer', 'burn', 'genesis_allocation']).optional().default('all'),
 });
 
 const AccountQuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   /** Omit or `all` — show everything. Otherwise restricts the items list. */
-  type: z.enum(['all', 'mint', 'send', 'receive']).optional().default('all'),
+  type: z.enum(['all', 'mint', 'send', 'receive', 'burn', 'genesis']).optional().default('all'),
 });
 
 function sendCachedJson(
@@ -44,24 +65,30 @@ export async function explorerRoutes(app: FastifyInstance) {
   // ---- GET /explorer/feed ---------------------------------------------------
   // Public paginated network event feed with display names.
   // Cached per cursor+limit key; cleared on new events via invalidateLedger().
-  app.get('/explorer/feed', async (req, reply) => {
+  const feedHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
     const qp = FeedQuerySchema.safeParse(req.query);
     if (!qp.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
     }
     const { cursor, limit, type: feedType } = qp.data;
-    const cacheKey = `${cursor ?? ''}|${limit}|${feedType}`;
+    const cacheKey = `${asset.id}|${cursor ?? ''}|${limit}|${feedType}`;
     const ifNoneMatch = (req.headers as Record<string, string | undefined>)['if-none-match'];
 
     const cached = await app.caches.explorerFeed.get(cacheKey, async () => {
-      const cursorFilter = cursor ? `AND e.event_seq < $1::bigint` : '';
+      const cursorFilter = cursor ? `AND e.event_seq < $2::bigint` : '';
       const typeClause =
         feedType === 'mint'
           ? `AND e.event_type = 'MINT'`
           : feedType === 'transfer'
             ? `AND e.event_type = 'TRANSFER'`
-            : '';
-      const params: unknown[] = [];
+            : feedType === 'burn'
+              ? `AND e.event_type = 'BURN'`
+              : feedType === 'genesis_allocation'
+                ? `AND e.event_type = 'GENESIS_ALLOCATION'`
+                : '';
+      const params: unknown[] = [asset.id];
       if (cursor) params.push(cursor);
       params.push(limit + 1);
       const limitParam = `$${params.length}`;
@@ -93,7 +120,7 @@ export async function explorerRoutes(app: FastifyInstance) {
          FROM ledger_recent_events e
          LEFT JOIN accounts a1 ON a1.pubkey = e.actor_pubkey
          LEFT JOIN accounts a2 ON a2.pubkey = e.counterparty_pubkey
-         WHERE true
+         WHERE e.asset_id = $1::uuid
          ${cursorFilter}
          ${typeClause}
          ORDER BY e.event_seq DESC
@@ -109,7 +136,7 @@ export async function explorerRoutes(app: FastifyInstance) {
         events: pageRows.map((r) => ({
           event_seq: r.event_seq,
           id: r.id,
-          type: r.event_type === 'MINT' ? 'mint' : 'transfer',
+          type: wireTypeFromEvent(r.event_type),
           actor_pubkey: r.actor_pubkey,
           ...(r.actor_display_name ? { actor_display_name: r.actor_display_name } : {}),
           ...(r.counterparty_pubkey ? { counterparty_pubkey: r.counterparty_pubkey } : {}),
@@ -126,12 +153,16 @@ export async function explorerRoutes(app: FastifyInstance) {
     });
 
     return sendCachedJson(reply, cached, ifNoneMatch, 'public, max-age=3, stale-while-revalidate=15');
-  });
+  };
+  app.get('/explorer/feed', feedHandler);
+  app.get('/assets/:asset_slug/explorer/feed', feedHandler);
 
   // ---- GET /explorer/tx/:id -------------------------------------------------
   // Public immutable transaction detail by UUID.
   // Long TTL cache — txs are immutable once confirmed.
-  app.get('/explorer/tx/:id', async (req, reply) => {
+  const txHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
     const { id } = req.params as { id: string };
     if (!UUID_PATTERN.test(id)) {
       return reply.code(404).send({ error: 'BAD_REQUEST', message: 'invalid transaction id format' });
@@ -139,7 +170,7 @@ export async function explorerRoutes(app: FastifyInstance) {
 
     const ifNoneMatch = (req.headers as Record<string, string | undefined>)['if-none-match'];
 
-    const cached = await app.caches.explorerTx.get(id, async () => {
+    const cached = await app.caches.explorerTx.get(`${asset.id}|${id}`, async () => {
       // ledger_event_ids maps UUID → event_seq for O(1) lookup, then
       // the JOIN to ledger_events uses the partition key (event_seq) directly.
       const result = await app.pool.query<{
@@ -174,8 +205,8 @@ export async function explorerRoutes(app: FastifyInstance) {
          JOIN ledger_events e ON e.event_seq = i.event_seq
          LEFT JOIN accounts a1 ON a1.pubkey = e.actor_pubkey
          LEFT JOIN accounts a2 ON a2.pubkey = e.counterparty_pubkey
-         WHERE i.id = $1::uuid`,
-        [id],
+         WHERE i.id = $1::uuid AND i.asset_id=$2::uuid`,
+        [id, asset.id],
       );
 
       if (result.rows.length === 0) return null;
@@ -184,7 +215,7 @@ export async function explorerRoutes(app: FastifyInstance) {
       const body: ExplorerTxResponse = {
         event_seq: r.event_seq,
         id: r.id,
-        type: r.event_type === 'MINT' ? 'mint' : 'transfer',
+        type: wireTypeFromEvent(r.event_type),
         actor_pubkey: r.actor_pubkey,
         ...(r.actor_display_name ? { actor_display_name: r.actor_display_name } : {}),
         ...(r.counterparty_pubkey ? { counterparty_pubkey: r.counterparty_pubkey } : {}),
@@ -205,12 +236,16 @@ export async function explorerRoutes(app: FastifyInstance) {
     }
 
     return sendCachedJson(reply, cached, ifNoneMatch, 'public, max-age=3600, immutable');
-  });
+  };
+  app.get('/explorer/tx/:id', txHandler);
+  app.get('/assets/:asset_slug/explorer/tx/:id', txHandler);
 
   // ---- GET /explorer/account/:pubkey ----------------------------------------
   // Public account view: summary stats + paginated event history.
   // First-page responses cached per pubkey; cleared on balance changes.
-  app.get('/explorer/account/:pubkey', async (req, reply) => {
+  const accountHandler = async (req: FastifyRequest, reply: FastifyReply) => {
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
     const { pubkey } = req.params as { pubkey: string };
 
     const qp = AccountQuerySchema.safeParse(req.query);
@@ -221,7 +256,7 @@ export async function explorerRoutes(app: FastifyInstance) {
 
     // Each filter variant has a distinct shape, so include it in the
     // first-page cache key. Cursor pages skip the cache as before.
-    const cacheKey = cursor ? null : `${pubkey}|${itemType}`;
+    const cacheKey = cursor ? null : `${asset.id}|${pubkey}|${itemType}`;
 
     const buildPage = async (): Promise<ExplorerAccountResponse | null> => {
       const acctResult = await app.pool.query<{
@@ -242,15 +277,15 @@ export async function explorerRoutes(app: FastifyInstance) {
                 ab.events_count::text
          FROM account_balances ab
          LEFT JOIN accounts ac ON ac.pubkey = ab.pubkey
-         WHERE ab.pubkey = $1`,
-        [pubkey],
+         WHERE ab.asset_id = $1::uuid AND ab.pubkey = $2`,
+        [asset.id, pubkey],
       );
 
       if (acctResult.rows.length === 0) return null;
       const acct = acctResult.rows[0]!;
 
       const cursorBigInt: bigint | null = cursor ? BigInt(cursor) : null;
-      const params: unknown[] = [pubkey];
+      const params: unknown[] = [asset.id, pubkey];
       const filters: string[] = [];
       if (cursorBigInt !== null) {
         params.push(cursorBigInt.toString());
@@ -266,7 +301,7 @@ export async function explorerRoutes(app: FastifyInstance) {
 
       const recent = await app.pool.query<{
         id: string | null;
-        type: 'mint' | 'send' | 'receive';
+        type: 'mint' | 'send' | 'receive' | 'burn' | 'genesis';
         event_seq: string;
         amount: string;
         fee_base_units: string;
@@ -286,7 +321,7 @@ export async function explorerRoutes(app: FastifyInstance) {
                 e.created_at AS at
          FROM account_recent_events e
          LEFT JOIN accounts a ON a.pubkey = e.counterparty_pubkey
-         WHERE e.pubkey = $1 ${filterSqlHot}
+         WHERE e.asset_id = $1::uuid AND e.pubkey = $2 ${filterSqlHot}
          ORDER BY e.event_seq DESC
          LIMIT ${limitParam}`,
         params,
@@ -297,7 +332,7 @@ export async function explorerRoutes(app: FastifyInstance) {
       // Fall back to partitioned history if hot table doesn't fill the page.
       if (rows.length < limit + 1) {
         const oldestHot = rows[rows.length - 1]?.event_seq ?? null;
-        const histParams: unknown[] = [pubkey];
+        const histParams: unknown[] = [asset.id, pubkey];
         const histFilters: string[] = [];
 
         if (cursorBigInt !== null) {
@@ -315,9 +350,15 @@ export async function explorerRoutes(app: FastifyInstance) {
         // Only include the union branches the requested filter cares
         // about. The query is cheaper (fewer index probes) AND keeps the
         // post-union LIMIT from being dominated by irrelevant branches.
+        // Note: 'mint' lumps in GENESIS_ALLOCATION rows so the
+        // newly-launched-asset founder bonus surfaces under the same
+        // "mints" filter the UI already exposes; choosing 'genesis'
+        // narrows to just those founder rows.
         const wantMint = itemType === 'all' || itemType === 'mint';
         const wantSend = itemType === 'all' || itemType === 'send';
         const wantReceive = itemType === 'all' || itemType === 'receive';
+        const wantBurn = itemType === 'all' || itemType === 'burn';
+        const wantGenesis = itemType === 'genesis';
         const branches: string[] = [];
         if (wantMint) {
           branches.push(`(SELECT NULL::uuid AS id,
@@ -329,7 +370,33 @@ export async function explorerRoutes(app: FastifyInstance) {
                     NULL::text AS counterparty_pubkey,
                     created_at
              FROM ledger_events
-             WHERE event_type='MINT' AND actor_pubkey=$1 ${filterSql}
+             WHERE asset_id=$1::uuid AND event_type IN ('MINT','GENESIS_ALLOCATION') AND actor_pubkey=$2 ${filterSql}
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
+        }
+        if (wantGenesis) {
+          branches.push(`(SELECT id,
+                    'genesis' AS type,
+                    event_seq,
+                    amount,
+                    0::bigint AS fee_base_units,
+                    memo,
+                    NULL::text AS counterparty_pubkey,
+                    created_at
+             FROM ledger_events
+             WHERE asset_id=$1::uuid AND event_type='GENESIS_ALLOCATION' AND actor_pubkey=$2 ${filterSql}
+             ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
+        }
+        if (wantBurn) {
+          branches.push(`(SELECT id,
+                    'burn' AS type,
+                    event_seq,
+                    amount,
+                    0::bigint AS fee_base_units,
+                    memo,
+                    NULL::text AS counterparty_pubkey,
+                    created_at
+             FROM ledger_events
+             WHERE asset_id=$1::uuid AND event_type='BURN' AND actor_pubkey=$2 ${filterSql}
              ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
         }
         if (wantSend) {
@@ -342,7 +409,7 @@ export async function explorerRoutes(app: FastifyInstance) {
                     counterparty_pubkey,
                     created_at
              FROM ledger_events
-             WHERE event_type='TRANSFER' AND actor_pubkey=$1 ${filterSql}
+             WHERE asset_id=$1::uuid AND event_type='TRANSFER' AND actor_pubkey=$2 ${filterSql}
              ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
         }
         if (wantReceive) {
@@ -355,14 +422,14 @@ export async function explorerRoutes(app: FastifyInstance) {
                     actor_pubkey AS counterparty_pubkey,
                     created_at
              FROM ledger_events
-             WHERE event_type='TRANSFER' AND counterparty_pubkey=$1 ${filterSql}
+             WHERE asset_id=$1::uuid AND event_type='TRANSFER' AND counterparty_pubkey=$2 ${filterSql}
              ORDER BY event_seq DESC LIMIT ${histLimitParam})`);
         }
 
         if (branches.length > 0) {
           const historical = await app.pool.query<{
             id: string | null;
-            type: 'mint' | 'send' | 'receive';
+            type: 'mint' | 'send' | 'receive' | 'burn' | 'genesis';
             event_seq: string;
             amount: string;
             fee_base_units: string;
@@ -435,5 +502,7 @@ export async function explorerRoutes(app: FastifyInstance) {
 
     reply.header('cache-control', 'public, max-age=3, stale-while-revalidate=15');
     return body;
-  });
+  };
+  app.get('/explorer/account/:pubkey', accountHandler);
+  app.get('/assets/:asset_slug/explorer/account/:pubkey', accountHandler);
 }

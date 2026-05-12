@@ -19,11 +19,14 @@ import { ClaimPage } from './pages/Claim.js';
 import { RedeemPage } from './pages/Redeem.js';
 import { EcosystemPage } from './pages/Ecosystem.js';
 import { PoolHistoryPage } from './pages/PoolHistory.js';
+import { LaunchRpowPage } from './pages/LaunchRpow.js';
 import { CopyButton } from './components/CopyButton.js';
+import { AssetBar } from './components/AssetBar.js';
 import { ScrollToTop } from './components/ScrollToTop.js';
 import { SupplyBar } from './components/SupplyBar.js';
 import { MiningBar } from './components/MiningBar.js';
 import { MiningProvider } from './mining/MiningProvider.js';
+import { AssetProvider, useAsset } from './assets/AssetProvider.js';
 import { shortPubkey } from '@rpow/shared';
 import { POSTHOG_ENABLED } from './analytics/posthogClient.js';
 import { PostHogPageViews } from './analytics/PostHogPageViews.js';
@@ -35,10 +38,22 @@ const HEADER = [
 ].join('\n');
 
 export default function App() {
+  return (
+    <HashRouter>
+      {POSTHOG_ENABLED ? <PostHogPageViews /> : null}
+      <AssetProvider>
+        <AppShell />
+      </AssetProvider>
+    </HashRouter>
+  );
+}
+
+function AppShell() {
   const [theme, setTheme] = useState<Theme>(loadTheme());
   useEffect(() => { applyTheme(theme); }, [theme]);
   const wallet = useWallet();
-  const { me } = useMe();
+  const { selectedAsset, selectedSlug, assetPath, isDefaultAsset } = useAsset();
+  const { me } = useMe(selectedSlug);
 
   async function logout() {
     try { await api.logout(); } catch { /* ignore */ }
@@ -49,28 +64,32 @@ export default function App() {
   const signedIn = wallet.status === 'unlocked' && !!me;
 
   return (
-    <HashRouter>
-      {POSTHOG_ENABLED ? <PostHogPageViews /> : null}
       <MiningProvider>
       <div className="app-shell">
         <header>
           <pre style={{ margin: 0 }}>{HEADER}</pre>
           <SupplyBar />
-          <div className="tagline">a modern tribute to a tribute to the original rpow by hal finney</div>
+          <div className="tagline">
+            {selectedAsset
+              ? `${selectedAsset.display_code} :: ${selectedAsset.nickname}`
+              : 'a modern tribute to a tribute to the original rpow by hal finney'}
+          </div>
+          <AssetBar />
           <nav className="primary-nav" aria-label="primary">
             <div className="nav-group">
               <span className="nav-group-label">wallet</span>
-              <NavLink to="/">[ home ]</NavLink>
-              <NavLink to="/send">[ send ]</NavLink>
-              <NavLink to="/claim">[ claim ]</NavLink>
-              <NavLink to="/activity">[ activity ]</NavLink>
+              <NavLink to={assetPath('/')}>[ home ]</NavLink>
+              <NavLink to={assetPath('/send')}>[ send ]</NavLink>
+              {/* Bearer claim tokens are an RPOW4.0-only feature for now. */}
+              {isDefaultAsset ? <NavLink to="/claim">[ claim ]</NavLink> : null}
+              <NavLink to={assetPath('/activity')}>[ activity ]</NavLink>
             </div>
             <div className="nav-group">
               <span className="nav-group-label">network</span>
-              <NavLink to="/stats">[ stats ]</NavLink>
-              <NavLink to="/explorer">[ explorer ]</NavLink>
-              <NavLink to="/faucet">[ faucet ]</NavLink>
-              <NavLink to="/trollbox">[ trollbox ]</NavLink>
+              <NavLink to={assetPath('/stats')}>[ stats ]</NavLink>
+              <NavLink to={assetPath('/explorer')}>[ explorer ]</NavLink>
+              {isDefaultAsset ? <NavLink to="/faucet">[ faucet ]</NavLink> : null}
+              {isDefaultAsset ? <NavLink to="/trollbox">[ trollbox ]</NavLink> : null}
             </div>
             <div className="nav-group">
               <span className="nav-group-label">info</span>
@@ -103,14 +122,25 @@ export default function App() {
         <main>
           <Routes>
             <Route path="/" element={<WalletPage />} />
+            <Route path="/r/:assetSlug" element={<WalletPage />} />
             <Route path="/login" element={<LoginPage />} />
+            <Route path="/r/:assetSlug/login" element={<LoginPage />} />
+            <Route path="/launch" element={<LaunchRpowPage />} />
+            <Route path="/r/:assetSlug/launch" element={<LaunchRpowPage />} />
             <Route path="/send" element={<SendPage />} />
+            <Route path="/r/:assetSlug/send" element={<SendPage />} />
             <Route path="/activity" element={<ActivityPage />} />
+            <Route path="/r/:assetSlug/activity" element={<ActivityPage />} />
             <Route path="/ledger" element={<LedgerPage />} />
+            <Route path="/r/:assetSlug/ledger" element={<LedgerPage />} />
             <Route path="/stats" element={<StatsPage />} />
+            <Route path="/r/:assetSlug/stats" element={<StatsPage />} />
             <Route path="/explorer" element={<ExplorerPage />} />
+            <Route path="/r/:assetSlug/explorer" element={<ExplorerPage />} />
             <Route path="/explorer/tx/:id" element={<ExplorerPage />} />
+            <Route path="/r/:assetSlug/explorer/tx/:id" element={<ExplorerPage />} />
             <Route path="/explorer/account/:pubkey" element={<ExplorerPage />} />
+            <Route path="/r/:assetSlug/explorer/account/:pubkey" element={<ExplorerPage />} />
             <Route path="/faucet" element={<FaucetPage />} />
             <Route path="/trollbox" element={<TrollboxPage />} />
             <Route path="/claim" element={<ClaimPage />} />
@@ -119,6 +149,7 @@ export default function App() {
             <Route path="/docs" element={<DocsPage />} />
             <Route path="/ecosystem" element={<EcosystemPage />} />
             <Route path="/pool/history" element={<PoolHistoryPage />} />
+            <Route path="/r/:assetSlug/pool/history" element={<PoolHistoryPage />} />
           </Routes>
         </main>
         <footer className="app-footer">
@@ -135,6 +166,5 @@ export default function App() {
       <MiningBar />
       <ScrollToTop />
       </MiningProvider>
-    </HashRouter>
   );
 }

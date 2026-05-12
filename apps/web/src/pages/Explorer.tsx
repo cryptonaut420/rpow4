@@ -13,6 +13,7 @@ import type {
   ExplorerAccountEvent,
 } from '@rpow/shared';
 import { formatRpow, formatCount } from '../lib/format.js';
+import { useAsset } from '../assets/AssetProvider.js';
 
 const PAGE_SIZE = 50;
 
@@ -45,6 +46,7 @@ function formatFullTs(iso: string): string {
 
 function SearchBar() {
   const navigate = useNavigate();
+  const { assetPath } = useAsset();
   const txMatch = useMatch('/explorer/tx/:id');
   const accountMatch = useMatch('/explorer/account/:pubkey');
   const [query, setQuery] = useState('');
@@ -67,12 +69,12 @@ function SearchBar() {
     setSearchError('');
 
     if (UUID_RE.test(q)) {
-      navigate(`/explorer/tx/${q}`);
+      navigate(assetPath(`/explorer/tx/${q}`));
       return;
     }
 
     if (PUBKEY_RE.test(q)) {
-      navigate(`/explorer/account/${q}`);
+      navigate(assetPath(`/explorer/account/${q}`));
       return;
     }
 
@@ -80,7 +82,7 @@ function SearchBar() {
     setSearching(true);
     try {
       const res = await api.lookup(q);
-      navigate(`/explorer/account/${res.pubkey}`);
+      navigate(assetPath(`/explorer/account/${res.pubkey}`));
     } catch (err: any) {
       const code = err?.error ?? '';
       if (code === 'NAME_NOT_FOUND') {
@@ -141,13 +143,18 @@ function ExplorerHistoryBlurb() {
   );
 }
 
-function parseFeedType(searchParams: URLSearchParams): 'all' | 'mint' | 'transfer' {
+type FeedType = 'all' | 'mint' | 'transfer' | 'burn' | 'genesis_allocation';
+
+function parseFeedType(searchParams: URLSearchParams): FeedType {
   const t = searchParams.get('type');
-  if (t === 'mint' || t === 'transfer') return t;
+  if (t === 'mint' || t === 'transfer' || t === 'burn' || t === 'genesis_allocation') return t;
   return 'all';
 }
 
 function FeedView() {
+  const { selectedSlug, selectedAsset, assetPath } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const feedType = parseFeedType(searchParams);
 
@@ -160,21 +167,21 @@ function FeedView() {
   const loadFirst = useCallback(() => {
     setLoading(true);
     setError('');
-    api.explorerFeed(undefined, PAGE_SIZE, feedType)
+    api.explorerFeed(undefined, PAGE_SIZE, feedType, selectedSlug)
       .then((r: ExplorerFeedResponse) => {
         setEvents(r.events);
         setNextCursor(r.next_cursor);
       })
       .catch((e: any) => setError(e?.message ?? 'failed to load feed'))
       .finally(() => setLoading(false));
-  }, [feedType]);
+  }, [feedType, selectedSlug]);
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
   const loadMore = () => {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
-    api.explorerFeed(nextCursor, PAGE_SIZE, feedType)
+    api.explorerFeed(nextCursor, PAGE_SIZE, feedType, selectedSlug)
       .then((r: ExplorerFeedResponse) => {
         setEvents((prev) => [...prev, ...r.events]);
         setNextCursor(r.next_cursor);
@@ -202,9 +209,11 @@ function FeedView() {
       </div>
       <div style={{ marginBottom: 12, fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: '6px 12px', alignItems: 'center' }}>
         <span style={{ color: 'var(--dim)' }}>show</span>
-        <Link to="/explorer" style={linkStyle(feedType === 'all')}>[ all ]</Link>
-        <Link to="/explorer?type=mint" style={linkStyle(feedType === 'mint')}>[ mints ]</Link>
-        <Link to="/explorer?type=transfer" style={linkStyle(feedType === 'transfer')}>[ transfers ]</Link>
+        <Link to={assetPath('/explorer')} style={linkStyle(feedType === 'all')}>[ all ]</Link>
+        <Link to={`${assetPath('/explorer')}?type=mint`} style={linkStyle(feedType === 'mint')}>[ mints ]</Link>
+        <Link to={`${assetPath('/explorer')}?type=transfer`} style={linkStyle(feedType === 'transfer')}>[ transfers ]</Link>
+        <Link to={`${assetPath('/explorer')}?type=burn`} style={linkStyle(feedType === 'burn')}>[ burns ]</Link>
+        <Link to={`${assetPath('/explorer')}?type=genesis_allocation`} style={linkStyle(feedType === 'genesis_allocation')}>[ genesis ]</Link>
       </div>
 
       {events.length === 0 ? (
@@ -212,7 +221,7 @@ function FeedView() {
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {events.map((ev) => <FeedRow key={ev.event_seq} event={ev} />)}
+            {events.map((ev) => <FeedRow key={ev.event_seq} event={ev} assetCode={assetCode} />)}
           </div>
           {nextCursor && (
             <div style={{ marginTop: 12 }}>
@@ -227,12 +236,24 @@ function FeedView() {
   );
 }
 
-function FeedRow({ event: ev }: { event: ExplorerEvent }) {
+function FeedRow({ event: ev, assetCode }: { event: ExplorerEvent; assetCode: string }) {
+  const { assetPath } = useAsset();
   const navigate = useNavigate();
-  const isMint = ev.type === 'mint';
-  const typeColor = isMint ? 'var(--fg)' : 'var(--accent)';
+  const isInflow = ev.type === 'mint' || ev.type === 'genesis_allocation';
+  const isBurn = ev.type === 'burn';
+  const typeColor =
+    isBurn ? 'var(--error)' :
+    isInflow ? 'var(--fg)' :
+    'var(--accent)';
+  const sign = isBurn ? '-' : isInflow ? '+' : '';
+  const tag = ev.type === 'genesis_allocation' ? 'GENESIS' : ev.type.toUpperCase();
   const actorLabel = ev.actor_display_name ?? shortPubkey(ev.actor_pubkey);
   const cpLabel = ev.counterparty_display_name ?? (ev.counterparty_pubkey ? shortPubkey(ev.counterparty_pubkey) : null);
+  const actorRoleLabel =
+    ev.type === 'mint' ? 'mined by'
+      : ev.type === 'genesis_allocation' ? 'allocated to'
+      : ev.type === 'burn' ? 'burned by'
+      : 'from';
 
   return (
     <div style={{
@@ -244,13 +265,13 @@ function FeedRow({ event: ev }: { event: ExplorerEvent }) {
     }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
         <span style={{ color: 'var(--dim)', fontSize: 11, minWidth: 56 }}>{formatTs(ev.at)}</span>
-        <span style={{ color: typeColor, fontWeight: 'bold', minWidth: 52 }}>{ev.type.toUpperCase()}</span>
+        <span style={{ color: typeColor, fontWeight: 'bold', minWidth: 64 }}>{tag}</span>
         <span style={{ fontWeight: 'bold' }}>
-          {isMint ? '+' : ''}{formatRpow(ev.amount_base_units)} RPOW
+          {sign}{formatRpow(ev.amount_base_units)} {assetCode}
         </span>
-        {!isMint && ev.fee_base_units !== '0' && (
+        {ev.type === 'transfer' && ev.fee_base_units !== '0' && (
           <span style={{ color: 'var(--dim)', fontSize: 11 }}>
-            fee: {formatRpow(ev.fee_base_units)} RPOW
+            fee: {formatRpow(ev.fee_base_units)} {assetCode}
           </span>
         )}
         <span style={{ color: 'var(--dim)', fontSize: 11 }}>#{formatCount(ev.event_seq)}</span>
@@ -258,22 +279,22 @@ function FeedRow({ event: ev }: { event: ExplorerEvent }) {
 
       <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap', fontSize: 12, color: 'var(--dim)' }}>
         <span>
-          {isMint ? 'mined by' : 'from'}:{' '}
-          <Link to={`/explorer/account/${ev.actor_pubkey}`} title={ev.actor_pubkey}>
+          {actorRoleLabel}:{' '}
+          <Link to={assetPath(`/explorer/account/${ev.actor_pubkey}`)} title={ev.actor_pubkey}>
             <code>{actorLabel}</code>
           </Link>
         </span>
         {cpLabel && ev.counterparty_pubkey && (
           <span>
             to:{' '}
-            <Link to={`/explorer/account/${ev.counterparty_pubkey}`} title={ev.counterparty_pubkey}>
+            <Link to={assetPath(`/explorer/account/${ev.counterparty_pubkey}`)} title={ev.counterparty_pubkey}>
               <code>{cpLabel}</code>
             </Link>
           </span>
         )}
         {ev.memo && <span>memo: <em style={{ color: 'var(--fg)' }}>{ev.memo}</em></span>}
         <button
-          onClick={() => navigate(`/explorer/tx/${ev.id}`)}
+          onClick={() => navigate(assetPath(`/explorer/tx/${ev.id}`))}
           style={{ fontSize: 11, padding: 0, background: 'none', border: 'none', color: 'var(--dim)', cursor: 'pointer', textDecoration: 'underline' }}
         >
           <code title={ev.id}>{ev.id.slice(0, 8)}…</code>
@@ -286,6 +307,8 @@ function FeedRow({ event: ev }: { event: ExplorerEvent }) {
 // ---- Transaction detail view ------------------------------------------------
 
 function TxView({ id }: { id: string }) {
+  const { selectedSlug, selectedAsset, assetPath } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
   const [tx, setTx] = useState<ExplorerTxResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -294,26 +317,29 @@ function TxView({ id }: { id: string }) {
     setLoading(true);
     setError('');
     setTx(null);
-    api.explorerTx(id)
+    api.explorerTx(id, selectedSlug)
       .then(setTx)
       .catch((e: any) => setError(e?.message ?? 'transaction not found'))
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, selectedSlug]);
 
   if (loading) return <div style={{ color: 'var(--dim)' }}>loading transaction...</div>;
   if (error || !tx) return <div className="error">{error || 'transaction not found'}</div>;
 
-  const isMint = tx.type === 'mint';
+  const isInflow = tx.type === 'mint' || tx.type === 'genesis_allocation';
+  const isBurn = tx.type === 'burn';
+  const sign = isBurn ? '-' : isInflow ? '+' : '';
+  const tag = tx.type === 'genesis_allocation' ? 'GENESIS' : tx.type.toUpperCase();
   const actorLabel = tx.actor_display_name ?? shortPubkey(tx.actor_pubkey);
   const cpLabel = tx.counterparty_display_name ?? (tx.counterparty_pubkey ? shortPubkey(tx.counterparty_pubkey) : null);
-  const actorHref = `/explorer/account/${tx.actor_pubkey}`;
-  const cpHref = tx.counterparty_pubkey ? `/explorer/account/${tx.counterparty_pubkey}` : null;
+  const actorHref = assetPath(`/explorer/account/${tx.actor_pubkey}`);
+  const cpHref = tx.counterparty_pubkey ? assetPath(`/explorer/account/${tx.counterparty_pubkey}`) : null;
 
   return (
     <>
       <div style={{ marginBottom: 12 }}>
         <span style={{ color: 'var(--dim)', fontSize: 12 }}>
-          <Link to="/explorer">← back to feed</Link>
+          <Link to={assetPath('/explorer')}>← back to feed</Link>
         </span>
       </div>
       {/* Detail block — kept as a <pre> so the column-aligned key:value layout
@@ -321,12 +347,12 @@ function TxView({ id }: { id: string }) {
        * pubkeys are interleaved as <Link>s so they navigate to the account
        * detail page on click. */}
       <pre style={{ margin: 0, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-        {`TYPE:      ${tx.type.toUpperCase()}\n`}
+        {`TYPE:      ${tag}\n`}
         {`BLOCK:     #${formatCount(tx.event_seq)}\n`}
         {`TIME:      ${formatFullTs(tx.at)}\n`}
         {`\n`}
-        {`AMOUNT:    ${isMint ? '+' : ''}${formatRpow(tx.amount_base_units)} RPOW\n`}
-        {!isMint && tx.fee_base_units !== '0' ? `FEE:       ${formatRpow(tx.fee_base_units)} RPOW\n` : null}
+        {`AMOUNT:    ${sign}${formatRpow(tx.amount_base_units)} ${assetCode}\n`}
+        {tx.type === 'transfer' && tx.fee_base_units !== '0' ? `FEE:       ${formatRpow(tx.fee_base_units)} ${assetCode}\n` : null}
         {tx.memo ? `MEMO:      ${tx.memo}\n` : null}
         {`\n`}
         {`FROM:      `}
@@ -352,11 +378,11 @@ function TxView({ id }: { id: string }) {
       </pre>
 
       <div style={{ marginTop: 12, display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12 }}>
-        <Link to={`/explorer/account/${tx.actor_pubkey}`}>
+        <Link to={assetPath(`/explorer/account/${tx.actor_pubkey}`)}>
           [ view {tx.actor_display_name ? `@${tx.actor_display_name}` : 'sender'} account ]
         </Link>
         {tx.counterparty_pubkey && (
-          <Link to={`/explorer/account/${tx.counterparty_pubkey}`}>
+          <Link to={assetPath(`/explorer/account/${tx.counterparty_pubkey}`)}>
             [ view {tx.counterparty_display_name ? `@${tx.counterparty_display_name}` : 'recipient'} account ]
           </Link>
         )}
@@ -369,15 +395,18 @@ function TxView({ id }: { id: string }) {
 
 // ---- Account view -----------------------------------------------------------
 
-type AccountFilter = 'all' | 'mint' | 'send' | 'receive';
+type AccountFilter = 'all' | 'mint' | 'send' | 'receive' | 'burn' | 'genesis';
 
 function parseAccountFilter(searchParams: URLSearchParams): AccountFilter {
   const t = searchParams.get('type');
-  if (t === 'mint' || t === 'send' || t === 'receive') return t;
+  if (t === 'mint' || t === 'send' || t === 'receive' || t === 'burn' || t === 'genesis') return t;
   return 'all';
 }
 
 function AccountView({ pubkey }: { pubkey: string }) {
+  const { selectedSlug, selectedAsset, assetPath } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const filter = parseAccountFilter(searchParams);
 
@@ -392,21 +421,21 @@ function AccountView({ pubkey }: { pubkey: string }) {
     setError('');
     setAccount(null);
     loadedOnce.current = false;
-    api.explorerAccount(pubkey, undefined, PAGE_SIZE, filter)
+    api.explorerAccount(pubkey, undefined, PAGE_SIZE, filter, selectedSlug)
       .then((r) => {
         setAccount(r);
         loadedOnce.current = true;
       })
       .catch((e: any) => setError(e?.message ?? 'account not found'))
       .finally(() => setLoading(false));
-  }, [pubkey, filter]);
+  }, [pubkey, filter, selectedSlug]);
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
   const loadMore = () => {
     if (!account?.next_cursor || loadingMore) return;
     setLoadingMore(true);
-    api.explorerAccount(pubkey, account.next_cursor, PAGE_SIZE, filter)
+    api.explorerAccount(pubkey, account.next_cursor, PAGE_SIZE, filter, selectedSlug)
       .then((r) => {
         setAccount((prev) => prev ? {
           ...prev,
@@ -427,7 +456,7 @@ function AccountView({ pubkey }: { pubkey: string }) {
     <>
       <div style={{ marginBottom: 12 }}>
         <span style={{ color: 'var(--dim)', fontSize: 12 }}>
-          <Link to="/explorer">← back to feed</Link>
+          <Link to={assetPath('/explorer')}>← back to feed</Link>
         </span>
       </div>
 
@@ -436,10 +465,10 @@ function AccountView({ pubkey }: { pubkey: string }) {
         handle ? `HANDLE:    ${handle}` : null,
         `PUBKEY:    ${pubkey}`,
         ``,
-        `BALANCE:   ${formatRpow(account.spendable_base_units)} RPOW (spendable)`,
-        `MINED:     ${formatRpow(account.minted_base_units)} RPOW  (${formatCount(account.blocks_mined)} block${account.blocks_mined === '1' ? '' : 's'})`,
-        `SENT:      ${formatRpow(account.sent_base_units)} RPOW`,
-        `RECEIVED:  ${formatRpow(account.received_base_units)} RPOW`,
+        `BALANCE:   ${formatRpow(account.spendable_base_units)} ${assetCode} (spendable)`,
+        `MINED:     ${formatRpow(account.minted_base_units)} ${assetCode}  (${formatCount(account.blocks_mined)} block${account.blocks_mined === '1' ? '' : 's'})`,
+        `SENT:      ${formatRpow(account.sent_base_units)} ${assetCode}`,
+        `RECEIVED:  ${formatRpow(account.received_base_units)} ${assetCode}`,
         `TXS:       ${formatCount(account.total_count)}`,
       ].filter(Boolean).join('\n')}</pre>
 
@@ -457,7 +486,11 @@ function AccountView({ pubkey }: { pubkey: string }) {
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             {account.items.map((e, idx) => (
-              <AccountEventRow key={e.id ?? `${e.event_seq}-${idx}`} event={e} />
+              <AccountEventRow
+                key={e.id ?? `${e.event_seq}-${idx}`}
+                event={e}
+                assetCode={assetCode}
+              />
             ))}
           </div>
           {account.next_cursor && (
@@ -480,6 +513,7 @@ function AccountView({ pubkey }: { pubkey: string }) {
  * the user can copy/share/back-button.
  */
 function AccountFilterTabs({ pubkey, active }: { pubkey: string; active: AccountFilter }) {
+  const { assetPath } = useAsset();
   const linkStyle = (isActive: boolean) => ({
     borderBottom: isActive ? '1px solid var(--accent)' : '1px dotted var(--accent-dim)',
     color: isActive ? 'var(--accent)' : 'var(--fg)',
@@ -487,7 +521,7 @@ function AccountFilterTabs({ pubkey, active }: { pubkey: string; active: Account
     textDecoration: 'none',
     fontSize: 12,
   });
-  const base = `/explorer/account/${pubkey}`;
+  const base = assetPath(`/explorer/account/${pubkey}`);
   return (
     <div style={{ marginBottom: 12, fontSize: 12, display: 'flex', flexWrap: 'wrap', gap: '6px 12px', alignItems: 'center' }}>
       <span style={{ color: 'var(--dim)' }}>show</span>
@@ -495,17 +529,27 @@ function AccountFilterTabs({ pubkey, active }: { pubkey: string; active: Account
       <Link to={`${base}?type=mint`} style={linkStyle(active === 'mint')}>[ mints ]</Link>
       <Link to={`${base}?type=send`} style={linkStyle(active === 'send')}>[ sends ]</Link>
       <Link to={`${base}?type=receive`} style={linkStyle(active === 'receive')}>[ receives ]</Link>
+      <Link to={`${base}?type=burn`} style={linkStyle(active === 'burn')}>[ burns ]</Link>
+      <Link to={`${base}?type=genesis`} style={linkStyle(active === 'genesis')}>[ genesis ]</Link>
     </div>
   );
 }
 
-function AccountEventRow({ event: e }: { event: ExplorerAccountEvent }) {
+function AccountEventRow({ event: e, assetCode }: { event: ExplorerAccountEvent; assetCode: string }) {
+  const { assetPath } = useAsset();
   const navigate = useNavigate();
-  const isSend = e.type === 'send';
-  const isMint = e.type === 'mint';
-  const sign = isSend ? '-' : '+';
-  const typeColor = isSend ? 'var(--dim)' : isMint ? 'var(--fg)' : 'var(--accent)';
+  const isOutbound = e.type === 'send' || e.type === 'burn';
+  const isInflow = e.type === 'mint' || e.type === 'receive' || e.type === 'genesis';
+  const sign = isOutbound ? '-' : isInflow ? '+' : '';
+  const typeColor =
+    e.type === 'burn' ? 'var(--error)' :
+    e.type === 'send' ? 'var(--dim)' :
+    e.type === 'mint' ? 'var(--fg)' :
+    'var(--accent)';
+  const tag = e.type === 'genesis' ? 'GENESIS' : e.type.toUpperCase();
   const cpLabel = e.counterparty_display_name ?? (e.counterparty_pubkey ? shortPubkey(e.counterparty_pubkey) : null);
+  const showCounterparty = (e.type === 'send' || e.type === 'receive') && e.counterparty_pubkey;
+  const counterpartyLabel = e.type === 'send' ? 'to' : 'from';
 
   return (
     <div style={{
@@ -517,18 +561,18 @@ function AccountEventRow({ event: e }: { event: ExplorerAccountEvent }) {
     }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
         <span style={{ color: 'var(--dim)', fontSize: 11, minWidth: 56 }}>{formatTs(e.at)}</span>
-        <span style={{ color: typeColor, fontWeight: 'bold', minWidth: 52 }}>{e.type.toUpperCase()}</span>
-        <span style={{ fontWeight: 'bold' }}>{sign}{formatRpow(e.amount_base_units)} RPOW</span>
+        <span style={{ color: typeColor, fontWeight: 'bold', minWidth: 64 }}>{tag}</span>
+        <span style={{ fontWeight: 'bold' }}>{sign}{formatRpow(e.amount_base_units)} {assetCode}</span>
         {e.fee_base_units && e.fee_base_units !== '0' && (
-          <span style={{ color: 'var(--dim)', fontSize: 11 }}>fee: {formatRpow(e.fee_base_units)} RPOW</span>
+          <span style={{ color: 'var(--dim)', fontSize: 11 }}>fee: {formatRpow(e.fee_base_units)} {assetCode}</span>
         )}
         <span style={{ color: 'var(--dim)', fontSize: 11 }}>#{formatCount(e.event_seq)}</span>
       </div>
 
-      {cpLabel && e.counterparty_pubkey && (
+      {showCounterparty && cpLabel && e.counterparty_pubkey && (
         <div style={{ fontSize: 12, color: 'var(--dim)' }}>
-          {isSend ? 'to' : 'from'}:{' '}
-          <Link to={`/explorer/account/${e.counterparty_pubkey}`} title={e.counterparty_pubkey}>
+          {counterpartyLabel}:{' '}
+          <Link to={assetPath(`/explorer/account/${e.counterparty_pubkey}`)} title={e.counterparty_pubkey}>
             <code>{cpLabel}</code>
           </Link>
         </div>
@@ -542,7 +586,7 @@ function AccountEventRow({ event: e }: { event: ExplorerAccountEvent }) {
         <div style={{ fontSize: 11, color: 'var(--dim)' }}>
           tx:{' '}
           <button
-            onClick={() => navigate(`/explorer/tx/${e.id}`)}
+            onClick={() => navigate(assetPath(`/explorer/tx/${e.id}`))}
             style={{ fontSize: 11, padding: 0, background: 'none', border: 'none', color: 'var(--dim)', cursor: 'pointer', textDecoration: 'underline' }}
           >
             <code title={e.id}>{e.id!.slice(0, 8)}…</code>
@@ -557,18 +601,29 @@ function AccountEventRow({ event: e }: { event: ExplorerAccountEvent }) {
 // ---- Main Explorer page -----------------------------------------------------
 
 export function ExplorerPage() {
-  usePageMeta('Explorer', 'Browse the RPOW4 public ledger. Search transactions by ID, look up accounts by public key, and explore the live feed.');
+  const { selectedAsset } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  const assetNickname = selectedAsset?.nickname ?? assetCode;
+  usePageMeta(
+    `${assetCode} Explorer`,
+    `Browse the ${assetCode} public ledger. Search transactions by ID, look up accounts by public key, and explore the live feed.`,
+  );
   const txMatch = useMatch('/explorer/tx/:id');
+  const scopedTxMatch = useMatch('/r/:assetSlug/explorer/tx/:id');
   const accountMatch = useMatch('/explorer/account/:pubkey');
+  const scopedAccountMatch = useMatch('/r/:assetSlug/explorer/account/:pubkey');
 
-  const txId = txMatch?.params.id;
-  const accountPubkey = accountMatch?.params.pubkey;
+  const txId = txMatch?.params.id ?? scopedTxMatch?.params.id;
+  const accountPubkey = accountMatch?.params.pubkey ?? scopedAccountMatch?.params.pubkey;
 
+  // Panel title leads with the active RPOW version + nickname so the
+  // currently-selected asset is unambiguous from a glance.
+  const baseTitle = `${assetCode} · ${assetNickname.toUpperCase()} EXPLORER`;
   const title = txId
-    ? `EXPLORER · TX`
+    ? `${baseTitle} · TX`
     : accountPubkey
-    ? `EXPLORER · ACCOUNT`
-    : `EXPLORER`;
+    ? `${baseTitle} · ACCOUNT`
+    : baseTitle;
 
   return (
     <Panel title={title}>

@@ -8,6 +8,7 @@ import { canonicalJson } from '@rpow/shared';
  * mint/auth/signup MACs that share the same secret.
  */
 export interface PoolChallengeEnvelope {
+  asset_id: string;
   challenge_id: string;
   user_pubkey: string;
   nonce_prefix: string;
@@ -15,7 +16,7 @@ export interface PoolChallengeEnvelope {
   share_difficulty_bits: number;
   issued_at: string;
   expires_at: string;
-  domain: 'rpow4.pool';
+  domain: 'rpow4.asset.pool.v1';
 }
 
 export function macPoolChallenge(envelope: PoolChallengeEnvelope, secret: string): string {

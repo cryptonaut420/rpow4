@@ -38,10 +38,95 @@ export interface AuthSessionResponse {
   pubkey: string;
 }
 
+// ---- assets -----------------------------------------------------------------
+
+export interface AssetSummary {
+  id: string;
+  slug: string;
+  display_code: string;
+  nickname: string;
+  description: string;
+  creator_pubkey?: string;
+  system_default: boolean;
+  supply_mode: 'capped' | 'unlimited';
+  max_supply_base_units?: string;
+  base_units_per_coin: string;
+  initial_reward_base_units: string;
+  reward_schedule_type: string;
+  reward_interval_blocks: number;
+  reward_reduction_type: string;
+  reward_reduction_value: string;
+  difficulty_schedule_type: string;
+  difficulty_start_bits: number;
+  difficulty_step_blocks: number;
+  difficulty_max_bits: number;
+  mining_algo: 'rpow_classic';
+  pool_enabled: boolean;
+  pool_enable_at_difficulty_bits?: number;
+  pool_fee_bps: number;
+  pool_finder_bps: number;
+  pool_share_bits: number;
+  transfer_fee_base_units: string;
+  founder_allocation_base_units: string;
+  treasury_allocation_base_units: string;
+  launch_burn_event_id?: string;
+  created_at: string;
+}
+
+export interface AssetsResponse {
+  assets: AssetSummary[];
+  default_asset_slug: string;
+  launch_burn_base_units: string;
+}
+
+export interface AssetDetailResponse {
+  asset: AssetSummary;
+  schedule: {
+    block_height: string;
+    current_reward_base_units: string;
+    current_difficulty_bits: number;
+    next_reward_base_units: string;
+    next_difficulty_bits: number;
+    is_mintable: boolean;
+    is_capped: boolean;
+  };
+}
+
+export interface LaunchAssetRequestBody {
+  nickname: string;
+  description?: string;
+  slug?: string;
+  supply_mode: 'capped' | 'unlimited';
+  max_supply_base_units?: string;
+  initial_reward_base_units: string;
+  reward_schedule_type: 'none' | 'halving_by_blocks';
+  reward_interval_blocks: number;
+  difficulty_start_bits: number;
+  difficulty_step_blocks: number;
+  difficulty_max_bits: number;
+  mining_algo: 'rpow_classic';
+  pool_enabled: boolean;
+  pool_enable_at_difficulty_bits?: number | null;
+  pool_fee_bps: number;
+  pool_finder_bps: number;
+  pool_share_bits: number;
+  founder_allocation_base_units: string;
+}
+
+export interface LaunchAssetResponse {
+  ok: true;
+  asset: AssetSummary;
+  launch_burn_event_id: string;
+  launch_burn_base_units: string;
+}
+
 // ---- account ----------------------------------------------------------------
 
 export interface MeResponse {
   pubkey: string;
+  asset_id?: string;
+  asset_slug?: string;
+  asset_code?: string;
   display_name: string | null;
   balance_base_units: string;
   minted_base_units: string;
@@ -192,6 +277,9 @@ export function validateDisplayName(raw: string): { ok: true; normalized: string
 // ---- mining -----------------------------------------------------------------
 
 export interface ChallengeResponse {
+  asset_id?: string;
+  asset_slug?: string;
+  asset_code?: string;
   challenge_id: string;
   nonce_prefix: string; // hex
   difficulty_bits: number;
@@ -206,6 +294,7 @@ export interface ChallengeResponse {
  * to the pubkey that received the reward.
  */
 export interface MintRequestBody {
+  asset_id?: string;
   challenge_id: string;
   nonce_prefix: string;
   difficulty_bits: number;
@@ -231,6 +320,7 @@ export interface TokenSummary {
  * transfer row so the public ledger exposes verifiable per-event sigs.
  */
 export interface SendRequestBody {
+  asset_id?: string;
   recipient_pubkey: string;       // base58 Ed25519
   amount_base_units: string;
   idempotency_key: string;
@@ -270,7 +360,7 @@ export interface ApiError { error: ApiErrorCode; message: string; retry_after?: 
 
 export interface ActivityEntry {
   id?: string; // event UUID, present for all new events
-  type: 'mint' | 'send' | 'receive';
+  type: 'mint' | 'send' | 'receive' | 'burn' | 'genesis';
   amount_base_units: string;
   fee_base_units?: string; // only present on 'send' events with a non-zero fee
   memo?: string;
@@ -291,11 +381,27 @@ export interface ActivityResponse {
 }
 
 export interface LedgerResponse {
+  asset_id?: string;
+  asset_slug?: string;
+  asset_code?: string;
+  /** 'unlimited' assets have no cap; clients should hide cap visualizations. */
+  supply_mode?: 'capped' | 'unlimited';
   total_minted_base_units: string;
   total_transferred_base_units: string;
   circulating_supply_base_units: string;
   minted_supply_counter_base_units: string;
-  max_supply_base_units: string;
+  /**
+   * Cumulative base units burned for this asset (e.g. the launch fee
+   * that destroys RPOW4.0 to mint a new asset family). Always present;
+   * defaults to "0" for assets that have never seen a BURN event.
+   */
+  total_burned_base_units: string;
+  /**
+   * Hard cap, present for capped assets only. `null` (or omitted) for
+   * unlimited assets — older clients still see the legacy `Number.MAX` style
+   * sentinel, but new clients should branch on `supply_mode`.
+   */
+  max_supply_base_units: string | null;
   base_units_per_rpow: string;
 
   /** Block-based RPOW4 schedule. 1 mint = 1 block. */
@@ -352,6 +458,9 @@ export interface LeaderboardEntry {
 }
 
 export interface LeaderboardResponse {
+  asset_id?: string;
+  asset_slug?: string;
+  asset_code?: string;
   /** Which sort produced this snapshot. */
   sort: LeaderboardSort;
   entries: LeaderboardEntry[];
@@ -363,7 +472,7 @@ export interface LeaderboardResponse {
 
 export interface LedgerEvent {
   id: string;
-  type: 'mint' | 'transfer';
+  type: 'mint' | 'transfer' | 'burn' | 'genesis_allocation';
   actor_pubkey: string;
   counterparty_pubkey?: string;
   amount_base_units: string;
@@ -383,7 +492,7 @@ export interface LedgerEventsResponse {
 export interface ExplorerEvent {
   event_seq: string;
   id: string;
-  type: 'mint' | 'transfer';
+  type: 'mint' | 'transfer' | 'burn' | 'genesis_allocation';
   actor_pubkey: string;
   actor_display_name?: string;
   counterparty_pubkey?: string;
@@ -418,7 +527,7 @@ export interface ExplorerAccountSummary {
 export interface ExplorerAccountEvent {
   id?: string;
   event_seq: string;
-  type: 'mint' | 'send' | 'receive';
+  type: 'mint' | 'send' | 'receive' | 'burn' | 'genesis';
   amount_base_units: string;
   fee_base_units?: string;
   memo?: string;
@@ -533,6 +642,9 @@ export interface TrollboxFeedResponse {
  * are echoed back by the client when submitting a share to /pool/share so
  * the server can re-verify the MAC. */
 export interface PoolChallengeResponse {
+  asset_id?: string;
+  asset_slug?: string;
+  asset_code?: string;
   challenge_id: string;
   user_pubkey: string;
   nonce_prefix: string;
@@ -547,6 +659,7 @@ export interface PoolChallengeResponse {
 }
 
 export interface PoolShareRequestBody {
+  asset_id?: string;
   challenge_id: string;
   nonce_prefix: string;
   network_difficulty_bits: number;

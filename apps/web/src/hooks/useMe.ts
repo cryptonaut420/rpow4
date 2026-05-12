@@ -20,13 +20,13 @@ import type { MeResponse } from '@rpow/shared';
  * page-local copies) automatically picks up a fresh identity the moment
  * the wallet flips to 'unlocked' — no remount / page refresh required.
  */
-export function useMe(): { me: MeResponse | null; loading: boolean; refresh: () => Promise<void> } {
+export function useMe(assetSlug?: string): { me: MeResponse | null; loading: boolean; refresh: () => Promise<void> } {
   const wallet = useWallet();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const refresh = useCallback(async (): Promise<void> => {
-    try { setMe(await api.me()); } catch { setMe(null); }
-  }, []);
+    try { setMe(await api.me(assetSlug)); } catch { setMe(null); }
+  }, [assetSlug]);
   useEffect(() => {
     if (wallet.status === 'loading') return;
     if (wallet.status === 'unlocked') {

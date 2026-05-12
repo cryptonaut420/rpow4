@@ -8,7 +8,6 @@ import { signTokenPayload } from '../signing.js';
 import {
   currentRewardForBlock,
   difficultyForBlock,
-  BASE_UNITS_PER_RPOW,
 } from '../schedule.js';
 import {
   macPoolChallenge,
@@ -16,8 +15,15 @@ import {
 } from '../pool-challenge.js';
 import { macsEqual } from '../mint-challenge.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
+import {
+  assetToScheduleOpts,
+  DEFAULT_ASSET_SLUG,
+  poolAvailableForAsset,
+  resolveAsset,
+} from '../assets.js';
 
 const ShareBody = z.object({
+  asset_id: z.string().uuid().optional(),
   challenge_id: z.string().uuid(),
   nonce_prefix: z.string().regex(/^[0-9a-f]{32}$/),
   network_difficulty_bits: z.number().int().min(4).max(64),
@@ -34,9 +40,14 @@ interface OpenRoundRow {
   started_at: Date;
 }
 
-async function readOpenRound(c: PoolClient): Promise<OpenRoundRow | null> {
+async function readOpenRound(c: PoolClient, assetId: string): Promise<OpenRoundRow | null> {
   const r = await c.query<OpenRoundRow>(
-    `SELECT id::text AS id, started_at FROM pool_rounds WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1`,
+    `SELECT id::text AS id, started_at
+       FROM pool_rounds
+      WHERE asset_id=$1::uuid AND ended_at IS NULL
+      ORDER BY id DESC
+      LIMIT 1`,
+    [assetId],
   );
   return r.rows[0] ?? null;
 }
@@ -48,15 +59,21 @@ export async function poolRoutes(app: FastifyInstance) {
   // expires_at, domain). Same caller can hold many concurrent challenges
   // (worker rotates them), but each challenge_id is single-use for any
   // given (challenge_id, nonce) pair.
-  app.post('/pool/challenge', async (req, reply) => {
+  const challengeHandler = async (req: any, reply: any) => {
     if (!app.config.poolEnabled) {
       return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
     }
     const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    const assetId = asset.id;
 
     const { rows } = await app.pool.query<{ name: string; value: string }>(
-      `SELECT name, value::text AS value FROM app_counters WHERE name IN ('minted_supply','block_height')`,
+      `SELECT name, value::text AS value
+         FROM app_counters
+        WHERE asset_id=$1::uuid AND name IN ('minted_supply','block_height')`,
+      [asset.id],
     );
     let mintedBaseUnits = 0n;
     let blockHeight = 0n;
@@ -64,25 +81,22 @@ export async function poolRoutes(app: FastifyInstance) {
       if (r.name === 'minted_supply') mintedBaseUnits = BigInt(r.value);
       else if (r.name === 'block_height') blockHeight = BigInt(r.value);
     }
-    const capBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
-    if (mintedBaseUnits >= capBaseUnits) {
-      return reply.code(410).send({ error: 'SUPPLY_EXHAUSTED', message: '21M cap reached' });
+    const capBaseUnits = asset.maxSupplyBaseUnits ?? (2n ** 63n - 1n);
+    if (asset.supplyMode === 'capped' && mintedBaseUnits >= capBaseUnits) {
+      return reply.code(410).send({ error: 'SUPPLY_EXHAUSTED', message: 'supply cap reached' });
     }
 
-    const networkBits = difficultyForBlock(blockHeight, {
-      difficultyStartBits: app.config.difficultyStartBits,
-      difficultyStepBlocks: app.config.difficultyStepBlocks,
-      difficultyMaxBits: app.config.difficultyMaxBits,
-    });
-    // Share target is fixed — see POOL_SHARE_BITS in env.ts. We deliberately
-    // do NOT track networkBits so share rates stay stable as the network
-    // schedule climbs.
-    const shareBits = app.config.poolShareBits;
+    const networkBits = difficultyForBlock(blockHeight, assetToScheduleOpts(asset));
+    if (!poolAvailableForAsset(asset, networkBits)) {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled for this asset' });
+    }
+    const shareBits = asset.poolShareBits;
 
     const id = randomUUID();
     const noncePrefix = randomBytes(16).toString('hex');
     const now = Date.now();
     const envelope: PoolChallengeEnvelope = {
+      asset_id: asset.id,
       challenge_id: id,
       user_pubkey: s.pubkey,
       nonce_prefix: noncePrefix,
@@ -90,9 +104,12 @@ export async function poolRoutes(app: FastifyInstance) {
       share_difficulty_bits: shareBits,
       issued_at: new Date(now).toISOString(),
       expires_at: new Date(now + app.config.poolChallengeTtlSeconds * 1000).toISOString(),
-      domain: 'rpow4.pool',
+      domain: 'rpow4.asset.pool.v1',
     };
     return {
+      asset_id: asset.id,
+      asset_slug: asset.slug,
+      asset_code: asset.displayCode,
       challenge_id: envelope.challenge_id,
       user_pubkey: envelope.user_pubkey,
       nonce_prefix: envelope.nonce_prefix,
@@ -102,39 +119,50 @@ export async function poolRoutes(app: FastifyInstance) {
       expires_at: envelope.expires_at,
       challenge_mac: macPoolChallenge(envelope, app.config.sessionSecret),
     };
-  });
+  };
+  app.post('/pool/challenge', challengeHandler);
+  app.post('/assets/:asset_slug/pool/challenge', challengeHandler);
 
   // ---- POST /pool/share -----------------------------------------------------
   // Submit a single share. Validates MAC + signature + recomputed hash +
   // share difficulty. If the same hash also clears network difficulty,
   // closes the current round and fans out per-miner payouts inside the
   // same transaction.
-  app.post('/pool/share', async (req, reply) => {
+  const shareHandler = async (req: any, reply: any) => {
     if (!app.config.poolEnabled) {
       return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
     }
     const s = app.readSession(req);
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    const assetId = asset.id;
 
     const parsed = ShareBody.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
     }
+    if (parsed.data.asset_id && parsed.data.asset_id !== assetId) {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'asset mismatch' });
+    }
 
     // Per-share signature: client signs (challenge_id, solution_nonce).
     // Cheap (Ed25519 verify is microseconds) and provides authentic
     // attribution even if the session cookie is leaky.
+    const legacyShareSigBody = { challenge_id: parsed.data.challenge_id, solution_nonce: parsed.data.solution_nonce };
+    const scopedShareSigBody = { asset_id: assetId, ...legacyShareSigBody };
     const sigOk = verifyCanonical(
       'pool.share',
-      { challenge_id: parsed.data.challenge_id, solution_nonce: parsed.data.solution_nonce },
+      parsed.data.asset_id || asset.slug !== DEFAULT_ASSET_SLUG ? scopedShareSigBody : legacyShareSigBody,
       parsed.data.client_signature_base58,
       s.pubkey,
-    );
+    ) || (asset.slug === DEFAULT_ASSET_SLUG && verifyCanonical('pool.share', legacyShareSigBody, parsed.data.client_signature_base58, s.pubkey));
     if (!sigOk) {
       return reply.code(401).send({ error: 'INVALID_SIGNATURE', message: 'share signature does not verify' });
     }
 
     const envelope: PoolChallengeEnvelope = {
+      asset_id: assetId,
       challenge_id: parsed.data.challenge_id,
       user_pubkey: s.pubkey,
       nonce_prefix: parsed.data.nonce_prefix,
@@ -142,7 +170,7 @@ export async function poolRoutes(app: FastifyInstance) {
       share_difficulty_bits: parsed.data.share_difficulty_bits,
       issued_at: parsed.data.issued_at,
       expires_at: parsed.data.expires_at,
-      domain: 'rpow4.pool',
+      domain: 'rpow4.asset.pool.v1',
     };
     const expectedMac = macPoolChallenge(envelope, app.config.sessionSecret);
     if (!macsEqual(expectedMac, parsed.data.challenge_mac)) {
@@ -165,7 +193,7 @@ export async function poolRoutes(app: FastifyInstance) {
     const result = await withTxRetry(
       app.pool,
       async (c) => {
-        const round = await readOpenRound(c);
+        const round = await readOpenRound(c, assetId);
         if (!round) {
           // Should never happen: migration seeds an open round and every
           // round-close opens a fresh one in the same TX. If we hit this
@@ -180,9 +208,9 @@ export async function poolRoutes(app: FastifyInstance) {
         // catches replays.
         try {
           await c.query(
-            `INSERT INTO pool_shares(round_id, pubkey, challenge_id, nonce_text, zeros)
-             VALUES($1::bigint, $2, $3, $4, $5)`,
-            [roundId, s.pubkey, parsed.data.challenge_id, parsed.data.solution_nonce, zeros],
+            `INSERT INTO pool_shares(asset_id, round_id, pubkey, challenge_id, nonce_text, zeros)
+             VALUES($1::uuid, $2::bigint, $3, $4, $5, $6)`,
+            [assetId, roundId, s.pubkey, parsed.data.challenge_id, parsed.data.solution_nonce, zeros],
           );
         } catch (e) {
           if ((e as { code?: string }).code === '23505') {
@@ -192,8 +220,8 @@ export async function poolRoutes(app: FastifyInstance) {
         }
 
         await c.query(
-          `UPDATE pool_rounds SET total_shares = total_shares + 1 WHERE id = $1::bigint`,
-          [roundId],
+          `UPDATE pool_rounds SET total_shares = total_shares + 1 WHERE asset_id=$1::uuid AND id = $2::bigint`,
+          [assetId, roundId],
         );
 
         if (!isBlock) {
@@ -210,10 +238,10 @@ export async function poolRoutes(app: FastifyInstance) {
         // Block win path: serialize all closeouts on a single advisory
         // lock so two simultaneous winning shares can't both close the
         // same round.
-        await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_pool_round_close'))`);
+        await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_pool_round_close'), hashtext($1))`, [assetId]);
         const stillOpen = await c.query<{ id: string }>(
-          `SELECT id::text AS id FROM pool_rounds WHERE id = $1::bigint AND ended_at IS NULL FOR UPDATE`,
-          [roundId],
+          `SELECT id::text AS id FROM pool_rounds WHERE asset_id=$1::uuid AND id = $2::bigint AND ended_at IS NULL FOR UPDATE`,
+          [assetId, roundId],
         );
         if (stillOpen.rows.length === 0) {
           // Another share closed this round between insert and lock. Our
@@ -230,7 +258,10 @@ export async function poolRoutes(app: FastifyInstance) {
 
         // Read counters for the mint, identical guards to /mint.
         const counterRows = (await c.query<{ name: string; value: string }>(
-          `SELECT name, value::text AS value FROM app_counters WHERE name IN ('minted_supply','block_height')`,
+          `SELECT name, value::text AS value
+             FROM app_counters
+            WHERE asset_id=$1::uuid AND name IN ('minted_supply','block_height')`,
+          [assetId],
         )).rows;
         let mintedBaseUnits = 0n;
         let blockHeight = 0n;
@@ -239,14 +270,7 @@ export async function poolRoutes(app: FastifyInstance) {
           else if (r.name === 'block_height') blockHeight = BigInt(r.value);
         }
 
-        const scheduleOpts = {
-          baseRewardBaseUnits: app.config.baseRewardBaseUnits,
-          halvingIntervalBlocks: app.config.halvingIntervalBlocks,
-          difficultyStartBits: app.config.difficultyStartBits,
-          difficultyStepBlocks: app.config.difficultyStepBlocks,
-          difficultyMaxBits: app.config.difficultyMaxBits,
-          maxSupplyRpow: app.config.mintMaxSupply,
-        };
+        const scheduleOpts = assetToScheduleOpts(asset);
         const reward = currentRewardForBlock(blockHeight, scheduleOpts);
         if (reward === 0n) {
           return { error: 'SUPPLY_EXHAUSTED' as const, message: 'reward floored to zero — schedule terminated' };
@@ -259,16 +283,17 @@ export async function poolRoutes(app: FastifyInstance) {
           };
         }
 
-        const capBaseUnits = BigInt(app.config.mintMaxSupply) * BASE_UNITS_PER_RPOW;
+        const capBaseUnits = asset.maxSupplyBaseUnits ?? (2n ** 63n - 1n);
         const supplyResult = await c.query(
           `UPDATE app_counters
              SET value = value + (CASE
                WHEN name = 'minted_supply' THEN $1::bigint
                ELSE 1::bigint
              END)
-           WHERE name IN ('minted_supply','block_height')
-             AND (SELECT value FROM app_counters WHERE name='minted_supply') + $1::bigint <= $2::bigint`,
-          [reward.toString(), capBaseUnits.toString()],
+           WHERE asset_id=$3::uuid
+             AND name IN ('minted_supply','block_height')
+             AND ($4::boolean OR (SELECT value FROM app_counters WHERE asset_id=$3::uuid AND name='minted_supply') + $1::bigint <= $2::bigint)`,
+          [reward.toString(), capBaseUnits.toString(), assetId, String(asset.supplyMode === 'unlimited')],
         );
         if (supplyResult.rowCount !== 2) {
           return { error: 'SUPPLY_EXHAUSTED' as const, message: '21M cap reached' };
@@ -277,7 +302,7 @@ export async function poolRoutes(app: FastifyInstance) {
         // ---- Distribution math ------------------------------------------
         // Treasury fee off the gross.
         const grossReward = reward;
-        const treasuryCut = (grossReward * BigInt(app.config.poolFeeBps)) / 10000n;
+        const treasuryCut = (grossReward * BigInt(asset.poolFeeBps)) / 10000n;
         const netReward = grossReward - treasuryCut;
         // The finder bonus is a flat slice of the net; the rest is the
         // pro-rata pool. Every miner — INCLUDING the finder — earns from
@@ -287,16 +312,16 @@ export async function poolRoutes(app: FastifyInstance) {
         // *more* when someone else found a block (because excluding the
         // finder from pro-rata gave them a larger slice when they were
         // not the winner).
-        const finderBonus = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
+        const finderBonus = (netReward * BigInt(asset.poolFinderBps)) / 10000n;
         const proRataPool = netReward - finderBonus;
 
         // Aggregate shares by pubkey for this round.
         const shareRows = (await c.query<{ pubkey: string; share_count: string }>(
           `SELECT pubkey, count(*)::text AS share_count
              FROM pool_shares
-            WHERE round_id = $1::bigint
+            WHERE asset_id=$1::uuid AND round_id = $2::bigint
             GROUP BY pubkey`,
-          [roundId],
+          [assetId, roundId],
         )).rows;
 
         let totalShares = 0n;
@@ -358,8 +383,9 @@ export async function poolRoutes(app: FastifyInstance) {
         // The full gross reward enters circulation here, regardless of
         // how the per-recipient MINT events split it below.
         await c.query(
-          `UPDATE ledger_stats SET value = value + $1::bigint, updated_at = now() WHERE name='circulating_supply'`,
-          [grossReward.toString()],
+          `UPDATE ledger_stats SET value = value + $1::bigint, updated_at = now()
+           WHERE asset_id=$2::uuid AND name='circulating_supply'`,
+          [grossReward.toString(), asset.id],
         );
 
         const issuedAt = new Date();
@@ -380,7 +406,7 @@ export async function poolRoutes(app: FastifyInstance) {
         ): Promise<string | null> {
           if (amount === 0n) return null;
           const eventId = randomUUID();
-          await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [eventId]);
+          await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [eventId, assetId]);
           const serverSig = signTokenPayload(
             { id: eventId, owner_pubkey: recipient, value: amount, issued_at: issuedAt.toISOString() },
             app.config.signingPrivateKeyHex,
@@ -392,26 +418,26 @@ export async function poolRoutes(app: FastifyInstance) {
           // pattern would be uglier).
           await c.query(
             `INSERT INTO account_balances(
-               pubkey, spendable_base_units, minted_base_units,
+               asset_id, pubkey, spendable_base_units, minted_base_units,
                blocks_mined, events_count, updated_at
              )
-             VALUES($1, $2, $2, $3, 1, now())
-             ON CONFLICT (pubkey) DO UPDATE SET
+             VALUES($1::uuid, $2, $3, $3, $4, 1, now())
+             ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
                minted_base_units    = account_balances.minted_base_units    + EXCLUDED.minted_base_units,
-               blocks_mined         = account_balances.blocks_mined         + $3::int,
+               blocks_mined         = account_balances.blocks_mined         + $4::int,
                events_count         = account_balances.events_count         + 1,
                updated_at = now()`,
-            [recipient, amount.toString(), isFinder ? 1 : 0],
+            [assetId, recipient, amount.toString(), isFinder ? 1 : 0],
           );
 
           const inserted = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
-                 id, event_type, actor_pubkey, amount, memo, server_sig, created_at
+                 asset_id, id, event_type, actor_pubkey, amount, memo, server_sig, created_at
                )
-               VALUES($1,'MINT',$2,$3,$4,$5,$6)
-               RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+               VALUES($1::uuid,$2,'MINT',$3,$4,$5,$6,$7)
+               RETURNING asset_id::text, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                          amount, fee_base_units, memo,
                          challenge_id, solution_nonce, idempotency_key,
                          client_signature_base58, server_sig, created_at
@@ -422,19 +448,19 @@ export async function poolRoutes(app: FastifyInstance) {
                FROM inserted i
                WHERE ids.id = i.id
              )
-             SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+             SELECT asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                     amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
                     challenge_id, solution_nonce, idempotency_key,
                     client_signature_base58, server_sig, created_at
              FROM inserted`,
-            [eventId, recipient, amount.toString(), memo, serverSig, issuedAt],
+            [assetId, eventId, recipient, amount.toString(), memo, serverSig, issuedAt],
           );
           await mirrorLedgerEventHot(c, inserted.rows[0]!);
 
           await c.query(
-            `INSERT INTO pool_payouts(round_id, pubkey, share_count, payout_base_units, is_finder, event_id)
-             VALUES($1::bigint, $2, $3::bigint, $4::bigint, $5, $6)`,
-            [roundId, recipient, shareCount.toString(), amount.toString(), isFinder, eventId],
+            `INSERT INTO pool_payouts(asset_id, round_id, pubkey, share_count, payout_base_units, is_finder, event_id)
+             VALUES($1::uuid, $2::bigint, $3, $4::bigint, $5::bigint, $6, $7)`,
+            [assetId, roundId, recipient, shareCount.toString(), amount.toString(), isFinder, eventId],
           );
           return eventId;
         }
@@ -447,27 +473,27 @@ export async function poolRoutes(app: FastifyInstance) {
         async function mintTreasuryFee(amount: bigint, memo: string): Promise<string | null> {
           if (amount === 0n) return null;
           const eventId = randomUUID();
-          await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [eventId]);
+          await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [eventId, assetId]);
           const serverSig = signTokenPayload(
             { id: eventId, owner_pubkey: TREASURY_PUBKEY, value: amount, issued_at: issuedAt.toISOString() },
             app.config.signingPrivateKeyHex,
           );
           await c.query(
-            `INSERT INTO account_balances(pubkey, spendable_base_units, events_count, updated_at)
-             VALUES($1, $2, 1, now())
-             ON CONFLICT (pubkey) DO UPDATE SET
+            `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, events_count, updated_at)
+             VALUES($1::uuid, $2, $3, 1, now())
+             ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
                events_count = account_balances.events_count + 1,
                updated_at = now()`,
-            [TREASURY_PUBKEY, amount.toString()],
+            [assetId, TREASURY_PUBKEY, amount.toString()],
           );
           const inserted = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
-                 id, event_type, actor_pubkey, amount, memo, server_sig, created_at
+                 asset_id, id, event_type, actor_pubkey, amount, memo, server_sig, created_at
                )
-               VALUES($1,'MINT',$2,$3,$4,$5,$6)
-               RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+               VALUES($1::uuid,$2,'MINT',$3,$4,$5,$6,$7)
+               RETURNING asset_id::text, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                          amount, fee_base_units, memo,
                          challenge_id, solution_nonce, idempotency_key,
                          client_signature_base58, server_sig, created_at
@@ -478,12 +504,12 @@ export async function poolRoutes(app: FastifyInstance) {
                FROM inserted i
                WHERE ids.id = i.id
              )
-             SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+             SELECT asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                     amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
                     challenge_id, solution_nonce, idempotency_key,
                     client_signature_base58, server_sig, created_at
              FROM inserted`,
-            [eventId, TREASURY_PUBKEY, amount.toString(), memo, serverSig, issuedAt],
+            [assetId, eventId, TREASURY_PUBKEY, amount.toString(), memo, serverSig, issuedAt],
           );
           await mirrorLedgerEventHot(c, inserted.rows[0]!);
           return eventId;
@@ -525,7 +551,7 @@ export async function poolRoutes(app: FastifyInstance) {
                  finder_payout_base_units = $6::bigint,
                  pro_rata_pool_base_units = $7::bigint,
                  participant_count = $8
-           WHERE id = $1::bigint`,
+           WHERE asset_id=$9::uuid AND id = $1::bigint`,
           [
             roundId,
             s.pubkey,
@@ -535,9 +561,10 @@ export async function poolRoutes(app: FastifyInstance) {
             finderPayoutTotal.toString(),
             proRataPool.toString(),
             shareRows.length,
+            assetId,
           ],
         );
-        await c.query(`INSERT INTO pool_rounds (started_at) VALUES (now())`);
+        await c.query(`INSERT INTO pool_rounds (asset_id, started_at) VALUES ($1::uuid, now())`, [assetId]);
 
         return {
           ok: true as const,
@@ -576,44 +603,47 @@ export async function poolRoutes(app: FastifyInstance) {
     // and isn't part of the wire response.
     const { participant_pubkeys: _participants, ...wire } = result;
     return wire;
-  });
+  };
+  app.post('/pool/share', shareHandler);
+  app.post('/assets/:asset_slug/pool/share', shareHandler);
 
   // ---- GET /pool/stats ------------------------------------------------------
   // Snapshot of the active round + recent payouts. Cheap query — keep in
   // a 2s TTL cache so the visualizer can poll it without DB pressure.
-  app.get('/pool/stats', async (req, reply) => {
+  const statsHandler = async (req: any, reply: any) => {
     if (!app.config.poolEnabled) {
       return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
     }
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
 
     const session = app.readSession(req);
-    const cacheKey = session?.pubkey ?? 'anon';
+    const cacheKey = `${asset.id}|${session?.pubkey ?? 'anon'}`;
 
     const body = await app.caches.poolStats.get(cacheKey, async () => {
       const open = (await app.pool.query<{ id: string; started_at: Date; total_shares: string }>(
         `SELECT id::text AS id, started_at, total_shares::text AS total_shares
-           FROM pool_rounds WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1`,
+           FROM pool_rounds WHERE asset_id=$1::uuid AND ended_at IS NULL ORDER BY id DESC LIMIT 1`,
+        [asset.id],
       )).rows[0];
       const totalShares = open ? BigInt(open.total_shares) : 0n;
 
       const counterRows = (await app.pool.query<{ name: string; value: string }>(
-        `SELECT name, value::text AS value FROM app_counters WHERE name = 'block_height'`,
+        `SELECT name, value::text AS value FROM app_counters WHERE asset_id=$1::uuid AND name = 'block_height'`,
+        [asset.id],
       )).rows;
       const blockHeight = counterRows[0] ? BigInt(counterRows[0].value) : 0n;
-      const networkBits = difficultyForBlock(blockHeight, {
-        difficultyStartBits: app.config.difficultyStartBits,
-        difficultyStepBlocks: app.config.difficultyStepBlocks,
-        difficultyMaxBits: app.config.difficultyMaxBits,
-      });
-      const shareBits = app.config.poolShareBits;
+      const networkBits = difficultyForBlock(blockHeight, assetToScheduleOpts(asset));
+      const shareBits = asset.poolShareBits;
 
       // Active miners + per-miner share counts in last 60s, used to
       // estimate hashrate. 2^share_bits hashes per share by definition.
       const recent = (await app.pool.query<{ pubkey: string; n: string }>(
         `SELECT pubkey, count(*)::text AS n
            FROM pool_shares
-          WHERE submitted_at > now() - interval '60 seconds'
+          WHERE asset_id=$1::uuid AND submitted_at > now() - interval '60 seconds'
           GROUP BY pubkey`,
+        [asset.id],
       )).rows;
       let totalRecentShares = 0n;
       for (const r of recent) totalRecentShares += BigInt(r.n);
@@ -623,24 +653,17 @@ export async function poolRoutes(app: FastifyInstance) {
       let yourShares = 0n;
       if (session && open) {
         const r = (await app.pool.query<{ n: string }>(
-          `SELECT count(*)::text AS n FROM pool_shares WHERE round_id = $1::bigint AND pubkey = $2`,
-          [open.id, session.pubkey],
+          `SELECT count(*)::text AS n FROM pool_shares WHERE asset_id=$1::uuid AND round_id = $2::bigint AND pubkey = $3`,
+          [asset.id, open.id, session.pubkey],
         )).rows[0];
         yourShares = r ? BigInt(r.n) : 0n;
       }
 
       // Schedule helpers for the estimated payout preview.
-      const reward = currentRewardForBlock(blockHeight, {
-        baseRewardBaseUnits: app.config.baseRewardBaseUnits,
-        halvingIntervalBlocks: app.config.halvingIntervalBlocks,
-        difficultyStartBits: app.config.difficultyStartBits,
-        difficultyStepBlocks: app.config.difficultyStepBlocks,
-        difficultyMaxBits: app.config.difficultyMaxBits,
-        maxSupplyRpow: app.config.mintMaxSupply,
-      });
-      const treasuryCut = (reward * BigInt(app.config.poolFeeBps)) / 10000n;
+      const reward = currentRewardForBlock(blockHeight, assetToScheduleOpts(asset));
+      const treasuryCut = (reward * BigInt(asset.poolFeeBps)) / 10000n;
       const netReward = reward - treasuryCut;
-      const finderBonus = (netReward * BigInt(app.config.poolFinderBps)) / 10000n;
+      const finderBonus = (netReward * BigInt(asset.poolFinderBps)) / 10000n;
       const proRataPool = netReward - finderBonus;
 
       // Under the new fairness rules, EVERY participant earns a pro-rata
@@ -671,9 +694,10 @@ export async function poolRoutes(app: FastifyInstance) {
                 a.display_name AS ended_by_display_name
            FROM pool_rounds pr
       LEFT JOIN accounts a ON a.pubkey = pr.ended_by_pubkey
-          WHERE pr.ended_at IS NOT NULL
+          WHERE pr.asset_id=$1::uuid AND pr.ended_at IS NOT NULL
        ORDER BY pr.ended_at DESC
           LIMIT 10`,
+        [asset.id],
       )).rows;
 
       // Caller's payout history within the recent closed rounds.
@@ -683,14 +707,17 @@ export async function poolRoutes(app: FastifyInstance) {
         const r = await app.pool.query<{ round_id: string; payout_base_units: string }>(
           `SELECT round_id::text AS round_id, payout_base_units::text AS payout_base_units
              FROM pool_payouts
-            WHERE round_id = ANY($1::bigint[]) AND pubkey = $2`,
-          [recentRoundIds, session.pubkey],
+            WHERE asset_id=$1::uuid AND round_id = ANY($2::bigint[]) AND pubkey = $3`,
+          [asset.id, recentRoundIds, session.pubkey],
         );
         for (const row of r.rows) yourPayouts[row.round_id] = row.payout_base_units;
       }
 
       return {
         enabled: true,
+        asset_id: asset.id,
+        asset_slug: asset.slug,
+        asset_code: asset.displayCode,
         share_difficulty_bits: shareBits,
         network_difficulty_bits: networkBits,
         current_round: open
@@ -705,8 +732,8 @@ export async function poolRoutes(app: FastifyInstance) {
           : null,
         active_miners: recent.length,
         pool_hashrate_hps: Math.round(poolHashratePerSec),
-        pool_fee_bps: app.config.poolFeeBps,
-        finder_bps: app.config.poolFinderBps,
+        pool_fee_bps: asset.poolFeeBps,
+        finder_bps: asset.poolFinderBps,
         gross_reward_base_units: reward.toString(),
         recent_payouts: recentClosedRows.map((r) => ({
           round_id: r.id,
@@ -722,7 +749,9 @@ export async function poolRoutes(app: FastifyInstance) {
     });
     reply.header('cache-control', 'private, max-age=0');
     return body;
-  });
+  };
+  app.get('/pool/stats', statsHandler);
+  app.get('/assets/:asset_slug/pool/stats', statsHandler);
 
   // ---- GET /pool/rounds -----------------------------------------------------
   // Paginated history of CLOSED pool rounds, newest first. Powers the
@@ -737,10 +766,12 @@ export async function poolRoutes(app: FastifyInstance) {
     cursor: z.string().regex(/^\d+$/).optional(),
     limit: z.coerce.number().int().min(1).max(100).optional().default(50),
   });
-  app.get('/pool/rounds', async (req, reply) => {
+  const roundsHandler = async (req: any, reply: any) => {
     if (!app.config.poolEnabled) {
       return reply.code(503).send({ error: 'POOL_DISABLED', message: 'pool mining is disabled' });
     }
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
     const qp = RoundsQuery.safeParse(req.query);
     if (!qp.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });
@@ -748,7 +779,7 @@ export async function poolRoutes(app: FastifyInstance) {
     const { cursor, limit } = qp.data;
     const session = app.readSession(req);
 
-    const params: unknown[] = [];
+    const params: unknown[] = [asset.id];
     let cursorClause = '';
     if (cursor) {
       params.push(cursor);
@@ -785,7 +816,7 @@ export async function poolRoutes(app: FastifyInstance) {
               a.display_name AS ended_by_display_name
          FROM pool_rounds pr
     LEFT JOIN accounts a ON a.pubkey = pr.ended_by_pubkey
-        WHERE pr.ended_at IS NOT NULL
+        WHERE pr.asset_id=$1::uuid AND pr.ended_at IS NOT NULL
           ${cursorClause}
      ORDER BY pr.id DESC
         LIMIT ${limitParam}`,
@@ -803,8 +834,8 @@ export async function poolRoutes(app: FastifyInstance) {
       const r = await app.pool.query<{ round_id: string; payout_base_units: string }>(
         `SELECT round_id::text AS round_id, payout_base_units::text AS payout_base_units
            FROM pool_payouts
-          WHERE round_id = ANY($1::bigint[]) AND pubkey = $2`,
-        [ids, session.pubkey],
+          WHERE asset_id=$1::uuid AND round_id = ANY($2::bigint[]) AND pubkey = $3`,
+        [asset.id, ids, session.pubkey],
       );
       for (const row of r.rows) yourPayouts[row.round_id] = row.payout_base_units;
     }
@@ -832,7 +863,9 @@ export async function poolRoutes(app: FastifyInstance) {
 
     reply.header('cache-control', 'public, max-age=3, stale-while-revalidate=15');
     return body;
-  });
+  };
+  app.get('/pool/rounds', roundsHandler);
+  app.get('/assets/:asset_slug/pool/rounds', roundsHandler);
 }
 
 function recomputeHashTrailingZeros(noncePrefix: Buffer, nonce: bigint): number {

@@ -18,6 +18,7 @@ import { faucetRoutes } from './routes/faucet.js';
 import { trollboxRoutes } from './routes/trollbox.js';
 import { claimRoutes } from './routes/claim.js';
 import { poolRoutes } from './routes/pool.js';
+import { assetsRoutes } from './routes/assets.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -88,7 +89,7 @@ export interface AppCaches {
   /** Per (lower-cased) display-name /lookup responses; null = miss. */
   lookup: TtlCache<string, unknown | null>;
   /** Public /ledger and /ledger/stats pre-serialized response. */
-  ledger: TtlCache<'singleton', CachedJsonResponse>;
+  ledger: TtlCache<string, CachedJsonResponse>;
   /** Public /ledger/events pre-serialized pages, keyed by cursor + limit. */
   ledgerEvents: TtlCache<string, CachedJsonResponse>;
   /** Public /stats/leaderboard top-100 pre-serialized response, keyed by sort variant. */
@@ -155,7 +156,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     me: new TtlCache<string, unknown>({ ttlMs: 2_000, maxSize: 50_000 }),
     activity: new TtlCache<string, unknown>({ ttlMs: 2_000, maxSize: 50_000 }),
     lookup: new TtlCache<string, unknown | null>({ ttlMs: 30_000, maxSize: 50_000 }),
-    ledger: new TtlCache<'singleton', CachedJsonResponse>({ ttlMs: 5_000, maxSize: 1 }),
+    ledger: new TtlCache<string, CachedJsonResponse>({ ttlMs: 5_000, maxSize: 10_000 }),
     ledgerEvents: new TtlCache<string, CachedJsonResponse>({ ttlMs: 1_500, maxSize: 256 }),
     // Leaderboard moves slowly — the rerank only matters when balances
     // shift. 10s TTL keeps load tiny while still feeling live. Two sort
@@ -180,12 +181,17 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.decorate('invalidateAccount', (pubkey: string) => {
     caches.me.invalidate(pubkey);
     caches.activity.invalidate(pubkey);
+    // Multi-asset cache keys are `${asset_id}|${pubkey}`. The cache helper
+    // has no prefix invalidation, so clear the small per-user caches on writes.
+    caches.me.clear();
+    caches.activity.clear();
     // The explorer-account cache is keyed by `${pubkey}|${filterType}`
     // so we must invalidate every filter variant we might have cached
     // for this pubkey.
     for (const t of ['all', 'mint', 'send', 'receive'] as const) {
       caches.explorerAccount.invalidate(`${pubkey}|${t}`);
     }
+    caches.explorerAccount.clear();
   });
   app.decorate('invalidateLookup', (name: string | null | undefined) => {
     if (!name) return;
@@ -300,6 +306,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   await app.register(authRoutes);
   await app.register(signupRoutes);
+  await app.register(assetsRoutes);
   await app.register(meRoutes);
   await app.register(accountRoutes);
   await app.register(challengeRoutes);

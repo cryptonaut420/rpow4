@@ -8,6 +8,7 @@ import { useWallet } from '../wallet/WalletProvider.js';
 import type { ActivityEntry, ActivityResponse } from '@rpow/shared';
 import { shortPubkey } from '@rpow/shared';
 import { formatRpow } from '../lib/format.js';
+import { useAsset } from '../assets/AssetProvider.js';
 
 /** Format an ISO timestamp as a short human-readable relative time or date. */
 function formatTs(iso: string): string {
@@ -27,18 +28,28 @@ function formatTs(iso: string): string {
 
 const PAGE_SIZE = 50;
 
-type Filter = 'all' | 'mint' | 'send' | 'receive';
+// Filter chips include 'burn' so users can audit launch fees and any
+// future burn flows. 'genesis' is folded into 'mint' since founder
+// allocations show up alongside mining mints in the same column.
+type Filter = 'all' | 'mint' | 'send' | 'receive' | 'burn';
 
 const FILTER_LABEL: Record<Filter, string> = {
   all: 'all',
   mint: 'mints',
   send: 'sends',
   receive: 'receives',
+  burn: 'burns',
 };
 
 export function ActivityPage() {
-  usePageMeta('Activity', 'Your personal RPOW4 transaction history — minted tokens, sends, and receives.');
   const wallet = useWallet();
+  const { selectedSlug, selectedAsset } = useAsset();
+  const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  const assetNickname = selectedAsset?.nickname ?? assetCode;
+  usePageMeta(
+    `${assetCode} Activity`,
+    `Your personal ${assetCode} (${assetNickname}) transaction history.`,
+  );
   const [items, setItems] = useState<ActivityEntry[]>([]);
   const [balance, setBalance] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState<number | null>(null);
@@ -54,7 +65,7 @@ export function ActivityPage() {
     setLoading(true);
     setError('');
     const apiFilter = filter === 'all' ? undefined : filter;
-    api.activity(undefined, PAGE_SIZE, apiFilter)
+    api.activity(undefined, PAGE_SIZE, apiFilter, selectedSlug)
       .then((r: ActivityResponse) => {
         setItems(r.items);
         setBalance(r.balance_base_units);
@@ -64,7 +75,7 @@ export function ActivityPage() {
       })
       .catch((e: any) => setError(e?.message ?? 'failed to load activity'))
       .finally(() => setLoading(false));
-  }, [wallet.status, filter]);
+  }, [wallet.status, filter, selectedSlug]);
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
@@ -72,7 +83,7 @@ export function ActivityPage() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     const apiFilter = filter === 'all' ? undefined : filter;
-    api.activity(nextCursor, PAGE_SIZE, apiFilter)
+    api.activity(nextCursor, PAGE_SIZE, apiFilter, selectedSlug)
       .then((r: ActivityResponse) => {
         setItems((prev) => [...prev, ...r.items]);
         setNextCursor(r.next_cursor);
@@ -81,11 +92,16 @@ export function ActivityPage() {
       .finally(() => setLoadingMore(false));
   };
 
-  if (wallet.status === 'loading') return <Panel title="ACTIVITY"><div>loading...</div></Panel>;
+  // Panel title prominently includes the active RPOW version so users
+  // never have to second-guess which asset's activity they're viewing
+  // (especially after switching from a custom asset back to RPOW4.0).
+  const panelTitle = `${assetCode} · ${assetNickname.toUpperCase()} ACTIVITY`;
+
+  if (wallet.status === 'loading') return <Panel title={panelTitle}><div>loading...</div></Panel>;
 
   if (wallet.status !== 'unlocked') {
     return (
-      <Panel title="ACTIVITY">
+      <Panel title={panelTitle}>
         <div>not signed in.</div>
         <div style={{ marginTop: 8 }}>
           <Link to="/login">[ {wallet.status === 'locked' ? 'unlock wallet' : 'create or import wallet'} ]</Link>
@@ -95,13 +111,13 @@ export function ActivityPage() {
   }
 
   return (
-    <Panel title="ACTIVITY">
+    <Panel title={panelTitle}>
       {/* Balance + count header */}
       {balance !== null && (
         <div style={{ display: 'flex', gap: 24, marginBottom: 12, flexWrap: 'wrap' }}>
           <span>
             <span style={{ color: 'var(--dim)', fontSize: 12 }}>BALANCE  </span>
-            <strong>{formatRpow(balance)} RPOW</strong>
+            <strong>{formatRpow(balance)} {assetCode}</strong>
           </span>
           {totalCount !== null && (
             <span style={{ color: 'var(--dim)', fontSize: 12 }}>
@@ -113,7 +129,7 @@ export function ActivityPage() {
 
       {/* Filter tabs */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
-        {(['all', 'mint', 'send', 'receive'] as Filter[]).map((f) => (
+        {(['all', 'mint', 'send', 'receive', 'burn'] as Filter[]).map((f) => (
           <FilterTab
             key={f}
             active={filter === f}
@@ -137,7 +153,7 @@ export function ActivityPage() {
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {items.map((e, idx) => (
-              <ActivityRow key={e.id ?? `${e.event_seq}-${idx}`} entry={e} />
+              <ActivityRow key={e.id ?? `${e.event_seq}-${idx}`} entry={e} assetCode={assetCode} />
             ))}
           </div>
 
@@ -168,13 +184,21 @@ function FilterTab({ active, onClick, label }: { active: boolean; onClick: () =>
   );
 }
 
-function ActivityRow({ entry: e }: { entry: ActivityEntry }) {
+function ActivityRow({ entry: e, assetCode }: { entry: ActivityEntry; assetCode: string }) {
+  // Tag, sign, and color are picked per event type so the row at-a-glance
+  // tells you whether this was money out (-) or in (+) and which kind of
+  // event it was.
   const tag = e.type.toUpperCase();
-  const sign = e.type === 'send' ? '-' : '+';
+  const isOutbound = e.type === 'send' || e.type === 'burn';
+  const sign = isOutbound ? '-' : '+';
   const amt = `${sign}${formatRpow(e.amount_base_units)}`;
   const tagColor =
     e.type === 'send' ? 'var(--dim)' :
-    e.type === 'receive' ? 'var(--accent)' : 'var(--fg)';
+    e.type === 'burn' ? 'var(--error)' :
+    e.type === 'receive' || e.type === 'genesis' ? 'var(--accent)' :
+    'var(--fg)';
+  const counterpartyLabel = e.type === 'send' ? 'to' : 'from';
+  const showCounterparty = e.counterparty_pubkey && (e.type === 'send' || e.type === 'receive');
 
   return (
     <div style={{
@@ -188,18 +212,19 @@ function ActivityRow({ entry: e }: { entry: ActivityEntry }) {
       <div style={{ display: 'flex', gap: 12, alignItems: 'baseline', flexWrap: 'wrap' }}>
         <span style={{ color: 'var(--dim)', fontSize: 11 }}>{formatTs(e.at)}</span>
         <span style={{ color: tagColor, fontWeight: 'bold' }}>{tag}</span>
-        <span style={{ fontWeight: 'bold' }}>{amt} RPOW</span>
+        <span style={{ fontWeight: 'bold' }}>{amt} {assetCode}</span>
         {e.fee_base_units && e.fee_base_units !== '0' && (
           <span style={{ color: 'var(--dim)', fontSize: 11 }}>
-            fee: {formatRpow(e.fee_base_units)} RPOW
+            fee: {formatRpow(e.fee_base_units)} {assetCode}
           </span>
         )}
       </div>
 
-      {/* Row 2: counterparty */}
-      {e.counterparty_pubkey && (
+      {/* Row 2: counterparty (transfers only). Burns and genesis events
+       * have no counterparty — the memo line below carries their context. */}
+      {showCounterparty && e.counterparty_pubkey && (
         <div style={{ color: 'var(--dim)', fontSize: 12 }}>
-          {e.type === 'send' ? 'to' : 'from'}{': '}
+          {counterpartyLabel}{': '}
           <Link
             to={`/explorer/account/${e.counterparty_pubkey}`}
             title={e.counterparty_pubkey}

@@ -1,5 +1,6 @@
-import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { buildCachedJsonResponse, type CachedJsonResponse } from '../cache.js';
+import { resolveAsset, type AssetContext } from '../assets.js';
 
 const JSON_CONTENT_TYPE = 'application/json; charset=utf-8';
 
@@ -50,8 +51,8 @@ export async function statsRoutes(app: FastifyInstance) {
     return reply.send(cached.json);
   }
 
-  async function leaderboardCachedResponse(sort: SortKey): Promise<CachedJsonResponse> {
-    return app.caches.leaderboard.get(sort, async () => {
+  async function leaderboardCachedResponse(asset: AssetContext, sort: SortKey): Promise<CachedJsonResponse> {
+    return app.caches.leaderboard.get(`${asset.id}|${sort}`, async () => {
       const orderColumn = SORT_COLUMNS[sort];
       const filterColumn = orderColumn;
       const { rows } = await app.pool.query<{
@@ -75,14 +76,17 @@ export async function statsRoutes(app: FastifyInstance) {
            b.blocks_mined::text          AS blocks_mined
          FROM account_balances b
          JOIN accounts a ON a.pubkey = b.pubkey
-         WHERE ${filterColumn} > 0
+         WHERE b.asset_id=$2::uuid AND ${filterColumn} > 0
          ORDER BY ${orderColumn} DESC, b.pubkey
          LIMIT $1`,
-        [LEADERBOARD_LIMIT],
+        [LEADERBOARD_LIMIT, asset.id],
       );
 
       const body = {
         sort,
+        asset_id: asset.id,
+        asset_slug: asset.slug,
+        asset_code: asset.displayCode,
         entries: rows.map((r) => ({
           rank: Number(r.rank),
           pubkey: r.pubkey,
@@ -100,7 +104,9 @@ export async function statsRoutes(app: FastifyInstance) {
     });
   }
 
-  app.get<{ Querystring: { sort?: string } }>('/stats/leaderboard', async (req, reply) => {
+  const handler = async (req: FastifyRequest<{ Querystring: { sort?: string } }>, reply: FastifyReply) => {
+    const asset = await resolveAsset(app, req);
+    if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
     const sortRaw = req.query.sort;
     const sort: SortKey =
       sortRaw === 'minted' ? 'minted' :
@@ -111,12 +117,15 @@ export async function statsRoutes(app: FastifyInstance) {
     if ((sort as string) === 'invalid') {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'sort must be balance or minted' });
     }
-    const cached = await leaderboardCachedResponse(sort);
+    const cached = await leaderboardCachedResponse(asset, sort);
     return sendCachedJson(
       reply,
       cached,
       req.headers['if-none-match'] as string | undefined,
       'public, max-age=10, stale-while-revalidate=60',
     );
-  });
+  };
+
+  app.get('/stats/leaderboard', handler);
+  app.get('/assets/:asset_slug/stats/leaderboard', handler);
 }
