@@ -20,6 +20,7 @@ import { claimRoutes } from './routes/claim.js';
 import { poolRoutes } from './routes/pool.js';
 import { assetsRoutes } from './routes/assets.js';
 import { marketsRoutes } from './routes/markets.js';
+import { newsRoutes } from './routes/news.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -322,6 +323,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(claimRoutes);
   await app.register(poolRoutes);
   await app.register(marketsRoutes);
+  await app.register(newsRoutes);
 
   // Public-key PEM is fully determined by the signing config; precompute
   // once at startup instead of rebuilding on every request.

@@ -1,4 +1,4 @@
-import { useEffect, useState, type SyntheticEvent } from 'react';
+import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
 import { HashRouter, Route, Routes, NavLink, useLocation } from 'react-router-dom';
 import { applyTheme, loadTheme, nextTheme, type Theme } from './theme.js';
 import { useMe } from './hooks/useMe.js';
@@ -14,6 +14,7 @@ import { ExplorerPage } from './pages/Explorer.js';
 import { FaucetPage } from './pages/Faucet.js';
 import { TrollboxPage } from './pages/Trollbox.js';
 import { DocsPage } from './pages/Docs.js';
+import { NewsPage } from './pages/News.js';
 import { HistoryPage } from './pages/History.js';
 import { ClaimPage } from './pages/Claim.js';
 import { RedeemPage } from './pages/Redeem.js';
@@ -52,6 +53,7 @@ export default function App() {
 function AppShell() {
   const [theme, setTheme] = useState<Theme>(loadTheme());
   const [openNav, setOpenNav] = useState<string | null>(null);
+  const navRef = useRef<HTMLElement | null>(null);
   useEffect(() => { applyTheme(theme); }, [theme]);
   const wallet = useWallet();
   const { selectedAsset, selectedSlug, assetPath, isDefaultAsset } = useAsset();
@@ -83,8 +85,30 @@ function AppShell() {
   const tradeNavActive = /\/markets(\/|$)/.test(path) || /\/launch$/.test(path);
   const infoNavActive = path === '/ledger'
     || path === '/history'
+    || /\/news(\/|$)/.test(path)
     || path === '/docs'
     || path === '/ecosystem';
+  useEffect(() => {
+    if (!openNav) return;
+
+    function closeOnOutsidePointer(e: PointerEvent) {
+      const target = e.target;
+      if (target instanceof Node && navRef.current?.contains(target)) return;
+      setOpenNav(null);
+    }
+
+    function closeOnEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpenNav(null);
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [openNav]);
+
   function navToggle(id: string) {
     return (e: SyntheticEvent<HTMLDetailsElement>) => {
       const isOpen = e.currentTarget.open;
@@ -105,6 +129,7 @@ function AppShell() {
           </div>
           <AssetBar />
           <nav
+            ref={navRef}
             className="primary-nav"
             aria-label="primary"
             onClick={(e) => {
@@ -141,6 +166,7 @@ function AppShell() {
               <summary>[ info ▾ ]</summary>
               <div className="nav-menu-panel">
                 <NavLink to="/ledger">[ about ]</NavLink>
+                <NavLink to="/news">[ news ]</NavLink>
                 <NavLink to="/history">[ history ]</NavLink>
                 <NavLink to="/docs">[ docs ]</NavLink>
                 <NavLink to="/ecosystem">[ ecosystem ]</NavLink>
@@ -200,6 +226,8 @@ function AppShell() {
             <Route path="/claim" element={<ClaimPage />} />
             <Route path="/redeem/:id" element={<RedeemPage />} />
             <Route path="/history" element={<HistoryPage />} />
+            <Route path="/news" element={<NewsPage />} />
+            <Route path="/news/:slug" element={<NewsPage />} />
             <Route path="/docs" element={<DocsPage />} />
             <Route path="/ecosystem" element={<EcosystemPage />} />
             <Route path="/pool/history" element={<PoolHistoryPage />} />

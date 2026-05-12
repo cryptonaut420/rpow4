@@ -134,6 +134,8 @@ export interface MeResponse {
   received_base_units: string;
   /** True when ops waived per-send fees for this pubkey (`toggle-send-fees` script). */
   send_fees_waived: boolean;
+  /** True when ops granted publishing access for news/changelog posts. */
+  is_admin: boolean;
 }
 
 /**
@@ -490,6 +492,47 @@ export interface MarketOrderCancelResponse {
   released_base_units: string;
 }
 
+// ---- news / changelog -------------------------------------------------------
+
+export type NewsPostKind = 'announcement' | 'changelog' | 'update';
+
+export interface NewsPost {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  body_markdown: string;
+  kind: NewsPostKind;
+  author_pubkey: string;
+  author_display_name: string | null;
+  published: boolean;
+  created_at: string;
+  updated_at: string;
+  published_at?: string;
+}
+
+export interface NewsListResponse {
+  posts: NewsPost[];
+}
+
+export interface NewsDetailResponse {
+  post: NewsPost;
+}
+
+export interface NewsCreateRequestBody {
+  title: string;
+  slug?: string;
+  summary?: string;
+  body_markdown: string;
+  kind?: NewsPostKind;
+  published?: boolean;
+}
+
+export interface NewsCreateResponse {
+  ok: true;
+  post: NewsPost;
+}
+
 // ---- errors -----------------------------------------------------------------
 
 export type ApiErrorCode =
@@ -512,6 +555,8 @@ export type ApiErrorCode =
   | 'ORDER_NOT_FOUND'
   | 'ORDER_NOT_OPEN'
   | 'ORDER_WOULD_NOT_FILL'
+  | 'FORBIDDEN'
+  | 'SLUG_TAKEN'
   | 'INTERNAL';
 
 export interface ApiError { error: ApiErrorCode; message: string; retry_after?: number }

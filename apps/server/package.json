@@ -8,7 +8,8 @@
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "test": "vitest run",
-    "toggle-send-fees": "tsx src/scripts/toggle-send-fees.ts"
+    "toggle-send-fees": "tsx src/scripts/toggle-send-fees.ts",
+    "toggle-admin": "tsx src/scripts/toggle-admin.ts"
   },
   "dependencies": {
     "@fastify/compress": "^7.0.3",

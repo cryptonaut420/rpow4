@@ -8,7 +8,8 @@
     "lint": "tsc -b --noEmit && eslint .",
     "dev:server": "npm --workspace apps/server run dev",
     "dev:web": "npm --workspace apps/web run dev",
-    "toggle-send-fees": "npm --workspace @rpow/server run toggle-send-fees --"
+    "toggle-send-fees": "npm --workspace @rpow/server run toggle-send-fees --",
+    "toggle-admin": "npm --workspace @rpow/server run toggle-admin --"
   },
   "engines": { "node": ">=22.0.0" },
   "devDependencies": {

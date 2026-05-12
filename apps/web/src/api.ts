@@ -42,6 +42,10 @@ import type {
   MintRequestBody,
   MintResponse,
   MyClaimsResponse,
+  NewsCreateRequestBody,
+  NewsCreateResponse,
+  NewsDetailResponse,
+  NewsListResponse,
   SendRequestBody,
   SendResponse,
   SetDisplayNameRequestBody,
@@ -222,6 +226,11 @@ export const api = {
     call<MarketOrderCreateResponse>('POST', `/markets/${encodeURIComponent(marketId)}/orders`, b),
   cancelMarketOrder: (marketId: string, orderId: string, b: MarketOrderCancelRequestBody) =>
     call<MarketOrderCancelResponse>('POST', `/markets/${encodeURIComponent(marketId)}/orders/${encodeURIComponent(orderId)}/cancel`, b),
+
+  // News / changelog
+  news: (limit = 25) => call<NewsListResponse>('GET', `/news?limit=${limit}`, undefined, { cache: 'no-store' }),
+  newsPost: (slug: string) => call<NewsDetailResponse>('GET', `/news/${encodeURIComponent(slug)}`, undefined, { cache: 'no-store' }),
+  createNewsPost: (b: NewsCreateRequestBody) => call<NewsCreateResponse>('POST', '/news', b),
 
   // Trollbox (public read, signed write)
   trollbox: (cursor?: string, limit?: number) => {

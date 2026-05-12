@@ -8,6 +8,7 @@ interface MeRow {
   sent: string;
   received: string;
   send_fees_waived: boolean;
+  is_admin: boolean;
 }
 
 export async function meRoutes(app: FastifyInstance) {
@@ -26,6 +27,7 @@ export async function meRoutes(app: FastifyInstance) {
       const { rows } = await app.pool.query<MeRow>(
         `SELECT a.display_name,
                 coalesce(a.send_fees_waived, false) AS send_fees_waived,
+                coalesce(a.is_admin, false) AS is_admin,
                 coalesce(b.spendable_base_units,0)::text AS spendable,
                 coalesce(b.minted_base_units,0)::text AS minted,
                 coalesce(b.sent_base_units,0)::text AS sent,
@@ -48,6 +50,7 @@ export async function meRoutes(app: FastifyInstance) {
         sent_base_units: account.sent,
         received_base_units: account.received,
         send_fees_waived: account.send_fees_waived,
+        is_admin: account.is_admin,
       };
     });
     if (body === null) {

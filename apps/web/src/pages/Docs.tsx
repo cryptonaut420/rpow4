@@ -1195,6 +1195,123 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
       ],
     },
     {
+      id: 'news',
+      title: 'Project news / changelog',
+      intro: (
+        <p style={{ margin: '4px 0 0' }}>
+          Public mini-blog endpoints for release notes, announcements, and
+          changelogs. Publishing is restricted to logged-in accounts with the
+          ops-controlled <code>is_admin</code> flag.
+        </p>
+      ),
+      endpoints: [
+        {
+          id: 'news-list',
+          method: 'GET',
+          path: '/news',
+          auth: 'public',
+          summary: 'List published news posts.',
+          description: (
+            <p>
+              Returns the newest published posts first. Markdown is returned as
+              source text in <code>body_markdown</code>; clients should render
+              it safely rather than trusting raw HTML.
+            </p>
+          ),
+          request: { kind: 'query', example: '?limit=25' },
+          response: `{
+  "posts": [
+    {
+      "id": "uuid",
+      "slug": "markets-launch-notes",
+      "title": "Markets launch notes",
+      "summary": "A short release note.",
+      "body_markdown": "## Changes\\n\\n- Added markets.",
+      "kind": "changelog",
+      "author_pubkey": "8x...",
+      "author_display_name": "admin",
+      "published": true,
+      "created_at": "2026-05-12T20:00:00.000Z",
+      "updated_at": "2026-05-12T20:00:00.000Z",
+      "published_at": "2026-05-12T20:00:00.000Z"
+    }
+  ]
+}`,
+          curl: `curl "${B}/news?limit=25"`,
+          js: `const news = await fetch('${B}/news?limit=25').then(r => r.json());`,
+        },
+        {
+          id: 'news-detail',
+          method: 'GET',
+          path: '/news/:slug',
+          auth: 'public',
+          summary: 'Read a single published news post.',
+          description: <p>Looks up a post by its stable URL slug.</p>,
+          response: `{
+  "post": {
+    "slug": "markets-launch-notes",
+    "title": "Markets launch notes",
+    "body_markdown": "## Changes\\n\\n- Added markets."
+  }
+}`,
+          errors: [{ status: 404, code: 'NOT_FOUND', when: 'no published post exists for that slug' }],
+          curl: `curl "${B}/news/markets-launch-notes"`,
+          js: `const post = await fetch('${B}/news/markets-launch-notes').then(r => r.json());`,
+        },
+        {
+          id: 'news-create',
+          method: 'POST',
+          path: '/news',
+          auth: 'session',
+          summary: 'Publish a Markdown news post as an admin.',
+          description: (
+            <p>
+              Requires a valid session cookie and <code>accounts.is_admin = true</code>.
+              Use the ops script <code>npm run toggle-admin -- &lt;pubkey-or-handle&gt;</code>
+              to grant or revoke publishing access.
+            </p>
+          ),
+          request: {
+            kind: 'body',
+            example: `{
+  "title": "Markets launch notes",
+  "summary": "A short release note.",
+  "kind": "changelog",
+  "body_markdown": "## Changes\\n\\n- Added markets.",
+  "published": true
+}`,
+          },
+          response: `{
+  "ok": true,
+  "post": {
+    "slug": "markets-launch-notes",
+    "title": "Markets launch notes",
+    "published": true
+  }
+}`,
+          errors: [
+            { status: 401, code: 'UNAUTHORIZED', when: 'session cookie is missing or invalid' },
+            { status: 403, code: 'FORBIDDEN', when: 'caller is not an admin' },
+            { status: 409, code: 'SLUG_TAKEN', when: 'a unique slug could not be generated' },
+          ],
+          curl: `curl -X POST "${B}/news" \\
+  -H "content-type: application/json" \\
+  -b "rpow_session=..." \\
+  -d '{"title":"Markets launch notes","kind":"changelog","body_markdown":"## Changes\\n\\n- Added markets."}'`,
+          js: `await fetch('${B}/news', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    title: 'Markets launch notes',
+    kind: 'changelog',
+    body_markdown: '## Changes\\n\\n- Added markets.'
+  })
+});`,
+        },
+      ],
+    },
+    {
       id: 'markets',
       title: 'Internal markets (spot trading)',
       intro: (
