@@ -343,17 +343,6 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   display: grid;
   gap: 12px;
 }
-.news-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 14px;
-  align-items: start;
-}
-.news-sidebar {
-  /* stick to the top as the user scrolls the main post */
-  position: sticky;
-  top: 12px;
-}
 
 /* Kind badges */
 .news-kind-badge {
@@ -382,20 +371,39 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   background: rgba(160, 196, 255, 0.06);
 }
 
-/* Featured post */
-.news-post {
+/* Feed — vertical list of full posts */
+.news-feed {
   display: grid;
-  gap: 16px;
+  gap: 0;
 }
+.news-post-entry {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--dimmer);
+  display: grid;
+  gap: 14px;
+  scroll-margin-top: 16px;
+}
+.news-post-entry:first-child {
+  padding-top: 0;
+}
+.news-post-entry:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.news-post-entry.highlighted {
+  border-left: 3px solid var(--accent);
+  padding-left: 14px;
+  margin-left: -14px;
+}
+
+/* Post header */
 .news-post-header {
   display: grid;
   gap: 8px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--dimmer);
 }
 .news-post-title {
   margin: 0;
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1.3;
   color: var(--fg);
 }
@@ -410,6 +418,8 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
 .news-meta-sep {
   color: var(--dimmer);
 }
+
+/* Summary callout */
 .news-summary {
   padding: 10px 14px;
   border-left: 3px solid var(--accent-dim);
@@ -428,8 +438,8 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   font-size: 14px;
 }
 .news-markdown h2 {
-  margin: 6px 0 0;
-  font-size: 15px;
+  margin: 4px 0 0;
+  font-size: 14px;
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -437,7 +447,7 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   padding-bottom: 4px;
 }
 .news-markdown h3 {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   font-size: 13px;
   color: var(--accent);
   text-transform: uppercase;
@@ -475,62 +485,24 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   text-underline-offset: 2px;
 }
 
-/* Archive sidebar */
-.news-list {
-  display: grid;
-  gap: 6px;
-}
-.news-card {
-  padding: 10px 12px;
+/* Load more */
+.news-load-more {
+  margin-top: 18px;
+  padding: 8px 14px;
+  background: transparent;
   border: 1px solid var(--dimmer);
-  background: rgba(0, 0, 0, 0.12);
-  transition: border-color 0.15s, background 0.15s;
-}
-.news-card:hover {
-  border-color: var(--accent-dim);
-  background: rgba(127, 255, 212, 0.03);
-}
-.news-card.selected {
-  border-color: var(--accent-dim);
-  border-left: 3px solid var(--accent);
-  background: rgba(127, 255, 212, 0.04);
-}
-.news-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  margin-bottom: 6px;
-}
-.news-card-date {
-  color: var(--dimmer);
-  font-size: 11px;
-}
-.news-card h3 {
-  margin: 0 0 4px;
-  font-size: 13px;
-  line-height: 1.4;
-}
-.news-card h3 a {
-  color: var(--fg);
-  text-decoration: none;
-}
-.news-card h3 a:hover {
-  color: var(--accent);
-}
-.news-card-summary {
-  margin: 0 0 5px;
   color: var(--dim);
+  cursor: pointer;
+  font-family: inherit;
   font-size: 12px;
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  transition: border-color 0.15s, color 0.15s;
+  justify-self: start;
 }
-.news-card-author {
-  color: var(--dimmer);
-  font-size: 11px;
+.news-load-more:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
 }
 
 /* Admin composer */
@@ -2113,11 +2085,9 @@ main { margin-top: 4px; }
   .supply-stats { flex-direction: column; gap: 2px; align-items: flex-start; }
   .supply-stats > span:last-child { color: var(--dimmer); }
   .app-footer { margin-top: 18px; font-size: 11px; gap: 10px; }
-  .news-layout {
-    grid-template-columns: 1fr;
-  }
-  .news-sidebar {
-    position: static;
+  .news-post-entry.highlighted {
+    margin-left: -10px;
+    padding-left: 10px;
   }
   .mining-bar-inner {
     padding: 6px 10px 10px;

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useParams } from 'react-router-dom';
 import type { NewsPost, NewsPostKind } from '@rpow/shared';
 import { api } from '../api.js';
 import { Panel } from '../components/Panel.js';
@@ -8,6 +8,8 @@ import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { shortPubkey } from '@rpow/shared';
 import { DEFAULT_ASSET_SLUG } from '../assets/AssetProvider.js';
+
+const PAGE_SIZE = 5;
 
 const KIND_LABEL: Record<NewsPostKind, string> = {
   announcement: 'announcement',
@@ -119,19 +121,33 @@ function KindBadge({ kind }: { kind: NewsPostKind }) {
   return <span className={`news-kind-badge news-kind-badge--${kind}`}>{KIND_LABEL[kind]}</span>;
 }
 
-function NewsCard({ post, selected }: { post: NewsPost; selected?: boolean }) {
+function NewsPostEntry({ post, highlighted }: { post: NewsPost; highlighted?: boolean }) {
+  const ref = useRef<HTMLElement>(null);
   const author = post.author_display_name ?? shortPubkey(post.author_pubkey);
-  const date = new Date(post.published_at ?? post.created_at ?? '');
-  const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+
+  useEffect(() => {
+    if (highlighted && ref.current) {
+      ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [highlighted]);
+
   return (
-    <article className={`news-card ${selected ? 'selected' : ''}`.trim()}>
-      <div className="news-card-header">
+    <article
+      id={`post-${post.slug}`}
+      ref={ref}
+      className={`news-post-entry${highlighted ? ' highlighted' : ''}`}
+    >
+      <div className="news-post-header">
         <KindBadge kind={post.kind} />
-        <span className="news-card-date">{dateStr}</span>
+        <h2 className="news-post-title">{post.title}</h2>
+        <div className="news-post-meta">
+          <span>{formatDate(post.published_at ?? post.created_at)}</span>
+          <span className="news-meta-sep">·</span>
+          <span>by {author}</span>
+        </div>
       </div>
-      <h3><Link to={`/news/${post.slug}`}>{post.title}</Link></h3>
-      {post.summary ? <p className="news-card-summary">{post.summary}</p> : null}
-      <div className="news-card-author">by {author}</div>
+      {post.summary ? <p className="news-summary">{post.summary}</p> : null}
+      <Markdown source={post.body_markdown} />
     </article>
   );
 }
@@ -218,7 +234,7 @@ export function NewsPage() {
   // most recently viewing.
   const { me } = useMe(DEFAULT_ASSET_SLUG);
   const [posts, setPosts] = useState<NewsPost[]>([]);
-  const [selected, setSelected] = useState<NewsPost | null>(null);
+  const [visible, setVisible] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -227,78 +243,57 @@ export function NewsPage() {
   useEffect(() => {
     setLoading(true);
     setError('');
-    api.news(50)
+    api.news(100)
       .then((r) => setPosts(r.posts))
       .catch((e: any) => setError(e?.message ?? 'failed to load news'))
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!slug) {
-      setSelected(null);
-      return;
-    }
-    api.newsPost(slug)
-      .then((r) => setSelected(r.post))
-      .catch((e: any) => setError(e?.message ?? 'failed to load post'));
-  }, [slug]);
-
-  const featured = selected ?? posts[0] ?? null;
   const isAdmin = wallet.status === 'unlocked' && me?.is_admin;
+  const shown = posts.slice(0, visible);
+  const hasMore = visible < posts.length;
 
   return (
     <div className="news-page">
-      {error ? <Panel title="error"><div className="error">{error}</div></Panel> : null}
-      {loading && posts.length === 0 ? (
-        <Panel title="news / changelog">
+      <Panel title="news / changelog">
+        {loading ? (
           <div className="dim">fetching the latest entries…</div>
-        </Panel>
-      ) : null}
-
-      {!loading && !featured ? (
-        <Panel title="news / changelog">
-          <p className="dim" style={{ marginTop: 0 }}>
-            Nothing has been published here yet. Check back soon — changelogs, releases, and project notes
-            will land on this page.
-          </p>
-          {isAdmin ? (
-            <p className="dim" style={{ marginBottom: 0 }}>
-              You're an admin — scroll down to draft the first post.
+        ) : error ? (
+          <div className="error">{error}</div>
+        ) : posts.length === 0 ? (
+          <div>
+            <p className="dim" style={{ marginTop: 0 }}>
+              Nothing has been published here yet. Check back soon — changelogs, releases, and project
+              notes will land on this page.
             </p>
-          ) : null}
-        </Panel>
-      ) : null}
+            {isAdmin ? (
+              <p className="dim" style={{ marginBottom: 0 }}>
+                You're an admin — scroll down to draft the first post.
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <div className="news-feed">
+            {shown.map((post) => (
+              <NewsPostEntry
+                key={post.id}
+                post={post}
+                highlighted={!!slug && post.slug === slug}
+              />
+            ))}
+            {hasMore ? (
+              <button
+                className="news-load-more"
+                onClick={() => setVisible((v) => v + PAGE_SIZE)}
+              >
+                [ load more — {posts.length - visible} remaining ]
+              </button>
+            ) : null}
+          </div>
+        )}
+      </Panel>
 
-      {featured ? (
-        <div className="news-layout">
-          <Panel title="news / changelog">
-            <article className="news-post">
-              <div className="news-post-header">
-                <KindBadge kind={featured.kind} />
-                <h2 className="news-post-title">{featured.title}</h2>
-                <div className="news-post-meta">
-                  <span>{formatDate(featured.published_at ?? featured.created_at)}</span>
-                  <span className="news-meta-sep">·</span>
-                  <span>by {featured.author_display_name ?? shortPubkey(featured.author_pubkey)}</span>
-                </div>
-              </div>
-              {featured.summary ? <p className="news-summary">{featured.summary}</p> : null}
-              <Markdown source={featured.body_markdown} />
-            </article>
-          </Panel>
-          <aside className="news-sidebar">
-            <Panel title={`archive (${posts.length})`}>
-              <div className="news-list">
-                {posts.map((post) => (
-                  <NewsCard key={post.id} post={post} selected={post.slug === featured.slug} />
-                ))}
-              </div>
-            </Panel>
-          </aside>
-        </div>
-      ) : null}
-
-      {isAdmin ? <AdminComposer onCreated={(post) => setPosts((current) => [post, ...current])} /> : null}
+      {isAdmin ? <AdminComposer onCreated={(post) => { setPosts((current) => [post, ...current]); setVisible((v) => v + 1); }} /> : null}
     </div>
   );
 }
