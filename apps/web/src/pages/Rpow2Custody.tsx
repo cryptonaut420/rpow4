@@ -235,7 +235,6 @@ export function Rpow2CustodyPage() {
   const sendingWithdrawals = adminStatus?.sending_withdrawals ?? [];
   const pendingWithdrawals = adminStatus?.pending_withdrawals ?? [];
   const unattributedDeposits = adminStatus?.unattributed_deposits ?? [];
-  const lastSuccessRel = fmtRelative(adminStatus?.sync.last_success_at ?? status?.sync.last_success_at);
   const isStale = !!silentErr;
 
   return (
@@ -250,14 +249,6 @@ export function Rpow2CustodyPage() {
               Withdrawals are reviewed before they are sent.
             </p>
             <div className="custody-stats">
-              <div>
-                <span className="dim">last refreshed</span>
-                <strong className={isStale ? 'error' : ''}>{lastRefreshedAt ? fmtRelative(lastRefreshedAt) : '—'}</strong>
-              </div>
-              <div>
-                <span className="dim">last sync</span>
-                <strong>{lastSuccessRel}</strong>
-              </div>
               {userStats ? (
                 <>
                   <div>

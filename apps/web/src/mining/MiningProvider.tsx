@@ -104,6 +104,10 @@ export interface MiningContextValue {
    * server distribution rules. */
   mode: MiningMode;
   setMode(mode: MiningMode): void;
+  /** True when pool mining is unlocked for the currently-selected asset.
+   * False if pool_enabled is false or pool_enable_at_difficulty_bits has
+   * not been reached yet by the current network difficulty. */
+  poolAvailable: boolean;
   /** Latest snapshot from /pool/stats while pool-mining. null until first
    * poll completes. */
   poolStats: PoolStatsResponse | null;
@@ -138,10 +142,31 @@ export function MiningProvider({ children }: { children: ReactNode }) {
   const [bench, setBench] = useState<HashrateEstimate | null>(null);
   const [mode, setModeState] = useState<MiningMode>(() => loadMode());
   const [poolStats, setPoolStats] = useState<PoolStatsResponse | null>(null);
+
+  // Whether pool mining is currently unlocked for the selected asset.
+  // Uses the most recent challenge difficulty (target) as a proxy for the
+  // current network difficulty; falls back to difficulty_start_bits if no
+  // challenge has been fetched yet in this session.
+  const poolAvailable = useMemo(() => {
+    if (!selectedAsset?.pool_enabled) return false;
+    const threshold = selectedAsset.pool_enable_at_difficulty_bits;
+    if (threshold == null) return true;
+    const currentDifficulty = target ?? selectedAsset.difficulty_start_bits;
+    return currentDifficulty >= threshold;
+  }, [selectedAsset, target]);
+
   const setMode = useCallback((next: MiningMode) => {
     try { localStorage.setItem(MODE_STORAGE_KEY, next); } catch { /* private mode */ }
     setModeState(next);
   }, []);
+
+  // If pool becomes unavailable (e.g. user switches to a low-difficulty asset
+  // that hasn't reached the pool threshold yet), revert to solo automatically.
+  useEffect(() => {
+    if (!poolAvailable && mode === 'pool') {
+      setModeState('solo');
+    }
+  }, [poolAvailable, mode]);
 
   // Worker handle + stop signal. Refs (not state) so the recursive
   // worker callback always sees the latest value without restarting.
@@ -600,11 +625,12 @@ export function MiningProvider({ children }: { children: ReactNode }) {
   // chose to switch, so let them re-press [ MINE ] consciously.
   const switchMode = useCallback((next: MiningMode) => {
     if (next === mode) return;
+    if (next === 'pool' && !poolAvailable) return;
     if (status === 'mining') {
       stop();
     }
     setMode(next);
-  }, [mode, status, stop, setMode]);
+  }, [mode, status, stop, setMode, poolAvailable]);
 
   // Stash the dependencies the polling-tick needs in refs that always
   // hold the latest value. The polling effect itself only depends on
@@ -711,10 +737,11 @@ export function MiningProvider({ children }: { children: ReactNode }) {
     vizHandlesRef,
     mode,
     setMode: switchMode,
+    poolAvailable,
     poolStats,
     start,
     stop,
-  }), [status, target, error, ledger, bench, me, refresh, mode, switchMode, poolStats, start, stop]);
+  }), [status, target, error, ledger, bench, me, refresh, mode, switchMode, poolAvailable, poolStats, start, stop]);
 
   return <MiningContext.Provider value={value}>{children}</MiningContext.Provider>;
 }

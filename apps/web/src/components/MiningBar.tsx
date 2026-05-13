@@ -172,21 +172,23 @@ export function MiningBar() {
 
           <button
             type="button"
-            className={`mining-mode-pill is-${mining.mode}`}
+            className={`mining-mode-pill is-${mining.mode}${!mining.poolAvailable && mining.mode !== 'pool' ? ' pool-locked' : ''}`}
             onClick={() => mining.setMode(mining.mode === 'pool' ? 'solo' : 'pool')}
-            disabled={isExternalAsset}
+            disabled={isExternalAsset || (!mining.poolAvailable && mining.mode !== 'pool')}
             title={
               isExternalAsset
                 ? `${assetCode} is not mineable`
-                :
-              running
-                ? 'switching modes will stop the current run; press [ MINE ] again to resume in the new mode'
-                : mining.mode === 'pool'
-                  ? 'pool mode — share rewards with other miners (2% fee). click to switch to solo.'
-                  : 'solo mode — keep 100% of any block you find. click to join the pool.'
+                : !mining.poolAvailable && mining.mode !== 'pool'
+                  ? `pool mining unlocks at difficulty ${selectedAsset?.pool_enable_at_difficulty_bits ?? '—'} bits — keep mining solo to reach it`
+                  : running
+                    ? 'switching modes will stop the current run; press [ MINE ] again to resume in the new mode'
+                    : mining.mode === 'pool'
+                      ? 'pool mode — share rewards with other miners (2% fee). click to switch to solo.'
+                      : 'solo mode — keep 100% of any block you find. click to join the pool.'
             }
           >
             MODE: <strong>{mining.mode === 'pool' ? 'POOL' : 'SOLO'}</strong>
+            {!mining.poolAvailable && mining.mode !== 'pool' ? <span className="mode-pill-locked"> 🔒</span> : null}
           </button>
 
           <span className="mining-bar-balance" title="your spendable balance">

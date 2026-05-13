@@ -1951,6 +1951,14 @@ main { margin-top: 4px; }
   opacity: 0.6;
   cursor: not-allowed;
 }
+.mining-mode-pill.pool-locked {
+  border-color: var(--dimmer);
+  color: var(--dimmer);
+}
+.mode-pill-locked {
+  font-size: 10px;
+  margin-left: 2px;
+}
 @keyframes mining-pulse {
   0%, 100% { opacity: 0.55; transform: scale(0.85); }
   50%      { opacity: 1;    transform: scale(1.15); }
