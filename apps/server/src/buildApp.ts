@@ -69,6 +69,7 @@ export interface AppConfig {
   trustProxy: boolean | string;
   rpow2ApiBaseUrl?: string;
   rpow2SessionCookie?: string;
+  rpow2CfClearance?: string;
   rpow2BankerEmail?: string;
   rpow2DepositPollEnabled?: boolean;
 }

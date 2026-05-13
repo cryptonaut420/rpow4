@@ -37,6 +37,7 @@ const app = await buildApp({
     trustProxy: env.TRUST_PROXY ? true : '127.0.0.1',
     rpow2ApiBaseUrl: env.RPOW2_API_BASE_URL,
     rpow2SessionCookie: env.RPOW2_SESSION_COOKIE,
+    rpow2CfClearance: env.RPOW2_CF_CLEARANCE,
     rpow2BankerEmail: env.RPOW2_BANKER_EMAIL,
     rpow2DepositPollEnabled: env.RPOW2_DEPOSIT_POLL_ENABLED,
   },

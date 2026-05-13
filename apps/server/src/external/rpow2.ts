@@ -27,9 +27,35 @@ export class Rpow2Client {
   private baseUrl: string;
   private cookie: string;
 
-  constructor(opts: { baseUrl: string; sessionCookie: string }) {
+  constructor(opts: { baseUrl: string; sessionCookie: string; cfClearance?: string }) {
     this.baseUrl = opts.baseUrl.replace(/\/+$/, '');
-    this.cookie = opts.sessionCookie;
+    if (!opts.cfClearance) {
+      this.cookie = opts.sessionCookie;
+      return;
+    }
+    // cfClearance can be:
+    //   a) just the raw token value: "_JIsH8..."
+    //   b) a single pair: "cf_clearance=_JIsH8..."
+    //   c) a browser cookie header: "cf_clearance=...; rpow_session=..."
+    // In all cases, filter out Set-Cookie HTTP attributes and build a clean
+    // Cookie header. If a fresh rpow_session is present, it takes precedence
+    // over the sessionCookie arg so we don't send stale credentials.
+    const HTTP_ATTR = /^(path|domain|max-age|samesite|expires)=/i;
+    const HTTP_FLAG = /^(secure|httponly)$/i;
+    const pairs = opts.cfClearance
+      .split(';')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0 && !HTTP_ATTR.test(s) && !HTTP_FLAG.test(s));
+    const hasFreshSession = pairs.some((p) => p.startsWith('rpow_session='));
+    if (hasFreshSession) {
+      // Browser cookie string already contains a session — use as-is
+      this.cookie = pairs.join('; ');
+    } else if (pairs[0]?.startsWith('cf_clearance=')) {
+      this.cookie = `${opts.sessionCookie}; ${pairs.join('; ')}`;
+    } else {
+      // Raw token value — wrap in the cookie name
+      this.cookie = `${opts.sessionCookie}; cf_clearance=${opts.cfClearance}`;
+    }
   }
 
   async activitySince(sinceIso: string): Promise<Rpow2ActivityEntry[]> {
@@ -68,7 +94,9 @@ export class Rpow2Client {
     const res = await fetch(url, {
       ...init,
       headers: {
-        'user-agent': 'rpow4-rpow2-custody/1.0',
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        accept: 'application/json, text/plain, */*',
+        'accept-language': 'en-US,en;q=0.9',
         cookie: this.cookie,
         ...(init.headers as Record<string, string> | undefined),
       },

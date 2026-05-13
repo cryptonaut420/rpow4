@@ -186,6 +186,8 @@ export interface Rpow2DepositSyncResponse { ok: true; processed: number; credite
 export interface Rpow2WithdrawalRequestBody { destination_email: string; amount_base_units: string }
 export interface Rpow2WithdrawalCreateResponse { ok: true; id: string; status: 'pending_approval' }
 export interface Rpow2WithdrawalActionResponse { ok: true; id: string; status?: string; external_transfer_id?: string | null; burn_event_id?: string | null }
+export interface Rpow2ManualAdjustBody { handle_or_pubkey: string; amount_base_units: string; memo?: string }
+export interface Rpow2ManualAdjustResponse { ok: true; pubkey: string; display_name: string | null; amount_base_units: string; event_id: string }
 
 function assetPath(assetSlug: string | undefined, path: string): string {
   if (!assetSlug || assetSlug === 'rpow4-0') return path;
@@ -337,6 +339,10 @@ export const api = {
     call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/withdrawals/${encodeURIComponent(id)}/reject`, {}),
   assignRpow2Deposit: (id: string, pubkey: string) =>
     call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/deposits/${encodeURIComponent(id)}/assign`, { pubkey }),
+  adminCreditRpow2: (body: Rpow2ManualAdjustBody) =>
+    call<Rpow2ManualAdjustResponse>('POST', '/admin/custody/rpow2/credit', body),
+  adminDebitRpow2: (body: Rpow2ManualAdjustBody) =>
+    call<Rpow2ManualAdjustResponse>('POST', '/admin/custody/rpow2/debit', body),
 
   // Trollbox (public read, signed write)
   trollbox: (cursor?: string, limit?: number) => {

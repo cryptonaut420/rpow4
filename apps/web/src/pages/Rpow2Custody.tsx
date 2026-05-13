@@ -7,6 +7,7 @@ import {
   type Rpow2CustodyAdminResponse,
   type Rpow2CustodyStatusResponse,
   type Rpow2CustodyWithdrawal,
+  type Rpow2ManualAdjustBody,
 } from '../api.js';
 import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
@@ -61,6 +62,96 @@ function pillClass(status: string): string {
   }
 }
 
+interface ManualAdjustFormProps {
+  busy: string;
+  adjHandle: string;
+  adjAmount: string;
+  adjMemo: string;
+  adjPreview: { pubkey: string; display_name: string | null } | null;
+  setAdjHandle: (v: string) => void;
+  setAdjAmount: (v: string) => void;
+  setAdjMemo: (v: string) => void;
+  setAdjPreview: (v: { pubkey: string; display_name: string | null } | null) => void;
+  onSubmit: (action: 'credit' | 'debit') => void;
+}
+
+function ManualAdjustForm({
+  busy, adjHandle, adjAmount, adjMemo, adjPreview,
+  setAdjHandle, setAdjAmount, setAdjMemo, setAdjPreview, onSubmit,
+}: ManualAdjustFormProps) {
+  const amountOk = (() => {
+    try { return BigInt(parseRpowToBaseUnits(adjAmount)) > 0n; } catch { return false; }
+  })();
+  const canSubmit = !busy && adjHandle.trim().length > 0 && amountOk;
+
+  return (
+    <div className="custody-adjust-form">
+      <div className="custody-form">
+        <label>
+          handle or pubkey
+          <input
+            value={adjHandle}
+            onChange={(e) => { setAdjHandle(e.target.value); setAdjPreview(null); }}
+            placeholder="alice  or  9aXt…pubkey…"
+            onBlur={async () => {
+              if (!adjHandle.trim()) return;
+              try {
+                const res = await api.lookup(adjHandle.trim());
+                setAdjPreview({ pubkey: res.pubkey, display_name: res.display_name ?? null });
+              } catch {
+                setAdjPreview(null);
+              }
+            }}
+          />
+        </label>
+        {adjPreview ? (
+          <div className="custody-hint">
+            resolved: <strong>{adjPreview.display_name ?? adjPreview.pubkey.slice(0, 16) + '…'}</strong>
+            <span className="dim" style={{ marginLeft: 6 }}>{adjPreview.pubkey.slice(0, 12)}…</span>
+          </div>
+        ) : adjHandle.trim() ? (
+          <div className="custody-hint dim">type a handle or pubkey — tab out to resolve</div>
+        ) : null}
+        <label>
+          amount (RPOW2)
+          <input
+            value={adjAmount}
+            onChange={(e) => setAdjAmount(e.target.value)}
+            placeholder="10"
+            inputMode="decimal"
+          />
+        </label>
+        <label>
+          memo <span className="dim">(optional — shown in ledger)</span>
+          <input
+            value={adjMemo}
+            onChange={(e) => setAdjMemo(e.target.value)}
+            placeholder="deposit from rpow4bank@gmail.com — manually verified"
+          />
+        </label>
+        <div className="custody-adjust-actions">
+          <button
+            type="button"
+            className="custody-adjust-credit"
+            disabled={!canSubmit}
+            onClick={() => onSubmit('credit')}
+          >
+            [ {busy === 'credit' ? 'crediting…' : '+ credit RPOW2'} ]
+          </button>
+          <button
+            type="button"
+            className="custody-adjust-debit"
+            disabled={!canSubmit}
+            onClick={() => onSubmit('debit')}
+          >
+            [ {busy === 'debit' ? 'debiting…' : '− debit RPOW2'} ]
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Rpow2CustodyPage() {
   usePageMeta('RPOW2', 'Deposit, withdraw, and track your RPOW2 balance.');
   const wallet = useWallet();
@@ -77,6 +168,12 @@ export function Rpow2CustodyPage() {
   const [silentErr, setSilentErr] = useState('');
   const [lastRefreshedAt, setLastRefreshedAt] = useState<string>('');
   const refreshGenRef = useRef(0);
+
+  // Manual adjustment form state (admin only)
+  const [adjHandle, setAdjHandle] = useState('');
+  const [adjAmount, setAdjAmount] = useState('');
+  const [adjMemo, setAdjMemo] = useState('');
+  const [adjPreview, setAdjPreview] = useState<{ pubkey: string; display_name: string | null } | null>(null);
 
   const handleMemoSafe = !!me?.display_name && MEMO_SAFE_HANDLE.test(me.display_name);
   const depositMemo = me?.pubkey ?? '';
@@ -171,6 +268,10 @@ export function Rpow2CustodyPage() {
       if (result && typeof result === 'object' && 'processed' in result) {
         const r = result as { processed: number; credited: number; unattributed: number; skipped: number };
         setMsg(`sync complete: ${r.processed} seen, ${r.credited} credited, ${r.unattributed} unattributed, ${r.skipped} skipped`);
+      } else if (result && typeof result === 'object' && 'amount_base_units' in result && 'display_name' in result) {
+        const r = result as { amount_base_units: string; display_name: string | null; pubkey: string };
+        const who = r.display_name ?? r.pubkey.slice(0, 12) + '…';
+        setMsg(`${label === 'credit' ? 'credited' : 'debited'} ${formatRpow(r.amount_base_units)} RPOW2 ${label === 'credit' ? 'to' : 'from'} ${who}`);
       } else {
         setMsg('done');
       }
@@ -484,6 +585,53 @@ export function Rpow2CustodyPage() {
             ))}
             {unattributedDeposits.length === 0 ? <div style={{ color: 'var(--dim)' }}>no unattributed deposits</div> : null}
           </div>
+
+          <h3>Manual balance adjustment</h3>
+          <div className="custody-hint" style={{ marginBottom: 12 }}>
+            Use when you have manually verified an RPOW2 transfer on rpow2.com and need to credit or debit a user directly.
+            Credits mint RPOW2 into the user's balance. Debits burn from their spendable balance.
+          </div>
+          <ManualAdjustForm
+            busy={busy}
+            adjHandle={adjHandle}
+            adjAmount={adjAmount}
+            adjMemo={adjMemo}
+            adjPreview={adjPreview}
+            setAdjHandle={setAdjHandle}
+            setAdjAmount={setAdjAmount}
+            setAdjMemo={setAdjMemo}
+            setAdjPreview={setAdjPreview}
+            onSubmit={(action) => {
+              const amountBaseUnits = (() => {
+                try { return parseRpowToBaseUnits(adjAmount); } catch { return null; }
+              })();
+              if (!amountBaseUnits || BigInt(amountBaseUnits) <= 0n) {
+                setErr('enter a valid amount');
+                return;
+              }
+              const body: Rpow2ManualAdjustBody = {
+                handle_or_pubkey: adjHandle.trim(),
+                amount_base_units: amountBaseUnits,
+                memo: adjMemo.trim() || undefined,
+              };
+              const label = action === 'credit' ? 'credit' : 'debit';
+              const displayName = adjPreview?.display_name ?? adjPreview?.pubkey?.slice(0, 10) ?? adjHandle.trim();
+              if (!window.confirm(
+                `${action === 'credit' ? 'CREDIT' : 'DEBIT'} ${formatRpow(amountBaseUnits)} RPOW2 ${action === 'credit' ? 'to' : 'from'} "${displayName}"?\n\n`
+                + (action === 'debit' ? 'This will burn tokens from their spendable balance. Make sure this is intentional.' : 'This will mint tokens into their balance.'),
+              )) return;
+              void run(label, async () => {
+                const res = action === 'credit'
+                  ? await api.adminCreditRpow2(body)
+                  : await api.adminDebitRpow2(body);
+                setAdjHandle('');
+                setAdjAmount('');
+                setAdjMemo('');
+                setAdjPreview(null);
+                return res;
+              });
+            }}
+          />
         </Panel>
       ) : null}
     </div>

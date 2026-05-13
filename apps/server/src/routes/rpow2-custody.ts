@@ -57,6 +57,7 @@ function rpow2Client(app: FastifyInstance): Rpow2Client | null {
   return new Rpow2Client({
     baseUrl: app.config.rpow2ApiBaseUrl ?? 'https://api.rpow2.com',
     sessionCookie: app.config.rpow2SessionCookie,
+    cfClearance: app.config.rpow2CfClearance,
   });
 }
 
@@ -313,7 +314,9 @@ async function doSyncRpow2Deposits(app: FastifyInstance): Promise<SyncSummary> {
     return { ok: true, processed: entries.length, credited, unattributed, skipped };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown RPOW2 sync error';
-    const pause = err instanceof Rpow2ClientError && err.status === 401;
+    // Pause on any auth failure (401 or 403) so we stop hammering the API
+    // with a dead cookie. An admin must update the cookie and call /resume.
+    const pause = err instanceof Rpow2ClientError && (err.status === 401 || err.status === 403);
     await app.pool.query(
       `UPDATE external_sync_state SET last_error=$2, paused = paused OR $3::boolean WHERE provider_key=$1`,
       [PROVIDER, msg, pause],
@@ -531,7 +534,7 @@ async function settleWithdrawal(app: FastifyInstance, withdrawalId: string, admi
       );
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'RPOW2 send failed';
-      const pause = err instanceof Rpow2ClientError && err.status === 401;
+      const pause = err instanceof Rpow2ClientError && (err.status === 401 || err.status === 403);
       await app.pool.query(
         `UPDATE external_withdrawals SET status='failed', failure_reason=$2, updated_at=now() WHERE id=$1`,
         [withdrawalId, msg],
@@ -811,5 +814,146 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
     } catch {
       return reply.code(404).send({ error: 'NOT_FOUND', message: 'deposit not found or already credited' });
     }
+  });
+
+  const ManualAdjustBody = z.object({
+    handle_or_pubkey: z.string().min(1).max(256),
+    amount_base_units: Amount,
+    memo: z.string().max(500).default(''),
+  });
+
+  async function resolveAccount(handleOrPubkey: string): Promise<{ pubkey: string; display_name: string | null } | null> {
+    const r = await app.pool.query<{ pubkey: string; display_name: string | null }>(
+      `SELECT pubkey, display_name FROM accounts
+       WHERE pubkey=$1 OR lower(display_name)=lower($1)
+       LIMIT 1`,
+      [handleOrPubkey],
+    );
+    return r.rows[0] ?? null;
+  }
+
+  // Manual admin credit: directly mint RPOW2 to a user without requiring an
+  // external deposit record. Use when you've manually verified an incoming
+  // RPOW2 transfer and want to credit the recipient.
+  app.post('/admin/custody/rpow2/credit', async (req, reply) => {
+    const admin = await requireAdmin(app, req, reply);
+    if (!admin) return;
+    const parsed = ManualAdjustBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.errors[0]?.message ?? 'invalid body' });
+    const { handle_or_pubkey, amount_base_units, memo } = parsed.data;
+    const account = await resolveAccount(handle_or_pubkey);
+    if (!account) return reply.code(404).send({ error: 'NOT_FOUND', message: `no account found for "${handle_or_pubkey}"` });
+
+    const eventId = await withTxRetry(app.pool, async (c) => {
+      await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, account.pubkey]);
+      const credit = await c.query(
+        `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, minted_base_units, events_count, updated_at)
+         VALUES($1::uuid, $2, $3::bigint, $3::bigint, 1, now())
+         ON CONFLICT (asset_id, pubkey) DO UPDATE SET
+           spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+           minted_base_units = account_balances.minted_base_units + EXCLUDED.minted_base_units,
+           events_count = account_balances.events_count + 1,
+           updated_at = now()
+         RETURNING (xmax = 0) AS was_inserted`,
+        [RPOW2_ASSET_ID, account.pubkey, amount_base_units],
+      );
+      if (credit.rows[0]?.was_inserted) {
+        await c.query(
+          `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+           WHERE asset_id=$1::uuid AND name='user_count'`,
+          [RPOW2_ASSET_ID],
+        );
+      }
+      await c.query(
+        `UPDATE app_counters SET value = value + $1::bigint WHERE asset_id=$2::uuid AND name='minted_supply'`,
+        [amount_base_units, RPOW2_ASSET_ID],
+      );
+      await c.query(
+        `UPDATE ledger_stats SET value = value + $1::bigint, updated_at = now()
+         WHERE asset_id=$2::uuid AND name='circulating_supply'`,
+        [amount_base_units, RPOW2_ASSET_ID],
+      );
+      const memoStr = memo || `manual RPOW2 credit by admin`;
+      const event = await insertCustodyMintEvent(c, account.pubkey, amount_base_units, memoStr);
+      await mirrorLedgerEventHot(c, event);
+      return event.id;
+    }, { onRetry: (err, attempt) => app.log.warn({ err, attempt }, 'admin rpow2 credit tx retry') });
+
+    app.invalidateAccount(account.pubkey);
+    app.invalidateLedger();
+    return {
+      ok: true,
+      pubkey: account.pubkey,
+      display_name: account.display_name,
+      amount_base_units,
+      event_id: eventId,
+    };
+  });
+
+  // Manual admin debit: burn RPOW2 from a user's spendable balance.
+  // Use for corrections (e.g. a credit was applied in error).
+  app.post('/admin/custody/rpow2/debit', async (req, reply) => {
+    const admin = await requireAdmin(app, req, reply);
+    if (!admin) return;
+    const parsed = ManualAdjustBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.errors[0]?.message ?? 'invalid body' });
+    const { handle_or_pubkey, amount_base_units, memo } = parsed.data;
+    const account = await resolveAccount(handle_or_pubkey);
+    if (!account) return reply.code(404).send({ error: 'NOT_FOUND', message: `no account found for "${handle_or_pubkey}"` });
+
+    const eventId = await withTxRetry(app.pool, async (c) => {
+      await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, account.pubkey]);
+      const debit = await c.query(
+        `UPDATE account_balances
+         SET spendable_base_units = spendable_base_units - $3::bigint,
+             events_count = events_count + 1,
+             updated_at = now()
+         WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+        [RPOW2_ASSET_ID, account.pubkey, amount_base_units],
+      );
+      if (debit.rowCount === 0) throw Object.assign(new Error('insufficient RPOW2 balance for debit'), { statusCode: 400 });
+      await c.query(
+        `UPDATE ledger_stats SET value = value - $1::bigint, updated_at=now()
+         WHERE asset_id=$2::uuid AND name='circulating_supply'`,
+        [amount_base_units, RPOW2_ASSET_ID],
+      );
+      await c.query(
+        `UPDATE app_counters SET value = value + $1::bigint
+         WHERE asset_id=$2::uuid AND name='burned_supply'`,
+        [amount_base_units, RPOW2_ASSET_ID],
+      );
+      const memoStr = memo || `manual RPOW2 debit by admin`;
+      const eventId2 = randomUUID();
+      await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [eventId2, RPOW2_ASSET_ID]);
+      const inserted = await c.query<LedgerEventRow>(
+        `WITH inserted AS (
+           INSERT INTO ledger_events(asset_id, id, event_type, actor_pubkey, amount, memo, created_at)
+           VALUES($1::uuid, $2, 'BURN', $3, $4::bigint, $5, now())
+           RETURNING asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                     amount, fee_base_units, memo, challenge_id, solution_nonce, idempotency_key,
+                     client_signature_base58, server_sig, created_at
+         ),
+         upd_event_id AS (
+           UPDATE ledger_event_ids ids SET event_seq = i.event_seq FROM inserted i WHERE ids.id = i.id
+         )
+         SELECT asset_id::text AS asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
+                challenge_id, solution_nonce, idempotency_key, client_signature_base58, server_sig, created_at
+         FROM inserted`,
+        [RPOW2_ASSET_ID, eventId2, account.pubkey, amount_base_units, memoStr],
+      );
+      await mirrorLedgerEventHot(c, inserted.rows[0]!);
+      return eventId2;
+    }, { onRetry: (err, attempt) => app.log.warn({ err, attempt }, 'admin rpow2 debit tx retry') });
+
+    app.invalidateAccount(account.pubkey);
+    app.invalidateLedger();
+    return {
+      ok: true,
+      pubkey: account.pubkey,
+      display_name: account.display_name,
+      amount_base_units,
+      event_id: eventId,
+    };
   });
 }

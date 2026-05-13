@@ -2405,6 +2405,26 @@ main { margin-top: 4px; }
   box-sizing: border-box;
 }
 
+.custody-adjust-form {
+  border: 1px dashed var(--dimmer);
+  padding: 14px;
+  margin-top: 4px;
+}
+
+.custody-adjust-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.custody-adjust-credit {
+  color: var(--accent);
+}
+
+.custody-adjust-debit {
+  color: var(--error);
+}
+
 .custody-list {
   display: grid;
   gap: 8px;
