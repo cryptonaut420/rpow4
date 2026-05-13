@@ -383,11 +383,6 @@ export function Rpow2CustodyPage() {
             RPOW2 deposits and withdrawals are not fully configured yet. They will be available after setup is complete.
           </div>
         ) : null}
-        {status?.sync.paused ? (
-          <div className="custody-warning">
-            RPOW2 sync is paused. Admins should refresh the RPOW2 session and resume sync.
-          </div>
-        ) : null}
       </Panel>
 
       <div className="custody-grid">
