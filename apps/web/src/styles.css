@@ -1710,6 +1710,38 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
 .nav .sep { color: var(--dimmer); }
 
 .tagline { color: var(--dim); font-size: 12px; }
+
+/* ── Site tagline (INFINITY MINING) ──────────────────────────────────────── */
+.site-tagline {
+  font-family: inherit;
+  font-size: 22px;
+  font-weight: 400;
+  letter-spacing: 0.55em;
+  text-transform: uppercase;
+  text-align: center;
+  margin: 8px 0 6px;
+  padding: 6px 0;
+  color: transparent;
+  background: linear-gradient(
+    90deg,
+    rgba(127, 255, 212, 0.5) 0%,
+    var(--accent) 30%,
+    #fff 52%,
+    var(--accent) 72%,
+    rgba(127, 255, 212, 0.5) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  /* Glow halo behind the text */
+  filter: drop-shadow(0 0 8px rgba(127, 255, 212, 0.55));
+  animation: tagline-pulse 3.5s ease-in-out infinite;
+}
+
+@keyframes tagline-pulse {
+  0%   { filter: drop-shadow(0 0 6px rgba(127, 255, 212, 0.4)); opacity: 0.85; }
+  50%  { filter: drop-shadow(0 0 14px rgba(127, 255, 212, 0.85)); opacity: 1; }
+  100% { filter: drop-shadow(0 0 6px rgba(127, 255, 212, 0.4)); opacity: 0.85; }
+}
 .error { color: var(--error); }
 .dim { color: var(--dim); }
 .accent { color: var(--accent); }

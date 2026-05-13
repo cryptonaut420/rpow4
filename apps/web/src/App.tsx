@@ -40,6 +40,8 @@ const HEADER = [
   '+======================================================================+',
 ].join('\n');
 
+const TAGLINE = '∞  INFINITY MINING  ∞';
+
 export default function App() {
   return (
     <HashRouter>
@@ -122,6 +124,7 @@ function AppShell() {
       <div className={`app-shell ${isWidePage ? 'app-shell-wide' : ''}`.trim()}>
         <header>
           <pre style={{ margin: 0 }}>{HEADER}</pre>
+          <div className="site-tagline">{TAGLINE}</div>
           <SupplyBar />
           <div className="tagline">
             {selectedAsset
@@ -178,6 +181,9 @@ function AppShell() {
               <summary>[ links ▾ ]</summary>
               <div className="nav-menu-panel">
                 <a href="https://rpowmarket.com/" target="_blank" rel="noopener noreferrer">[ predict ↗ ]</a>
+                <a href="https://rpowmarket.com/#lottery" target="_blank" rel="noopener noreferrer">[ rpowerball ↗ ]</a>
+                <a href="https://x.com/rpow4mining" target="_blank" rel="noopener noreferrer">[ x.com ↗ ]</a>
+                <a href="https://t.me/rpow4mining" target="_blank" rel="noopener noreferrer">[ telegram ↗ ]</a>
               </div>
             </details>
           </nav>
@@ -240,14 +246,9 @@ function AppShell() {
           </Routes>
         </main>
         <footer className="app-footer">
-          <a
-            href="https://github.com/cryptonaut420/rpow4"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="rpow4 on github"
-          >
-            [ github ]
-          </a>
+          <a href="https://github.com/cryptonaut420/rpow4" target="_blank" rel="noopener noreferrer" title="rpow4 on github">[ github ]</a>
+          <a href="https://x.com/rpow4mining" target="_blank" rel="noopener noreferrer" title="rpow4 on x.com">[ x.com ]</a>
+          <a href="https://t.me/rpow4mining" target="_blank" rel="noopener noreferrer" title="rpow4 on telegram">[ telegram ]</a>
         </footer>
       </div>
       <MiningBar />

@@ -10,6 +10,19 @@ interface EcosystemEntry {
   self?: boolean;
 }
 
+const SOCIAL: EcosystemEntry[] = [
+  {
+    label: 'x.com/rpow4mining',
+    url: 'https://x.com/rpow4mining',
+    description: 'official RPOW4 account on X (Twitter) — announcements, updates, and mining culture.',
+  },
+  {
+    label: 't.me/rpow4mining',
+    url: 'https://t.me/rpow4mining',
+    description: 'official RPOW4 Telegram channel — community discussion and announcements.',
+  },
+];
+
 const SITES: EcosystemEntry[] = [
   {
     label: 'rpow4.com',
@@ -100,6 +113,12 @@ export function EcosystemPage() {
           A directory of related projects in the RPOW family — prior tributes, community
           ports, and tooling that orbits the same idea.
         </p>
+      </Panel>
+
+      <Panel title="SOCIAL">
+        <ul className="ecosystem-list">
+          {SOCIAL.map((s) => <EntryRow key={s.url} entry={s} />)}
+        </ul>
       </Panel>
 
       <Panel title="LIVE SITES">
