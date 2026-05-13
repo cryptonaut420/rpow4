@@ -127,8 +127,14 @@ const Schema = z.object({
 
   // Optional RPOW2 banker integration. The cookie is copied from a browser
   // session after logging in as the banker account on RPOW2.
+  // Accepts either just "name=value" or the full Set-Cookie header string
+  // (e.g. "rpow_session=...; Path=/; Secure"); only the first name=value
+  // segment is used as the Cookie request header.
   RPOW2_API_BASE_URL: z.string().url().default('https://api.rpow2.com'),
-  RPOW2_SESSION_COOKIE: z.string().optional(),
+  RPOW2_SESSION_COOKIE: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(';')[0].trim() : v)),
   RPOW2_BANKER_EMAIL: z.string().email().default('rpow4bank@gmail.com'),
   RPOW2_DEPOSIT_POLL_ENABLED: z
     .union([z.string(), z.boolean()])
