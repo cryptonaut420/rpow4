@@ -1141,7 +1141,7 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
 .book-row.ask { color: var(--error); }
 .book-row.bid, .success-line { color: var(--accent); }
 .ask-depth { right: 0; background: rgba(255, 99, 99, 0.45); }
-.bid-depth { left: 0; background: rgba(127, 255, 212, 0.45); }
+.bid-depth { right: 0; background: rgba(127, 255, 212, 0.45); }
 .book-row.ask:hover .ask-depth,
 .book-row.bid:hover .bid-depth { opacity: 0.28; }
 .market-spread {

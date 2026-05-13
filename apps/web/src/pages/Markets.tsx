@@ -347,8 +347,9 @@ export function MarketsPage() {
     marketId: string | undefined,
     requestedInterval: Interval,
     isFresh: () => boolean,
+    manual = false,
   ) {
-    if (!loading) setIsRefreshing(true);
+    if (!loading && manual) setIsRefreshing(true);
     try {
       const res = await api.markets();
       if (!isFresh()) return;
@@ -441,7 +442,7 @@ export function MarketsPage() {
 
   function manualRefresh() {
     const gen = refreshGenRef.current;
-    void refreshAll(selectedMarket?.id, chartInterval, () => refreshGenRef.current === gen);
+    void refreshAll(selectedMarket?.id, chartInterval, () => refreshGenRef.current === gen, true);
   }
 
   function fillAmountFromBalance(pct: number) {
@@ -776,7 +777,6 @@ export function MarketsPage() {
         </div>
         <div className="market-header-tape">
           <span>feed<strong className={`market-live ${liveState}`}>{liveState}</strong></span>
-          <span>updated<strong>{lastUpdatedAt ? new Date(lastUpdatedAt).toLocaleTimeString() : '—'}</strong></span>
           <span>bid<strong className="market-bid">{fmtPrice(selectedMarket.best_bid_quote_base_units)}</strong></span>
           <span>ask<strong className="market-ask">{fmtPrice(selectedMarket.best_ask_quote_base_units)}</strong></span>
           <span>mid<strong>{fmtPrice(midPrice)}</strong></span>
