@@ -131,7 +131,7 @@ export async function assetsRoutes(app: FastifyInstance) {
       );
 
       const sequence = await c.query<{ n: number }>(
-        `SELECT COALESCE(max(sequence_number), 0) + 1 AS n FROM assets`,
+        `SELECT COALESCE(max(sequence_number), 0) + 1 AS n FROM assets WHERE asset_kind = 'mineable'`,
       );
       const seq = Number(sequence.rows[0]!.n);
       const assetId = randomUUID();
