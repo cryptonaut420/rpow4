@@ -1130,7 +1130,11 @@ export function MarketsPage() {
                   <div className="order-row" key={o.id}>
                     <span className={`order-side-pill ${o.side}`}>{o.side.toUpperCase()}</span>
                     <span className="order-type">{o.order_type}</span>
-                    <span>{o.order_type === 'limit' ? `${fmtPrice(o.price_quote_base_units)} ${quoteCode}` : '—'}</span>
+                    <span>{o.order_type === 'limit'
+                      ? `${fmtPrice(o.price_quote_base_units)} ${quoteCode}`
+                      : o.avg_fill_price_quote_base_units
+                        ? `~${fmtPrice(o.avg_fill_price_quote_base_units)} ${quoteCode}`
+                        : '—'}</span>
                     <span>{formatRpow(o.original_base_units)} {baseCode}</span>
                     <span>{formatRpow(filled)} {baseCode}</span>
                     <span className={`order-status ${o.status}`}>{o.status}</span>

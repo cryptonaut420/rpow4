@@ -139,6 +139,7 @@ interface OrderRow {
   side: 'buy' | 'sell';
   order_type: 'limit' | 'market';
   price_quote_base_units: string | null;
+  avg_fill_price_quote_base_units?: string | null;
   original_base_units: string;
   remaining_base_units: string;
   reserved_asset_id: string | null;
@@ -185,6 +186,7 @@ function orderWire(row: OrderRow): MarketOrder {
     side: row.side,
     order_type: row.order_type,
     price_quote_base_units: row.price_quote_base_units ?? undefined,
+    avg_fill_price_quote_base_units: row.avg_fill_price_quote_base_units ?? undefined,
     original_base_units: row.original_base_units,
     remaining_base_units: row.remaining_base_units,
     reserved_asset_id: row.reserved_asset_id ?? undefined,
@@ -596,13 +598,19 @@ export async function marketsRoutes(app: FastifyInstance) {
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
     const id = (req.params as { market_id: string }).market_id;
     const { rows } = await app.pool.query<OrderRow>(
-      `SELECT id::text, market_id::text, owner_pubkey, side, order_type, price_quote_base_units::text,
-              original_base_units::text, remaining_base_units::text, reserved_asset_id::text,
-              reserved_remaining_base_units::text, status, client_order_id::text, client_signature_base58,
-              created_at, updated_at, cancelled_at
-       FROM market_orders
-       WHERE market_id=$1::uuid AND owner_pubkey=$2
-       ORDER BY created_at DESC
+      `SELECT o.id::text, o.market_id::text, o.owner_pubkey, o.side, o.order_type, o.price_quote_base_units::text,
+              o.original_base_units::text, o.remaining_base_units::text, o.reserved_asset_id::text,
+              o.reserved_remaining_base_units::text, o.status, o.client_order_id::text, o.client_signature_base58,
+              o.created_at, o.updated_at, o.cancelled_at,
+              (SELECT ceil(
+                 sum(t.quote_amount_base_units::numeric) * 1000000000
+                 / NULLIF(sum(t.base_amount_base_units::numeric), 0)
+               )::text
+               FROM market_trades t
+               WHERE t.maker_order_id = o.id OR t.taker_order_id = o.id) AS avg_fill_price_quote_base_units
+       FROM market_orders o
+       WHERE o.market_id=$1::uuid AND o.owner_pubkey=$2
+       ORDER BY o.created_at DESC
        LIMIT 100`,
       [id, s.pubkey],
     );

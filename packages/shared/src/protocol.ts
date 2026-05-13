@@ -475,6 +475,10 @@ export interface MarketOrder {
   side: MarketSide;
   order_type: MarketOrderType;
   price_quote_base_units?: string;
+  /** Weighted-average execution price across all fills. Populated by the
+   *  my-orders endpoint. Absent for limit orders (use price_quote_base_units)
+   *  and for open/cancelled orders with no fills. */
+  avg_fill_price_quote_base_units?: string;
   original_base_units: string;
   remaining_base_units: string;
   reserved_asset_id?: string;
