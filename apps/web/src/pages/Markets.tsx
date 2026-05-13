@@ -328,6 +328,27 @@ export function MarketsPage() {
   // a previous market or asset context can't clobber fresh state.
   const refreshGenRef = useRef(0);
 
+  // Sorted book levels — kept as top-level hooks (before any early returns)
+  // so they're always called in the same order every render.
+  const sortedBids = useMemo(
+    () => [...(book?.bids ?? [])].sort((a, b) => {
+      const d = BigInt(b.price_quote_base_units) - BigInt(a.price_quote_base_units);
+      return d > 0n ? 1 : d < 0n ? -1 : 0;
+    }),
+    [book?.bids],
+  );
+  const sortedAsks = useMemo(
+    () => [...(book?.asks ?? [])].sort((a, b) => {
+      const d = BigInt(a.price_quote_base_units) - BigInt(b.price_quote_base_units);
+      return d > 0n ? 1 : d < 0n ? -1 : 0;
+    }),
+    [book?.asks],
+  );
+  const sortedBook = useMemo(
+    () => book ? { ...book, bids: sortedBids, asks: sortedAsks } : null,
+    [book, sortedBids, sortedAsks],
+  );
+
   const selectedMarket = useMemo(() => {
     if (params.marketId) return markets.find((m) => m.id === params.marketId) ?? null;
     if (selectedAsset && !selectedAsset.system_default) {
@@ -470,7 +491,7 @@ export function MarketsPage() {
       const budget = (avail * BigInt(Math.round(pct * 100))) / 100n;
       let remaining = budget;
       let totalBase = 0n;
-      for (const ask of book?.asks ?? []) {
+      for (const ask of sortedAsks) {
         if (remaining <= 0n) break;
         const levelBase = BigInt(ask.base_amount_base_units);
         const levelPrice = BigInt(ask.price_quote_base_units);
@@ -515,16 +536,18 @@ export function MarketsPage() {
       }
       sigBody.price_quote_base_units = priceBu.toString();
     } else if (side === 'buy') {
-      const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
-      if (!est.fullyFillable) {
-        setFormError('not enough ask liquidity — reduce size or use limit');
+      const est = estimateMarketBuy(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      if (est.baseFilled === 0n) {
+        setFormError('no ask liquidity — place a limit order or wait for sellers');
         return;
       }
+      // Set slippage cap to the estimated debit even for partial fills, so
+      // the server never over-spends beyond what the current book can fill.
       sigBody.max_quote_base_units = est.totalDebit.toString();
     } else {
-      const est = estimateMarketSell(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
-      if (!est.fullyFillable) {
-        setFormError('not enough bid liquidity — reduce size or use limit');
+      const est = estimateMarketSell(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      if (est.baseFilled === 0n) {
+        setFormError('no bid liquidity — place a limit order or wait for buyers');
         return;
       }
     }
@@ -543,8 +566,8 @@ export function MarketsPage() {
       const filled = formatRpow(res.filled_base_units);
       const summary =
         res.order.status === 'filled' ? `filled ${filled} ${selectedMarket.base_asset.display_code}`
-        : res.order.status === 'partially_filled' ? `partial fill ${filled} ${selectedMarket.base_asset.display_code}`
-        : res.order.status === 'rejected' ? 'no liquidity — order rejected'
+        : res.order.status === 'partially_filled' ? `partial fill: ${filled} / ${formatRpow(res.order.original_base_units)} ${selectedMarket.base_asset.display_code}`
+        : res.order.status === 'rejected' ? 'order rejected — no eligible counterparty (own orders cannot self-fill)'
         : `${res.order.status} (${filled} filled)`;
       setLastResult(summary);
       setAmount('');
@@ -606,23 +629,24 @@ export function MarketsPage() {
   const amountBu = tryParseAmount(amount);
   const priceBu = orderType === 'limit' ? tryParseAmount(price) : null;
   const change24h = change24hFromMarket(selectedMarket);
-  const askDepth = depthRatios(book?.asks ?? []);
-  const bidDepth = depthRatios(book?.bids ?? []);
-  const visibleBidBase = sumBase(book?.bids ?? []);
-  const visibleAskBase = sumBase(book?.asks ?? []);
-  const visibleBidQuote = sumQuote(book?.bids ?? []);
-  const visibleAskQuote = sumQuote(book?.asks ?? []);
+
+  const askDepth = depthRatios(sortedAsks);
+  const bidDepth = depthRatios(sortedBids);
+  const visibleBidBase = sumBase(sortedBids);
+  const visibleAskBase = sumBase(sortedAsks);
+  const visibleBidQuote = sumQuote(sortedBids);
+  const visibleAskQuote = sumQuote(sortedAsks);
   const lastTrade = trades[0];
 
   // Cumulative book size at each level — used so clicking a book row fills
   // the trade ticket with the size needed to consume all levels up to and
   // including that price (Coinbase-style "click to ladder").
-  const askCumBase = (book?.asks ?? []).reduce<bigint[]>((acc, l) => {
+  const askCumBase = sortedAsks.reduce<bigint[]>((acc, l) => {
     const prev = acc[acc.length - 1] ?? 0n;
     acc.push(prev + BigInt(l.base_amount_base_units));
     return acc;
   }, []);
-  const bidCumBase = (book?.bids ?? []).reduce<bigint[]>((acc, l) => {
+  const bidCumBase = sortedBids.reduce<bigint[]>((acc, l) => {
     const prev = acc[acc.length - 1] ?? 0n;
     acc.push(prev + BigInt(l.base_amount_base_units));
     return acc;
@@ -671,7 +695,7 @@ export function MarketsPage() {
     }
   } else if (orderType === 'market' && amountBu) {
     if (side === 'buy') {
-      const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      const est = estimateMarketBuy(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       preview = [
         { label: 'fills', value: est.fullyFillable ? `${formatRpow(amountBu)} ${baseCode}` : `${formatRpow(est.baseFilled)} / ${formatRpow(amountBu)} ${baseCode}` },
         ...(feeInBase ? [{ label: 'receive after fee', value: `${formatRpow(est.baseReceived)} ${baseCode}` }] : []),
@@ -681,7 +705,7 @@ export function MarketsPage() {
         { label: 'total debit', value: `${formatRpow(est.totalDebit)} ${quoteCode}` },
       ];
     } else {
-      const est = estimateMarketSell(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      const est = estimateMarketSell(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       preview = [
         { label: 'fills', value: est.fullyFillable ? `${formatRpow(amountBu)} ${baseCode}` : `${formatRpow(est.baseFilled)} / ${formatRpow(amountBu)} ${baseCode}` },
         { label: 'gross proceeds', value: `${formatRpow(est.quoteReceived)} ${quoteCode}` },
@@ -713,7 +737,7 @@ export function MarketsPage() {
       }
     } else if (orderType === 'market') {
       if (side === 'buy') {
-        const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+        const est = estimateMarketBuy(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
         if (quoteBalance && BigInt(quoteBalance.spendable_base_units) < est.totalDebit) insufficientBalance = true;
       } else {
         if (baseBalance && BigInt(baseBalance.spendable_base_units) < amountBu) insufficientBalance = true;
@@ -727,11 +751,16 @@ export function MarketsPage() {
     || wallet.status !== 'unlocked'
     || insufficientBalance;
 
-  const spread = (selectedMarket.best_bid_quote_base_units && selectedMarket.best_ask_quote_base_units)
-    ? (BigInt(selectedMarket.best_ask_quote_base_units) - BigInt(selectedMarket.best_bid_quote_base_units)).toString()
+  // Spread derived from the live book so it tracks the actual resting orders,
+  // not the polled market summary which can lag by one tick.
+  const bestBookBid = sortedBids[0];
+  const bestBookAsk = sortedAsks[0];
+  const spreadRaw = (bestBookBid && bestBookAsk)
+    ? BigInt(bestBookAsk.price_quote_base_units) - BigInt(bestBookBid.price_quote_base_units)
     : null;
-  const spreadPct = (spread && selectedMarket.best_bid_quote_base_units && BigInt(selectedMarket.best_bid_quote_base_units) > 0n)
-    ? (Number((BigInt(spread) * 10_000n) / BigInt(selectedMarket.best_bid_quote_base_units)) / 100).toFixed(2)
+  const spread = spreadRaw !== null ? spreadRaw.toString() : null;
+  const spreadPct = (spreadRaw !== null && bestBookBid && BigInt(bestBookBid.price_quote_base_units) > 0n)
+    ? (Number((spreadRaw * 10_000n) / BigInt(bestBookBid.price_quote_base_units)) / 100).toFixed(2)
     : null;
 
   // Pick a colour cue for the headline price based on the active chart range.
@@ -740,8 +769,8 @@ export function MarketsPage() {
   // The refresh button still shows `[ syncing ]`; the feed itself should only
   // leave `live` when we have no successful snapshot yet or a refresh fails.
   const liveState = refreshError ? 'stale' : (lastUpdatedAt ? 'live' : 'syncing');
-  const midPrice = (selectedMarket.best_bid_quote_base_units && selectedMarket.best_ask_quote_base_units)
-    ? ((BigInt(selectedMarket.best_bid_quote_base_units) + BigInt(selectedMarket.best_ask_quote_base_units)) / 2n).toString()
+  const midPrice = (bestBookBid && bestBookAsk)
+    ? ((BigInt(bestBookAsk.price_quote_base_units) + BigInt(bestBookBid.price_quote_base_units)) / 2n).toString()
     : null;
 
   return (
@@ -893,11 +922,11 @@ export function MarketsPage() {
               <span className="market-card-hint">{formatRpow(visibleBidBase + visibleAskBase)} {baseCode}</span>
             </div>
             <div className="market-card-body" style={{ padding: 0 }}>
-              {(!book?.bids.length || !book?.asks.length) ? (
+              {(!sortedBids.length || !sortedAsks.length) ? (
                 <div className="market-liquidity-warning">
-                  {!book?.bids.length && !book?.asks.length
+                  {!sortedBids.length && !sortedAsks.length
                     ? 'no resting liquidity yet'
-                    : !book?.bids.length
+                    : !sortedBids.length
                       ? 'no bids resting'
                       : 'no asks resting'}
                 </div>
@@ -909,14 +938,13 @@ export function MarketsPage() {
                   <span>total ({quoteCode})</span>
                 </div>
                 <div className="book-rows">
-                  {book?.asks.length === 0 ? <div className="book-empty">no asks</div> : null}
+                  {sortedAsks.length === 0 ? <div className="book-empty">no asks</div> : null}
                   {(() => {
-                    const asks = book?.asks ?? [];
-                    const visible = asks.slice(0, 12);
+                    const visible = sortedAsks.slice(0, 12);
                     // Render best-ask-at-bottom; depth ratios and cumulative
-                    // sizes still indexed against the full asks array.
+                    // sizes still indexed against the full sorted asks array.
                     return [...visible].reverse().map((l) => {
-                      const idx = asks.indexOf(l);
+                      const idx = sortedAsks.indexOf(l);
                       const ratio = askDepth[idx] ?? 0;
                       const cum = askCumBase[idx] ?? BigInt(l.base_amount_base_units);
                       return (
@@ -938,11 +966,15 @@ export function MarketsPage() {
                 </div>
                 <div className="market-spread">
                   <span>spread</span>
-                  <strong>{spread ? `${formatRpow(spread)} ${quoteCode}${spreadPct ? ` · ${spreadPct}%` : ''}` : '—'}</strong>
+                  <strong>
+                    {spreadRaw === null ? '—'
+                      : spreadRaw < 0n ? `crossed (${formatRpow((-spreadRaw).toString())} ${quoteCode} overlap)`
+                      : `${formatRpow(spread!)} ${quoteCode}${spreadPct ? ` · ${spreadPct}%` : ''}`}
+                  </strong>
                 </div>
                 <div className="book-rows">
-                  {book?.bids.length === 0 ? <div className="book-empty">no bids</div> : null}
-                  {(book?.bids ?? []).slice(0, 12).map((l, idx) => {
+                  {sortedBids.length === 0 ? <div className="book-empty">no bids</div> : null}
+                  {sortedBids.slice(0, 12).map((l, idx) => {
                     const ratio = bidDepth[idx] ?? 0;
                     const cum = bidCumBase[idx] ?? BigInt(l.base_amount_base_units);
                     return (
