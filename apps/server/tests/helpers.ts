@@ -38,16 +38,28 @@ export async function makeTestApp(opts: {
   });
 
   await runMigrations(pool);
+  // Override the seeded default asset row so its mining/cap parameters
+  // match the legacy single-asset test fixture: 8-bit difficulty with the
+  // step interval pushed well past any single test's block count, a
+  // 21-RPOW cap, and a 1/128-RPOW reward so the cap-exhausted edge case
+  // is reachable in a few mints. After migration 027 these knobs live on
+  // the asset row, not in the AppConfig — but tests still need them to
+  // stay constant within a run.
+  await pool.query(
+    `UPDATE assets
+       SET difficulty_start_bits = 8,
+           difficulty_step_blocks = 1000000,
+           difficulty_max_bits = 50,
+           initial_reward_base_units = 7812500,
+           reward_interval_blocks = 1000000,
+           max_supply_base_units = 21000000000
+     WHERE id = '00000000-0000-4000-8000-000000000000'`,
+  );
   const app = await buildApp({
     pool,
     test: true,
     config: {
       sessionSecret: 'x'.repeat(32),
-      // Tests use the legacy 1/128-RPOW reward against a 21-RPOW cap so
-      // the cap-exhausted edge case is reachable in a few mints. Halving
-      // and difficulty-step intervals are pushed far above any test's
-      // block count so the schedule stays in its starting tier — tests
-      // assert a constant reward and a constant difficulty.
       difficultyStartBits: 8,
       difficultyStepBlocks: 1_000_000,
       difficultyMaxBits: 50,
@@ -70,6 +82,10 @@ export async function makeTestApp(opts: {
       webOrigin: 'http://web.test',
       secureCookies: false,
       trustProxy: '127.0.0.1',
+      rpow2ApiBaseUrl: 'http://rpow2.test',
+      rpow2SessionCookie: 'rpow_session=test',
+      rpow2BankerEmail: 'rpow4bank@gmail.com',
+      rpow2DepositPollEnabled: false,
     },
   });
   return {

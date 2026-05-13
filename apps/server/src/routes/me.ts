@@ -11,6 +11,21 @@ interface MeRow {
   is_admin: boolean;
 }
 
+interface MeBalanceRow {
+  asset_id: string;
+  asset_slug: string;
+  display_code: string;
+  nickname: string;
+  asset_kind: 'mineable' | 'external_custodial';
+  system_default: boolean;
+  sequence_number: number;
+  spendable: string;
+  minted: string;
+  sent: string;
+  received: string;
+  events_count: string;
+}
+
 export async function meRoutes(app: FastifyInstance) {
   const handler = async (req: FastifyRequest, reply: FastifyReply) => {
     const s = app.readSession(req);
@@ -64,4 +79,62 @@ export async function meRoutes(app: FastifyInstance) {
 
   app.get('/me', handler);
   app.get('/assets/:asset_slug/me', handler);
+
+  // Multi-asset balances: returns one row per asset where the caller has a
+  // balance row, plus the platform default (RPOW4.0) so it's always shown
+  // even with a zero balance. Used by the wallet hub to render the
+  // "ASSETS" overview without forcing N round-trips to /me.
+  //
+  // Response is intentionally compact (no schedule/pool config etc.) — the
+  // /assets endpoint already covers the heavy asset metadata for any
+  // consumer that needs more.
+  app.get('/me/balances', async (req, reply) => {
+    const s = app.readSession(req);
+    if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
+
+    // Includes any asset where the user has a balance row (zero or
+    // positive), plus the platform default (RPOW4.0) and RPOW2 so the wallet
+    // hub always makes the bridge easy to find. Other untouched assets are
+    // intentionally omitted to keep the list focused.
+    const { rows } = await app.pool.query<MeBalanceRow>(
+      `SELECT a.id::text                                AS asset_id,
+              a.slug                                    AS asset_slug,
+              a.display_code,
+              a.nickname,
+              a.asset_kind,
+              a.system_default,
+              a.sequence_number,
+              coalesce(b.spendable_base_units, 0)::text AS spendable,
+              coalesce(b.minted_base_units,    0)::text AS minted,
+              coalesce(b.sent_base_units,      0)::text AS sent,
+              coalesce(b.received_base_units,  0)::text AS received,
+              coalesce(b.events_count,         0)::text AS events_count
+         FROM assets a
+         LEFT JOIN account_balances b
+                ON b.asset_id = a.id AND b.pubkey = $1
+        WHERE a.status = 'active'
+          AND (b.pubkey IS NOT NULL OR a.system_default = true OR a.slug = 'rpow2')
+        ORDER BY a.system_default DESC, a.sequence_number ASC`,
+      [s.pubkey],
+    );
+
+    reply.header('cache-control', 'private, max-age=0');
+    return {
+      pubkey: s.pubkey,
+      balances: rows.map((r) => ({
+        asset_id: r.asset_id,
+        asset_slug: r.asset_slug,
+        display_code: r.display_code,
+        nickname: r.nickname,
+        asset_kind: r.asset_kind,
+        system_default: r.system_default,
+        sequence_number: r.sequence_number,
+        balance_base_units: r.spendable,
+        minted_base_units: r.minted,
+        sent_base_units: r.sent,
+        received_base_units: r.received,
+        events_count: Number(r.events_count),
+      })),
+    };
+  });
 }

@@ -67,6 +67,9 @@ export async function poolRoutes(app: FastifyInstance) {
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
     const asset = await resolveAsset(app, req);
     if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    if (asset.assetKind !== 'mineable') {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'this asset is not mineable' });
+    }
     const assetId = asset.id;
 
     const { rows } = await app.pool.query<{ name: string; value: string }>(
@@ -136,6 +139,9 @@ export async function poolRoutes(app: FastifyInstance) {
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
     const asset = await resolveAsset(app, req);
     if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    if (asset.assetKind !== 'mineable') {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'this asset is not mineable' });
+    }
     const assetId = asset.id;
 
     const parsed = ShareBody.safeParse(req.body);
@@ -416,7 +422,7 @@ export async function poolRoutes(app: FastifyInstance) {
           // We pass blocks_mined as a parameter so the same statement
           // works for both the insert and update paths (the COALESCE
           // pattern would be uglier).
-          await c.query(
+          const credit = await c.query<{ was_inserted: boolean }>(
             `INSERT INTO account_balances(
                asset_id, pubkey, spendable_base_units, minted_base_units,
                blocks_mined, events_count, updated_at
@@ -427,9 +433,17 @@ export async function poolRoutes(app: FastifyInstance) {
                minted_base_units    = account_balances.minted_base_units    + EXCLUDED.minted_base_units,
                blocks_mined         = account_balances.blocks_mined         + $4::int,
                events_count         = account_balances.events_count         + 1,
-               updated_at = now()`,
+               updated_at = now()
+             RETURNING (xmax = 0) AS was_inserted`,
             [assetId, recipient, amount.toString(), isFinder ? 1 : 0],
           );
+          if (credit.rows[0]?.was_inserted) {
+            await c.query(
+              `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+               WHERE asset_id=$1::uuid AND name='user_count'`,
+              [assetId],
+            );
+          }
 
           const inserted = await c.query<LedgerEventRow>(
             `WITH inserted AS (
@@ -478,15 +492,23 @@ export async function poolRoutes(app: FastifyInstance) {
             { id: eventId, owner_pubkey: TREASURY_PUBKEY, value: amount, issued_at: issuedAt.toISOString() },
             app.config.signingPrivateKeyHex,
           );
-          await c.query(
+          const treasuryCredit = await c.query<{ was_inserted: boolean }>(
             `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, events_count, updated_at)
              VALUES($1::uuid, $2, $3, 1, now())
              ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
                events_count = account_balances.events_count + 1,
-               updated_at = now()`,
+               updated_at = now()
+             RETURNING (xmax = 0) AS was_inserted`,
             [assetId, TREASURY_PUBKEY, amount.toString()],
           );
+          if (treasuryCredit.rows[0]?.was_inserted) {
+            await c.query(
+              `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+               WHERE asset_id=$1::uuid AND name='user_count'`,
+              [assetId],
+            );
+          }
           const inserted = await c.query<LedgerEventRow>(
             `WITH inserted AS (
                INSERT INTO ledger_events(
@@ -616,6 +638,9 @@ export async function poolRoutes(app: FastifyInstance) {
     }
     const asset = await resolveAsset(app, req);
     if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    if (asset.assetKind !== 'mineable') {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'this asset is not mineable' });
+    }
 
     const session = app.readSession(req);
     const cacheKey = `${asset.id}|${session?.pubkey ?? 'anon'}`;
@@ -772,6 +797,9 @@ export async function poolRoutes(app: FastifyInstance) {
     }
     const asset = await resolveAsset(app, req);
     if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    if (asset.assetKind !== 'mineable') {
+      return reply.code(503).send({ error: 'POOL_DISABLED', message: 'this asset is not mineable' });
+    }
     const qp = RoundsQuery.safeParse(req.query);
     if (!qp.success) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid query params' });

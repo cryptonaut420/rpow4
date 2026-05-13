@@ -44,6 +44,9 @@ export async function challengeRoutes(app: FastifyInstance) {
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
     const asset = await resolveAsset(app, req);
     if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    if (asset.assetKind !== 'mineable') {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'this asset is not mineable' });
+    }
     if (asset.miningAlgo !== 'rpow_classic') {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'unsupported mining algorithm' });
     }

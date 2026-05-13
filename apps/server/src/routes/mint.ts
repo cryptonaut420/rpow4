@@ -31,6 +31,9 @@ export async function mintRoutes(app: FastifyInstance) {
     if (!s) return reply.code(401).send({ error: 'UNAUTHORIZED', message: 'login required' });
     const asset = await resolveAsset(app, req);
     if (!asset) return reply.code(404).send({ error: 'NOT_FOUND', message: 'asset not found' });
+    if (asset.assetKind !== 'mineable') {
+      return reply.code(400).send({ error: 'BAD_REQUEST', message: 'this asset is not mineable' });
+    }
     const parsed = Body.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
     if (parsed.data.asset_id && parsed.data.asset_id !== asset.id) {
@@ -159,7 +162,7 @@ export async function mintRoutes(app: FastifyInstance) {
           app.config.signingPrivateKeyHex,
         );
 
-        await c.query(
+        const credit = await c.query<{ was_inserted: boolean }>(
           `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, minted_base_units, blocks_mined, events_count, updated_at)
            VALUES($1::uuid, $2, $3, $3, 1, 1, now())
            ON CONFLICT (asset_id, pubkey) DO UPDATE SET
@@ -167,9 +170,17 @@ export async function mintRoutes(app: FastifyInstance) {
              minted_base_units = account_balances.minted_base_units + EXCLUDED.minted_base_units,
              blocks_mined = account_balances.blocks_mined + 1,
              events_count = account_balances.events_count + 1,
-             updated_at = now()`,
+             updated_at = now()
+           RETURNING (xmax = 0) AS was_inserted`,
           [asset.id, s.pubkey, reward.toString()],
         );
+        if (credit.rows[0]?.was_inserted) {
+          await c.query(
+            `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+             WHERE asset_id=$1::uuid AND name='user_count'`,
+            [asset.id],
+          );
+        }
 
         await c.query(
           `UPDATE ledger_stats

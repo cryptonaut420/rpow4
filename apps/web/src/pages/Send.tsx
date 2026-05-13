@@ -3,6 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { PageAssetPicker } from '../components/PageAssetPicker.js';
 import { api } from '../api.js';
 import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
@@ -61,6 +62,27 @@ export function SendPage() {
     api.ledger(selectedSlug).then((l) => { if (!cancelled) setLedger(l); }).catch(() => {});
     return () => { cancelled = true; };
   }, [selectedSlug]);
+
+  // When the user switches asset (via the picker or URL slug change), the
+  // previous in-flight amount/fee/recipient state could mislead them — fee
+  // schedules and balances differ per asset. Reset the form back to its
+  // URL-prefilled defaults so the new asset's fee preview is meaningful and
+  // any "sent!" success card is dismissed.
+  const lastSlugRef = useRef(selectedSlug);
+  useEffect(() => {
+    if (lastSlugRef.current === selectedSlug) return;
+    lastSlugRef.current = selectedSlug;
+    setRecipient(searchParams.get('to') ?? '');
+    setAmount(searchParams.get('amount') ?? '');
+    setMemo(searchParams.get('memo') ?? '');
+    setStatus('idle');
+    setError('');
+    setTransferId('');
+    setSentFee('');
+    setSentTo(null);
+    setSentAmt('');
+    setResolution({ kind: 'idle' });
+  }, [selectedSlug, searchParams]);
 
   // Debounced recipient resolution.
   useEffect(() => {
@@ -200,6 +222,7 @@ export function SendPage() {
   return (
     <>
       <Panel title={`SEND ${assetCode}`}>
+        <PageAssetPicker label="from" />
         <div style={{ marginBottom: 10, color: 'var(--dim)', fontSize: 12 }}>
           balance: <strong style={{ color: 'var(--fg)' }}>{formatRpow(me.balance_base_units)} {assetCode}</strong>
           {fee > 0n && (

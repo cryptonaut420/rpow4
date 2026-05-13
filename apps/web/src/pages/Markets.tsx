@@ -42,6 +42,8 @@ const POLL_MS = 1500;
 const ONE = 1_000_000_000n;
 const BPS_DENOM = 10_000n;
 const INTERVALS: Interval[] = ['1m', '5m', '1h', '1d'];
+const PINNED_MARKET_BASE_SLUG = 'rpow2';
+const PINNED_MARKET_QUOTE_SLUG = 'rpow4-0';
 
 function tryParseAmount(raw: string): bigint | null {
   try {
@@ -74,10 +76,27 @@ function feeFor(notional: bigint, bps: number): bigint {
   return ceilDiv(notional * BigInt(bps), BPS_DENOM);
 }
 
+function isPinnedMarket(market: MarketSummary): boolean {
+  return market.base_asset.slug === PINNED_MARKET_BASE_SLUG
+    && market.quote_asset.slug === PINNED_MARKET_QUOTE_SLUG;
+}
+
+function sortMarketsForDisplay(markets: MarketSummary[]): MarketSummary[] {
+  return [...markets].sort((a, b) => {
+    const pinnedDelta = Number(isPinnedMarket(b)) - Number(isPinnedMarket(a));
+    if (pinnedDelta !== 0) return pinnedDelta;
+    const seqDelta = a.base_asset.display_code.localeCompare(b.base_asset.display_code, undefined, { numeric: true });
+    if (seqDelta !== 0) return seqDelta;
+    return a.symbol.localeCompare(b.symbol);
+  });
+}
+
 interface BuyEstimate {
   baseFilled: bigint;
+  baseReceived: bigint;
   quoteSpent: bigint;
   fee: bigint;
+  quoteFee: bigint;
   totalDebit: bigint;
   fullyFillable: boolean;
 }
@@ -86,6 +105,7 @@ function estimateMarketBuy(
   book: MarketBookResponse | null,
   baseAmount: bigint,
   feeBps: number,
+  feeInBase: boolean,
 ): BuyEstimate {
   let remaining = baseAmount;
   let baseFilled = 0n;
@@ -98,12 +118,15 @@ function estimateMarketBuy(
     baseFilled += fill;
     remaining -= fill;
   }
-  const fee = feeFor(quoteSpent, feeBps);
+  const fee = feeFor(feeInBase ? baseFilled : quoteSpent, feeBps);
+  const quoteFee = feeInBase ? 0n : fee;
   return {
     baseFilled,
+    baseReceived: baseFilled - (feeInBase ? fee : 0n),
     quoteSpent,
     fee,
-    totalDebit: quoteSpent + fee,
+    quoteFee,
+    totalDebit: quoteSpent + quoteFee,
     fullyFillable: remaining === 0n,
   };
 }
@@ -120,6 +143,7 @@ function estimateMarketSell(
   book: MarketBookResponse | null,
   baseAmount: bigint,
   feeBps: number,
+  feeInBase: boolean,
 ): SellEstimate {
   let remaining = baseAmount;
   let baseFilled = 0n;
@@ -128,16 +152,16 @@ function estimateMarketSell(
     if (remaining <= 0n) break;
     const levelBase = BigInt(bid.base_amount_base_units);
     const fill = remaining < levelBase ? remaining : levelBase;
-    quoteReceived += (fill * BigInt(bid.price_quote_base_units)) / ONE;
+    quoteReceived += quoteFor(fill, BigInt(bid.price_quote_base_units));
     baseFilled += fill;
     remaining -= fill;
   }
-  const fee = feeFor(quoteReceived, feeBps);
+  const fee = feeFor(feeInBase ? baseFilled : quoteReceived, feeBps);
   return {
     baseFilled,
     quoteReceived,
     fee,
-    netReceive: quoteReceived - fee,
+    netReceive: feeInBase ? quoteReceived : quoteReceived - fee,
     fullyFillable: remaining === 0n,
   };
 }
@@ -316,7 +340,7 @@ export function MarketsPage() {
     selectedMarket
       ? `${selectedMarket.base_asset.nickname} (${selectedMarket.symbol}) Market`
       : 'RPOW Markets',
-    'Trade internal RPOW markets against RPOW4.0 with reserved-funds spot orders.',
+    'Trade RPOW assets against RPOW4.0 with reserved-funds spot orders.',
   );
 
   async function refreshAll(
@@ -328,12 +352,13 @@ export function MarketsPage() {
     try {
       const res = await api.markets();
       if (!isFresh()) return;
-      setMarkets(res.markets);
+      const sortedMarkets = sortMarketsForDisplay(res.markets);
+      setMarkets(sortedMarkets);
       const next = marketId
-        ? res.markets.find((m) => m.id === marketId)
+        ? sortedMarkets.find((m) => m.id === marketId)
         : (selectedAsset && !selectedAsset.system_default
-            ? res.markets.find((m) => m.base_asset.slug === selectedAsset.slug)
-            : res.markets[0]);
+            ? sortedMarkets.find((m) => m.base_asset.slug === selectedAsset.slug)
+            : sortedMarkets[0]);
       if (!next) {
         setBook(null); setTrades([]); setCandles([]); setBalances(null); setOrders([]);
         return;
@@ -489,12 +514,18 @@ export function MarketsPage() {
       }
       sigBody.price_quote_base_units = priceBu.toString();
     } else if (side === 'buy') {
-      const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps);
+      const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       if (!est.fullyFillable) {
         setFormError('not enough ask liquidity — reduce size or use limit');
         return;
       }
       sigBody.max_quote_base_units = est.totalDebit.toString();
+    } else {
+      const est = estimateMarketSell(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      if (!est.fullyFillable) {
+        setFormError('not enough bid liquidity — reduce size or use limit');
+        return;
+      }
     }
     setSubmitting(true);
     setFormError('');
@@ -526,6 +557,14 @@ export function MarketsPage() {
   }
 
   async function cancelOrder(order: MarketOrder) {
+    const filled = BigInt(order.original_base_units) - BigInt(order.remaining_base_units);
+    if (filled > 0n) {
+      const baseCodeForOrder = selectedMarket?.base_asset.display_code ?? 'units';
+      if (!window.confirm(
+        `Cancel this ${order.side.toUpperCase()} order? ${formatRpow(filled)} ${baseCodeForOrder} has already filled — only the unfilled remainder of `
+        + `${formatRpow(order.remaining_base_units)} ${baseCodeForOrder} will be cancelled and returned.`,
+      )) return;
+    }
     const sigBody = { market_id: order.market_id, order_id: order.id };
     try {
       await api.cancelMarketOrder(order.market_id, order.id, {
@@ -545,7 +584,7 @@ export function MarketsPage() {
     return (
       <Panel title="RPOW MARKETS">
         <div className="market-empty">
-          <div>The internal market opens automatically the moment a custom RPOW launches.</div>
+          <div>Markets open automatically the moment a custom RPOW launches.</div>
           <div>Be the first to seed price discovery.</div>
           <div style={{ marginTop: 14 }}><Link to={assetPath('/launch')}>[ launch new rpow ]</Link></div>
         </div>
@@ -558,6 +597,9 @@ export function MarketsPage() {
   const baseCode = selectedMarket.base_asset.display_code;
   const baseNickname = selectedMarket.base_asset.nickname;
   const quoteNickname = selectedMarket.quote_asset.nickname;
+  const isExternalMarket = selectedMarket.base_asset.asset_kind === 'external_custodial';
+  const feeInBase = isExternalMarket;
+  const feeAssetCode = feeInBase ? baseCode : quoteCode;
   const quoteBalance = balances?.quote;
   const baseBalance = balances?.base;
   const amountBu = tryParseAmount(amount);
@@ -612,36 +654,37 @@ export function MarketsPage() {
   let preview: { label: string; value: string }[] = [];
   if (orderType === 'limit' && amountBu && priceBu) {
     const notional = quoteFor(amountBu, priceBu);
-    const fee = feeFor(notional, selectedMarket.taker_fee_bps);
+    const fee = feeFor(feeInBase ? amountBu : notional, selectedMarket.taker_fee_bps);
     if (side === 'buy') {
       preview = [
         { label: 'notional', value: `${formatRpow(notional)} ${quoteCode}` },
-        { label: 'taker fee (if takes)', value: selectedMarket.taker_fee_bps ? `${formatRpow(fee)} ${quoteCode}` : 'none' },
+        { label: 'taker fee (if takes)', value: selectedMarket.taker_fee_bps ? `${formatRpow(fee)} ${feeAssetCode}` : 'none' },
         { label: 'reserves', value: `${formatRpow(notional)} ${quoteCode}` },
       ];
     } else {
       preview = [
         { label: 'notional', value: `${formatRpow(notional)} ${quoteCode}` },
-        { label: 'taker fee (if takes)', value: selectedMarket.taker_fee_bps ? `${formatRpow(fee)} ${quoteCode}` : 'none' },
+        { label: 'taker fee (if takes)', value: selectedMarket.taker_fee_bps ? `${formatRpow(fee)} ${feeAssetCode}` : 'none' },
         { label: 'reserves', value: `${formatRpow(amountBu)} ${baseCode}` },
       ];
     }
   } else if (orderType === 'market' && amountBu) {
     if (side === 'buy') {
-      const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps);
+      const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       preview = [
         { label: 'fills', value: est.fullyFillable ? `${formatRpow(amountBu)} ${baseCode}` : `${formatRpow(est.baseFilled)} / ${formatRpow(amountBu)} ${baseCode}` },
+        ...(feeInBase ? [{ label: 'receive after fee', value: `${formatRpow(est.baseReceived)} ${baseCode}` }] : []),
         { label: 'avg cost', value: est.baseFilled > 0n ? `${formatRpow(quoteFor(ONE, (est.quoteSpent * ONE) / est.baseFilled))} ${quoteCode}` : '—' },
         { label: 'spend', value: `${formatRpow(est.quoteSpent)} ${quoteCode}` },
-        { label: 'taker fee', value: selectedMarket.taker_fee_bps ? `${formatRpow(est.fee)} ${quoteCode}` : 'none' },
+        { label: 'taker fee', value: selectedMarket.taker_fee_bps ? `${formatRpow(est.fee)} ${feeAssetCode}` : 'none' },
         { label: 'total debit', value: `${formatRpow(est.totalDebit)} ${quoteCode}` },
       ];
     } else {
-      const est = estimateMarketSell(book, amountBu, selectedMarket.taker_fee_bps);
+      const est = estimateMarketSell(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       preview = [
         { label: 'fills', value: est.fullyFillable ? `${formatRpow(amountBu)} ${baseCode}` : `${formatRpow(est.baseFilled)} / ${formatRpow(amountBu)} ${baseCode}` },
         { label: 'gross proceeds', value: `${formatRpow(est.quoteReceived)} ${quoteCode}` },
-        { label: 'taker fee', value: selectedMarket.taker_fee_bps ? `${formatRpow(est.fee)} ${quoteCode}` : 'none' },
+        { label: 'taker fee', value: selectedMarket.taker_fee_bps ? `${formatRpow(est.fee)} ${feeAssetCode}` : 'none' },
         { label: 'net receive', value: `${formatRpow(est.netReceive)} ${quoteCode}` },
       ];
     }
@@ -669,7 +712,7 @@ export function MarketsPage() {
       }
     } else if (orderType === 'market') {
       if (side === 'buy') {
-        const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps);
+        const est = estimateMarketBuy(book, amountBu, selectedMarket.taker_fee_bps, feeInBase);
         if (quoteBalance && BigInt(quoteBalance.spendable_base_units) < est.totalDebit) insufficientBalance = true;
       } else {
         if (baseBalance && BigInt(baseBalance.spendable_base_units) < amountBu) insufficientBalance = true;
@@ -692,7 +735,10 @@ export function MarketsPage() {
 
   // Pick a colour cue for the headline price based on the active chart range.
   const headlineCls = change24h === null ? '' : (change24h >= 0 ? 'up' : 'down');
-  const liveState = refreshError ? 'stale' : (isRefreshing ? 'syncing' : 'live');
+  // Keep the headline feed status stable during normal background polling.
+  // The refresh button still shows `[ syncing ]`; the feed itself should only
+  // leave `live` when we have no successful snapshot yet or a refresh fails.
+  const liveState = refreshError ? 'stale' : (lastUpdatedAt ? 'live' : 'syncing');
   const midPrice = (selectedMarket.best_bid_quote_base_units && selectedMarket.best_ask_quote_base_units)
     ? ((BigInt(selectedMarket.best_bid_quote_base_units) + BigInt(selectedMarket.best_ask_quote_base_units)) / 2n).toString()
     : null;
@@ -706,6 +752,7 @@ export function MarketsPage() {
             {baseNickname}
             <em>{selectedMarket.symbol}</em>
           </span>
+          {isExternalMarket ? <Link to="/assets/rpow2" className="market-external-badge">RPOW2 deposits + withdrawals</Link> : null}
           <span className={`market-header-price ${headlineCls}`}>
             {fmtPrice(selectedMarket.last_price_quote_base_units)}
             <small>{quoteCode}</small>
@@ -762,17 +809,23 @@ export function MarketsPage() {
                 <div className="book-empty">no matches</div>
               ) : filteredPairs.map((m) => {
                 const change = change24hFromMarket(m);
+                const pinned = isPinnedMarket(m);
                 return (
                   <button
                     key={m.id}
                     type="button"
-                    className={`market-pair ${m.id === selectedMarket.id ? 'active' : ''}`}
+                    className={`market-pair ${m.id === selectedMarket.id ? 'active' : ''} ${pinned ? 'pinned' : ''}`}
                     onClick={() => onSelectMarket(m.id)}
                     title={`${m.base_asset.nickname} (${m.base_asset.display_code}) priced in ${m.quote_asset.display_code}`}
                   >
                     <span className="market-pair-left">
-                      <span className="market-pair-symbol">{m.base_asset.display_code}/{m.quote_asset.display_code}</span>
-                      <span className="market-pair-nickname">{m.base_asset.nickname}</span>
+                      <span className="market-pair-symbol">
+                        {pinned ? <span className="market-pair-star" aria-label="pinned market">★</span> : null}
+                        {m.base_asset.display_code}/{m.quote_asset.display_code}
+                      </span>
+                      <span className="market-pair-nickname">
+                        {m.base_asset.nickname}
+                      </span>
                     </span>
                     <span className="market-pair-right">
                       <span>{fmtPrice(m.last_price_quote_base_units)}</span>

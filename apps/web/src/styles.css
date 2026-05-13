@@ -122,13 +122,18 @@ button.link-button:hover { background: transparent; border-bottom-color: var(--a
 input,
 textarea,
 select {
-  background: rgba(255,255,255,0.02);
+  background: var(--bg-2);
   color: var(--fg);
   border: 1px solid var(--dimmer);
   padding: 5px 10px;
   font: inherit;
   outline: none;
   border-radius: 2px;
+  color-scheme: dark;
+}
+select option {
+  background: #08080a;
+  color: #e8e3d3;
 }
 textarea {
   resize: vertical;
@@ -307,10 +312,12 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
 .form-grid input,
 .form-grid textarea,
 .form-grid select {
-  background: var(--bg);
-  color: var(--fg);
+  background: #08080a;
+  color: #e8e3d3;
   border: 1px solid var(--accent-dim);
   padding: 4px 6px;
+  max-width: 100%;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
 }
 
 .form-grid {
@@ -675,6 +682,18 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   margin-left: 6px;
   text-transform: uppercase;
 }
+.market-external-badge {
+  border: 1px dashed var(--accent-dim);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  padding: 2px 6px;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+.market-external-badge:hover {
+  background: rgba(127, 255, 212, 0.08);
+}
 .market-header-price {
   font-size: 24px;
   letter-spacing: 0.02em;
@@ -849,6 +868,15 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   min-width: 0;
 }
 .market-pair:hover { background: rgba(127, 255, 212, 0.06); }
+.market-pair.pinned {
+  background:
+    linear-gradient(90deg, rgba(127, 255, 212, 0.12), transparent 58%),
+    rgba(0, 0, 0, 0.08);
+  border-bottom-color: var(--accent-dim);
+}
+.market-pair.pinned:not(.active) {
+  color: var(--fg);
+}
 .market-pair.active {
   background: rgba(127, 255, 212, 0.1);
   color: var(--accent);
@@ -866,6 +894,11 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.market-pair-star {
+  color: var(--accent);
+  margin-right: 6px;
+  text-shadow: 0 0 8px rgba(127, 255, 212, 0.55);
+}
 .market-pair-nickname {
   font-size: 10px;
   color: var(--dim);
@@ -873,6 +906,12 @@ select:focus { border-color: var(--accent); background: rgba(255,255,255,0.04); 
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.market-pair-nickname em {
+  color: var(--accent);
+  font-style: normal;
+  margin-left: 6px;
+  text-transform: uppercase;
 }
 .market-pair-right {
   display: flex;
@@ -2040,5 +2079,407 @@ main { margin-top: 4px; }
     right: 12px;
     font-size: 12px;
     padding: 6px 9px;
+  }
+}
+
+/* ── In-page asset picker (Send, Activity) ───────────────────────────────── */
+.page-asset-picker {
+  display: inline-flex;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.page-asset-picker select {
+  font-family: inherit;
+  margin-left: 4px;
+}
+
+/* ── Assets overview (multi-balance hub on the wallet page) ──────────────── */
+.assets-overview {
+  display: flex;
+  flex-direction: column;
+}
+.assets-overview-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 4px;
+  border-bottom: 1px dashed var(--dimmer);
+  font-variant-numeric: tabular-nums;
+}
+.assets-overview-row:last-child { border-bottom: 0; }
+.assets-overview-row.active {
+  background: rgba(127, 255, 212, 0.06);
+}
+.assets-overview-row.external {
+  border: 1px solid var(--accent-dim);
+  background: rgba(127, 255, 212, 0.035);
+  margin: 4px 0;
+  padding: 9px 8px;
+}
+.assets-overview-left {
+  min-width: 0;
+}
+.assets-overview-name {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+.assets-overview-name:hover .assets-overview-code {
+  color: var(--accent);
+}
+.assets-overview-marker {
+  color: var(--accent);
+  width: 1ch;
+  display: inline-block;
+}
+.assets-overview-code {
+  font-weight: bold;
+  letter-spacing: 0.04em;
+}
+.assets-overview-nickname {
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.assets-overview-balance {
+  text-align: right;
+  white-space: nowrap;
+}
+.assets-overview-actions {
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+.assets-overview-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--dimmer);
+}
+@media (max-width: 640px) {
+  .assets-overview-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto;
+    row-gap: 4px;
+  }
+  .assets-overview-actions {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+}
+
+/* ── RPOW2 deposits + withdrawals ────────────────────────────────────────── */
+.rpow2-custody-page {
+  max-width: 100%;
+  display: grid;
+  gap: 14px;
+  overflow-x: clip;
+}
+
+.rpow2-custody-page .panel {
+  min-width: 0;
+}
+
+.rpow2-custody-page h2,
+.rpow2-custody-page h3 {
+  margin: 0 0 8px;
+}
+
+.custody-hero {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.custody-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.custody-hero p,
+.custody-hint {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.custody-balance-card,
+.custody-warning {
+  border: 1px solid var(--dimmer);
+  background: rgba(255,255,255,0.03);
+  padding: 12px;
+}
+
+.custody-balance-card {
+  border-color: var(--accent-dim);
+  background:
+    linear-gradient(90deg, rgba(127, 255, 212, 0.08), rgba(127, 255, 212, 0.02));
+}
+
+.custody-balance-card strong {
+  display: block;
+  font-size: clamp(22px, 7vw, 30px);
+  margin: 4px 0;
+  line-height: 1;
+  overflow-wrap: anywhere;
+}
+
+.custody-balance-card span {
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.custody-warning {
+  margin-top: 12px;
+  color: var(--error);
+}
+
+.custody-section-intro {
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.6;
+  margin-bottom: 12px;
+}
+
+.custody-field {
+  display: grid;
+  grid-template-columns: minmax(0, 120px) minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: start;
+  margin-bottom: 12px;
+  min-width: 0;
+}
+
+.custody-field > span {
+  color: var(--dim);
+  min-width: 0;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.custody-copy-value {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.custody-copy-value code,
+.custody-field code {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.custody-form {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.custody-form label {
+  display: grid;
+  gap: 4px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.custody-form input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.custody-list {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.custody-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: baseline;
+  border: 1px solid var(--dimmer);
+  background: rgba(255, 255, 255, 0.018);
+  padding: 8px 10px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.custody-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.custody-row > strong {
+  color: var(--fg);
+  min-width: 74px;
+}
+
+.custody-row .custody-row-detail {
+  flex: 1 1 100%;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.custody-row.admin {
+  /* Admin rows mix several shapes (pending = approve+reject, sending =
+     status info, unattributed = input+assign). Keep them flex so each
+     row can flow comfortably without empty grid cells. */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+.custody-row.admin > strong { min-width: 104px; }
+.custody-row.admin > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.custody-row.admin > input {
+  background: transparent;
+  border: 1px dashed var(--dimmer);
+  color: inherit;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.custody-row.admin.sending {
+  background: rgba(127, 255, 212, 0.04);
+}
+
+.custody-admin-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  color: var(--dim);
+  font-size: 12px;
+}
+
+.custody-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.custody-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px dashed var(--dimmer);
+  padding: 7px 9px;
+  min-width: 0;
+}
+
+.custody-stats strong {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.custody-stats em {
+  color: var(--dim);
+  font-style: normal;
+  font-size: 11px;
+}
+
+.custody-stats .error { color: var(--error); }
+
+.custody-aggregates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin: 10px 0 16px;
+}
+
+.custody-stat-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--dimmer);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.custody-stat-card.primary {
+  border-color: var(--accent-dim);
+  background: rgba(127, 255, 212, 0.06);
+}
+
+.custody-stat-card strong {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  font-size: 16px;
+  letter-spacing: 0.02em;
+}
+
+.custody-stat-card em {
+  color: var(--dim);
+  font-style: normal;
+  font-size: 11px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px dashed var(--dimmer);
+  color: var(--dim);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.status-pill.ok      { color: var(--accent); border-color: var(--accent-dim); }
+.status-pill.info    { color: var(--accent); border-color: var(--accent-dim); border-style: solid; }
+.status-pill.warn    { color: #f4d160; border-color: rgba(244, 209, 96, 0.4); }
+.status-pill.error   { color: var(--error); border-color: rgba(255, 99, 99, 0.4); }
+.status-pill.rejected{ color: var(--dim); }
+
+@media (max-width: 820px) {
+  .custody-hero,
+  .custody-grid,
+  .custody-row,
+  .custody-row.admin {
+    grid-template-columns: 1fr;
+  }
+  .custody-row .custody-row-detail { white-space: normal; }
+}
+
+@media (max-width: 560px) {
+  .custody-field {
+    grid-template-columns: 1fr;
   }
 }

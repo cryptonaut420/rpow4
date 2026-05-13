@@ -7,6 +7,7 @@ import { usePageMeta } from '../hooks/usePageMeta.js';
 import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { shortPubkey } from '@rpow/shared';
+import { DEFAULT_ASSET_SLUG } from '../assets/AssetProvider.js';
 
 const KIND_LABEL: Record<NewsPostKind, string> = {
   announcement: 'announcement',
@@ -205,7 +206,11 @@ function AdminComposer({ onCreated }: { onCreated: (post: NewsPost) => void }) {
 export function NewsPage() {
   const { slug } = useParams();
   const wallet = useWallet();
-  const { me } = useMe();
+  // News is a global page (not asset-scoped), but `useMe` needs *some* asset
+  // context to fetch the session view. Pin it to the default RPOW4.0 slug so
+  // the admin gate keeps working regardless of which instance the user was
+  // most recently viewing.
+  const { me } = useMe(DEFAULT_ASSET_SLUG);
   const [posts, setPosts] = useState<NewsPost[]>([]);
   const [selected, setSelected] = useState<NewsPost | null>(null);
   const [loading, setLoading] = useState(true);
@@ -254,7 +259,11 @@ export function NewsPage() {
       </Panel>
 
       {error ? <Panel title="error"><div className="error">{error}</div></Panel> : null}
-      {loading ? <Panel><div className="dim">loading news...</div></Panel> : null}
+      {loading && posts.length === 0 ? (
+        <Panel title="loading">
+          <div className="dim">fetching the latest entries…</div>
+        </Panel>
+      ) : null}
 
       {featured ? (
         <div className="news-layout">
@@ -278,7 +287,17 @@ export function NewsPage() {
           </aside>
         </div>
       ) : !loading ? (
-        <Panel><div className="dim">no news has been published yet.</div></Panel>
+        <Panel title="no posts yet">
+          <p className="dim" style={{ marginTop: 0 }}>
+            Nothing has been published here yet. Check back soon — changelogs, releases, and project notes
+            will land on this page.
+          </p>
+          {isAdmin ? (
+            <p className="dim" style={{ marginBottom: 0 }}>
+              You're an admin — scroll down to draft the first post.
+            </p>
+          ) : null}
+        </Panel>
       ) : null}
 
       {isAdmin ? <AdminComposer onCreated={(post) => setPosts((current) => [post, ...current])} /> : null}

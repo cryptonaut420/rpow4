@@ -1312,6 +1312,146 @@ type:   'mint' | 'send' | 'receive' | 'all'  (default 'all')`,
       ],
     },
     {
+      id: 'rpow2-custody',
+      title: 'RPOW2 deposits + withdrawals',
+      intro: (
+        <>
+          <p style={{ margin: '0 0 8px 0' }}>
+            RPOW2 is a deposit/withdrawal asset. Deposits are detected from
+            the RPOW2 account activity feed and credited when the transfer
+            memo matches a RPOW4 pubkey or memo-safe handle. Withdrawals lock
+            the user&apos;s RPOW2 balance while the request is reviewed.
+          </p>
+          <p style={{ margin: 0 }}>
+            The <code>RPOW2/RPOW4.0</code> market uses the same trading API as
+            other markets, with <code>taker_fee_bps: 25</code> (0.25%). Fees
+            on this market are collected into the platform treasury as RPOW2.
+          </p>
+        </>
+      ),
+      endpoints: [
+        {
+          id: 'rpow2-custody-status',
+          method: 'GET',
+          path: '/custody/rpow2',
+          auth: 'session',
+          summary: 'Deposit instructions, sync status, and your recent RPOW2 activity.',
+          description: 'Use the returned RPOW2 email (`banker_email`) and your RPOW4 pubkey memo when depositing from RPOW2. Recent deposits and withdrawals are scoped to the signed-in account.',
+          response: `{
+  "asset_id": "00000000-0000-4000-8000-000000000002",
+  "provider_key": "rpow2",
+  "configured": true,
+  "banker_email": "rpow4bank@gmail.com",
+  "deposit_enabled": true,
+  "withdrawal_enabled": true,
+  "sync": {
+    "cursor_at": "2026-05-12T19:59:55Z",
+    "last_run_at": "2026-05-12T20:00:00Z",
+    "last_success_at": "2026-05-12T20:00:00Z",
+    "last_error": null,
+    "paused": false
+  },
+  "deposits": [],
+  "withdrawals": []
+}`,
+          errors: [
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+          ],
+          curl: `curl '${B}/custody/rpow2' -b cookies.txt`,
+          js: `const custody = await fetch('${B}/custody/rpow2', { credentials: 'include' }).then(r => r.json());`,
+        },
+        {
+          id: 'rpow2-sync',
+          method: 'POST',
+          path: '/custody/rpow2/sync',
+          auth: 'session',
+          summary: 'Best-effort manual deposit sync after a user sends RPOW2.',
+          description: 'Normal production operation should also run the server-side polling worker. This endpoint never exposes the RPOW2 session cookie.',
+          response: `{ "ok": true, "processed": 3, "credited": 2, "unattributed": 1, "skipped": 0 }`,
+          errors: [
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+            { status: 503, code: 'BAD_REQUEST', when: 'RPOW2 env is not configured' },
+          ],
+          curl: `curl -X POST '${B}/custody/rpow2/sync' -b cookies.txt`,
+          js: `await fetch('${B}/custody/rpow2/sync', { method: 'POST', credentials: 'include' });`,
+        },
+        {
+          id: 'rpow2-withdraw-request',
+          method: 'POST',
+          path: '/custody/rpow2/withdrawals',
+          auth: 'session',
+          summary: 'Request an RPOW2 withdrawal; funds move from spendable to locked until approval or rejection.',
+          description: 'The withdrawal remains pending until it is approved. Rejections return the locked RPOW2 to spendable balance.',
+          request: {
+            kind: 'body',
+            example: `{
+  "destination_email": "you@example.com",
+  "amount_base_units": "1000000000"
+}`,
+          },
+          response: `{ "ok": true, "id": "2b...", "status": "pending_approval" }`,
+          errors: [
+            { status: 400, code: 'INSUFFICIENT_BALANCE', when: 'RPOW2 balance is too low' },
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+          ],
+          curl: `curl -X POST '${B}/custody/rpow2/withdrawals' -b cookies.txt -H 'content-type: application/json' -d '{"destination_email":"you@example.com","amount_base_units":"1000000000"}'`,
+          js: `await fetch('${B}/custody/rpow2/withdrawals', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ destination_email: 'you@example.com', amount_base_units: '1000000000' })
+});`,
+        },
+        {
+          id: 'rpow2-admin',
+          method: 'GET',
+          path: '/admin/custody/rpow2',
+          auth: 'session',
+          summary: 'Admin queue for pending withdrawals and unattributed deposits.',
+          description: 'Requires the signed-in account to have the admin flag. Returns pending/failed withdrawals and deposits whose memo could not be resolved automatically.',
+          response: `{
+  "pending_withdrawals": [],
+  "unattributed_deposits": []
+}`,
+          errors: [
+            { status: 401, code: 'UNAUTHORIZED', when: 'no session cookie' },
+            { status: 403, code: 'FORBIDDEN', when: 'caller is not an admin' },
+          ],
+          curl: `curl '${B}/admin/custody/rpow2' -b cookies.txt`,
+          js: `const admin = await fetch('${B}/admin/custody/rpow2', { credentials: 'include' }).then(r => r.json());`,
+        },
+        {
+          id: 'rpow2-admin-actions',
+          method: 'POST',
+          path: '/admin/custody/rpow2/withdrawals/:id/approve',
+          auth: 'session',
+          summary: 'Approve/retry an outbound RPOW2 withdrawal using the RPOW2 session cookie.',
+          description: 'Use `/reject` instead of `/approve` to unlock and return the user funds. Use `/deposits/:id/assign` with `{ "pubkey": "..." }` to credit an unattributed deposit manually.',
+          response: `{ "ok": true, "id": "2b...", "external_transfer_id": "9f...", "burn_event_id": "8a..." }`,
+          errors: [
+            { status: 403, code: 'FORBIDDEN', when: 'caller is not an admin' },
+            { status: 502, code: 'BAD_REQUEST', when: 'RPOW2 send fails or session cookie expired' },
+          ],
+          curl: `curl -X POST '${B}/admin/custody/rpow2/withdrawals/2b.../approve' -b cookies.txt`,
+          js: `await fetch('${B}/admin/custody/rpow2/withdrawals/2b.../approve', { method: 'POST', credentials: 'include' });`,
+        },
+        {
+          id: 'rpow2-admin-resume',
+          method: 'POST',
+          path: '/admin/custody/rpow2/resume',
+          auth: 'session',
+          summary: 'Clear the paused sync state after rotating the RPOW2 session cookie.',
+          description: 'RPOW2 sync pauses automatically on a 401 from the external API. Refresh `RPOW2_SESSION_COOKIE`, restart the API, then call this endpoint and run a sync.',
+          response: `{ "ok": true }`,
+          errors: [
+            { status: 403, code: 'FORBIDDEN', when: 'caller is not an admin' },
+          ],
+          curl: `curl -X POST '${B}/admin/custody/rpow2/resume' -b cookies.txt`,
+          js: `await fetch('${B}/admin/custody/rpow2/resume', { method: 'POST', credentials: 'include' });`,
+        },
+      ],
+    },
+    {
       id: 'markets',
       title: 'Internal markets (spot trading)',
       intro: (
@@ -1758,7 +1898,7 @@ export function DocsPage() {
         <p style={{ margin: '0 0 6px 0' }}>
           Public REST API for rpow4. Everything you can do in the web UI you
           can do over HTTP — read network state, mine, send, manage your
-          wallet, explore accounts and transactions, and trade internal RPOW
+          wallet, explore accounts and transactions, and trade RPOW
           markets from your own bots.
         </p>
         <p className="dim" style={{ margin: '4px 0 0 0', fontSize: 13 }}>

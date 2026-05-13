@@ -123,7 +123,7 @@ export function useMining(): MiningContextValue {
 
 export function MiningProvider({ children }: { children: ReactNode }) {
   const wallet = useWallet();
-  const { selectedSlug } = useAsset();
+  const { selectedSlug, selectedAsset } = useAsset();
   const { me, refresh } = useMe(selectedSlug);
   // Track the slug a fresh mining run was started against so we can detect
   // mid-run asset switches and abort cleanly. Without this guard the worker
@@ -559,6 +559,11 @@ export function MiningProvider({ children }: { children: ReactNode }) {
 
   const start = useCallback(() => {
     if (wallet.status !== 'unlocked' || !me) return;
+    if (selectedAsset?.asset_kind === 'external_custodial') {
+      setError(`${selectedAsset.display_code} is not mineable`);
+      setStatus('error');
+      return;
+    }
     if (status === 'mining' || workerRef.current) return;
     stopRequestedRef.current = false;
     totalHashesRef.current = 0n;
@@ -579,7 +584,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
     setStatus('mining');
     vizHandlesRef.current?.setActive(true);
     if (mode === 'pool') startPoolCycle(); else startOne();
-  }, [wallet, me, status, mode, startOne, startPoolCycle]);
+  }, [wallet, me, selectedAsset, status, mode, startOne, startPoolCycle]);
 
   const stop = useCallback(() => {
     if (challengeRenewTimerRef.current !== null) {
@@ -618,7 +623,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
   // hashrate / round info even when idle. Solo mode skips entirely.
   // Gated on tab visibility so background tabs don't burn requests.
   useEffect(() => {
-    if (mode !== 'pool') {
+    if (mode !== 'pool' || selectedAsset?.asset_kind === 'external_custodial') {
       setPoolStats(null);
       lastSeenRoundIdRef.current = null;
       return;
@@ -678,7 +683,7 @@ export function MiningProvider({ children }: { children: ReactNode }) {
       window.clearInterval(id);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [mode, selectedSlug]);
+  }, [mode, selectedSlug, selectedAsset?.asset_kind]);
 
   // Memoize the context value so consumers don't re-render on every
   // unrelated provider state change. Refs are stable across renders, so

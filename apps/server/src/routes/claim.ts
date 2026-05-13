@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { verifyCanonical } from '@rpow/shared';
 import { withTxRetry } from '../db.js';
 import { mirrorLedgerEventHot, type LedgerEventRow } from '../ledger-hot.js';
+import { DEFAULT_ASSET_ID } from '../assets.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -15,7 +16,14 @@ const CreateBody = z.object({
     .refine((s) => {
       try { return BigInt(s) > 0n && BigInt(s) <= 10n ** 18n; } catch { return false; }
     }, 'amount_base_units must be a positive bigint up to 10^18'),
-  memo: z.string().max(64).optional(),
+  // Memos render verbatim in /activity and /explorer, so reject ASCII
+  // control characters and trim surrounding whitespace (matches send.ts).
+  memo: z
+    .string()
+    .max(64)
+    .transform((s) => s.trim())
+    .refine((s) => !/[\x00-\x1F\x7F]/.test(s), 'memo cannot contain control characters')
+    .optional(),
   client_signature_base58: z.string().min(64).max(128),
 });
 
@@ -55,19 +63,21 @@ export async function claimRoutes(app: FastifyInstance) {
       out = await withTxRetry<CreateResult>(
         app.pool,
         async (c) => {
-          // Advisory lock on sender balance to serialize against concurrent sends.
+          // Claims are RPOW4.0-only; scope every balance/ledger touch to the
+          // default asset id so we don't accidentally mutate other assets'
+          // rows on the multi-asset (asset_id, pubkey) primary key.
           await c.query(
-            `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance'), hashtext($1))`,
-            [sender],
+            `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`,
+            [DEFAULT_ASSET_ID, sender],
           );
 
           const debit = await c.query(
             `UPDATE account_balances
-             SET spendable_base_units = spendable_base_units - $2::bigint,
-                 sent_base_units = sent_base_units + $2::bigint,
+             SET spendable_base_units = spendable_base_units - $3::bigint,
+                 sent_base_units = sent_base_units + $3::bigint,
                  updated_at = now()
-             WHERE pubkey=$1 AND spendable_base_units >= $2::bigint`,
-            [sender, amount.toString()],
+             WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+            [DEFAULT_ASSET_ID, sender, amount.toString()],
           );
           if (debit.rowCount === 0) {
             return { error: 'INSUFFICIENT_BALANCE' as const, message: 'not enough tokens', status: 400 };
@@ -250,57 +260,60 @@ export async function claimRoutes(app: FastifyInstance) {
         // Lock both balance rows in consistent order to prevent deadlocks.
         for (const pubkey of [sender, redeemer].sort()) {
           await c.query(
-            `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance'), hashtext($1))`,
-            [pubkey],
+            `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`,
+            [DEFAULT_ASSET_ID, pubkey],
           );
         }
 
-        // Ensure redeemer account exists (lazy-create like /send).
-        const recipientInsert = await c.query<{ pubkey: string }>(
+        await c.query(
           `INSERT INTO accounts(pubkey) VALUES($1)
-           ON CONFLICT (pubkey) DO NOTHING
-           RETURNING pubkey`,
+           ON CONFLICT (pubkey) DO NOTHING`,
           [redeemer],
         );
-        if (recipientInsert.rows[0]) {
-          await c.query(
-            `UPDATE ledger_stats SET value = value + 1, updated_at = now()
-             WHERE name='user_count'`,
-          );
-        }
 
-        // Credit redeemer.
-        await c.query(
-          `INSERT INTO account_balances(pubkey, spendable_base_units, received_base_units, events_count, updated_at)
-           VALUES($1, $2, $2, 1, now())
-           ON CONFLICT (pubkey) DO UPDATE SET
+        // Lazy-create the redeemer's RPOW4.0 balance row and bump per-asset
+        // user_count if this is their first balance row for this asset.
+        const credit = await c.query<{ was_inserted: boolean }>(
+          `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
+           VALUES($1::uuid, $2, $3, $3, 1, now())
+           ON CONFLICT (asset_id, pubkey) DO UPDATE SET
              spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
              received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
              events_count = account_balances.events_count + 1,
-             updated_at = now()`,
-          [redeemer, amount.toString()],
+             updated_at = now()
+           RETURNING (xmax = 0) AS was_inserted`,
+          [DEFAULT_ASSET_ID, redeemer, amount.toString()],
         );
+        if (credit.rows[0]?.was_inserted) {
+          await c.query(
+            `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+             WHERE asset_id=$1::uuid AND name='user_count'`,
+            [DEFAULT_ASSET_ID],
+          );
+        }
 
         // Bump sender's events_count (they "sent" this at create time but the
         // event is only created now; bump here to keep total_count in sync).
         await c.query(
           `UPDATE account_balances SET events_count = events_count + 1, updated_at = now()
-           WHERE pubkey = $1`,
-          [sender],
+           WHERE asset_id=$1::uuid AND pubkey = $2`,
+          [DEFAULT_ASSET_ID, sender],
         );
 
         const transferId = randomUUID();
-        await c.query(`INSERT INTO ledger_event_ids(id) VALUES($1)`, [transferId]);
+        await c.query(
+          `INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`,
+          [transferId, DEFAULT_ASSET_ID],
+        );
 
-        // TRANSFER ledger event — sender is actor, redeemer is counterparty.
         const insertedEvent = await c.query<LedgerEventRow>(
           `WITH inserted AS (
              INSERT INTO ledger_events(
-               id, event_type, actor_pubkey, counterparty_pubkey, amount,
+               asset_id, id, event_type, actor_pubkey, counterparty_pubkey, amount,
                fee_base_units, memo, idempotency_key, client_signature_base58, created_at
              )
-             VALUES($1::uuid,'TRANSFER',$2,$3,$4,0,$5,'claim:'||$1::text,$6,$7)
-             RETURNING event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+             VALUES($1::uuid,$2::uuid,'TRANSFER',$3,$4,$5,0,$6,'claim:'||$2::text,$7,$8)
+             RETURNING asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                        amount, fee_base_units, memo, challenge_id, solution_nonce,
                        idempotency_key, client_signature_base58, server_sig, created_at
            ),
@@ -312,26 +325,27 @@ export async function claimRoutes(app: FastifyInstance) {
            ),
            upd_transfer_count AS (
              UPDATE app_counters SET value = value + 1
-             WHERE name='transfer_count'
+             WHERE asset_id=$1::uuid AND name='transfer_count'
            )
-           SELECT event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+           SELECT asset_id::text AS asset_id, event_seq::text AS event_seq, id, event_type,
+                  actor_pubkey, counterparty_pubkey,
                   amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
                   challenge_id, solution_nonce, idempotency_key,
                   client_signature_base58, server_sig, created_at
            FROM inserted`,
-          [transferId, sender, redeemer, amount.toString(), claim.memo ?? null, claim.client_signature_base58, redeemedAt],
+          [DEFAULT_ASSET_ID, transferId, sender, redeemer, amount.toString(), claim.memo ?? null, claim.client_signature_base58, redeemedAt],
         );
 
         const event = insertedEvent.rows[0]!;
         await mirrorLedgerEventHot(c, event);
 
-        // Update stat shards for total_transferred.
         await c.query(
           `UPDATE ledger_stat_shards
            SET value = value + $1::bigint, updated_at = now()
-           WHERE name='total_transferred'
+           WHERE asset_id=$3::uuid
+             AND name='total_transferred'
              AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
-          [amount.toString(), transferId],
+          [amount.toString(), transferId, DEFAULT_ASSET_ID],
         );
 
         // Mark the claim as redeemed.
@@ -426,21 +440,22 @@ export async function claimRoutes(app: FastifyInstance) {
         const amount = BigInt(claim.amount_base_units);
         const cancelledAt = new Date();
 
-        // Advisory lock on sender's balance.
         await c.query(
-          `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance'), hashtext($1))`,
-          [caller],
+          `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`,
+          [DEFAULT_ASSET_ID, caller],
         );
 
-        // Refund: reverse the debit made at creation time.
-        await c.query(
+        const refund = await c.query(
           `UPDATE account_balances
-           SET spendable_base_units = spendable_base_units + $2::bigint,
-               sent_base_units = GREATEST(0, sent_base_units - $2::bigint),
+           SET spendable_base_units = spendable_base_units + $3::bigint,
+               sent_base_units = GREATEST(0, sent_base_units - $3::bigint),
                updated_at = now()
-           WHERE pubkey = $1`,
-          [caller, amount.toString()],
+           WHERE asset_id=$1::uuid AND pubkey = $2`,
+          [DEFAULT_ASSET_ID, caller, amount.toString()],
         );
+        if (refund.rowCount === 0) {
+          throw new Error('claim cancel: sender balance row missing');
+        }
 
         await c.query(
           `UPDATE claim_tokens SET state='cancelled', cancelled_at=$2 WHERE id=$1::uuid`,

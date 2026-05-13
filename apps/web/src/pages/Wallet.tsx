@@ -5,6 +5,7 @@ import { CopyButton } from '../components/CopyButton.js';
 import { DisplayNameEditor } from '../components/DisplayNameEditor.js';
 import { SaveWalletPrompt } from '../components/SaveWalletPrompt.js';
 import { WalletBackupPanel } from '../components/WalletBackupPanel.js';
+import { AssetsOverview } from '../components/AssetsOverview.js';
 import { useMe } from '../hooks/useMe.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import { api } from '../api.js';
@@ -36,6 +37,7 @@ export function WalletPage() {
   const wallet = useWallet();
   const { selectedSlug, selectedAsset, assetPath } = useAsset();
   const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  const isExternalAsset = selectedAsset?.asset_kind === 'external_custodial';
   usePageMeta(
     `${assetCode} Wallet`,
     `Manage your ${assetCode} wallet. View your balance, public key, and account details.`,
@@ -43,7 +45,13 @@ export function WalletPage() {
   const { me, loading, refresh } = useMe(selectedSlug);
   const nav = useNavigate();
 
-  if (wallet.status === 'loading' || loading) return <Panel><div>loading...</div></Panel>;
+  if (wallet.status === 'loading' || loading) {
+    return (
+      <Panel title="WALLET">
+        <div style={{ color: 'var(--dim)' }}>loading wallet…</div>
+      </Panel>
+    );
+  }
 
   if (wallet.status !== 'unlocked' || !me) {
     return (
@@ -82,6 +90,7 @@ export function WalletPage() {
   return (
     <>
       <SaveWalletPrompt />
+      <AssetsOverview />
       <Panel title={`${assetCode} WALLET`}>
         <pre style={{ margin: 0 }}>
 {`  > BALANCE     : ${formatRpow(me.balance_base_units)} ${assetCode}
@@ -101,12 +110,15 @@ export function WalletPage() {
         <div style={{ marginTop: 12 }}>
           <Link to={assetPath('/send')}>[ SEND ]</Link>{' '}
           <Link to={assetPath('/activity')}>[ ACTIVITY ]</Link>{' '}
+          {isExternalAsset ? <><Link to="/assets/rpow2">[ RPOW2 ]</Link>{' '}</> : null}
           <button onClick={logout} title="end session and lock wallet (encrypted backup is preserved)">
             [ LOGOUT ]
           </button>
         </div>
         <div style={{ marginTop: 6, color: 'var(--dim)', fontSize: 11 }}>
-          mining controls are docked at the bottom of every page.
+          {isExternalAsset
+            ? 'deposits and withdrawals are managed on the rpow2 page; mining is disabled.'
+            : 'mining controls are docked at the bottom of every page.'}
         </div>
       </Panel>
 

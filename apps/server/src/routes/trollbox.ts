@@ -280,8 +280,8 @@ export async function trollboxRoutes(app: FastifyInstance) {
           // posters can't deadlock on each other's locks.
           for (const pubkey of [author, TREASURY_PUBKEY].sort()) {
             await c.query(
-              `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance'), hashtext($1))`,
-              [pubkey],
+              `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`,
+              [DEFAULT_ASSET_ID, pubkey],
             );
           }
 
@@ -290,8 +290,8 @@ export async function trollboxRoutes(app: FastifyInstance) {
           if (fee > 0n) {
             const debit = await c.query(
               `UPDATE account_balances
-                  SET spendable_base_units = spendable_base_units - $2::bigint,
-                      sent_base_units = sent_base_units + $2::bigint,
+                  SET spendable_base_units = spendable_base_units - $3::bigint,
+                      sent_base_units = sent_base_units + $3::bigint,
                       events_count = events_count + 1,
                       updated_at = now()
                 WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
@@ -306,26 +306,47 @@ export async function trollboxRoutes(app: FastifyInstance) {
             }
           } else {
             // Fee is disabled; still bump events_count so the post lands
-            // in the author's /activity feed for transparency.
-            await c.query(
-              `UPDATE account_balances
-                  SET events_count = events_count + 1,
-                      updated_at = now()
-                WHERE asset_id=$1::uuid AND pubkey=$2`,
+            // in the author's /activity feed for transparency. Lazy-create
+            // the author's RPOW4.0 balance row if they don't have one yet
+            // (a fresh signup that posts before mining/sending will hit this).
+            const bumped = await c.query<{ was_inserted: boolean }>(
+              `INSERT INTO account_balances(asset_id, pubkey, events_count, updated_at)
+                VALUES($1::uuid, $2, 1, now())
+                ON CONFLICT (asset_id, pubkey) DO UPDATE SET
+                  events_count = account_balances.events_count + 1,
+                  updated_at = now()
+                RETURNING (xmax = 0) AS was_inserted`,
               [DEFAULT_ASSET_ID, author],
             );
+            if (bumped.rows[0]?.was_inserted) {
+              await c.query(
+                `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+                  WHERE asset_id=$1::uuid AND name='user_count'`,
+                [DEFAULT_ASSET_ID],
+              );
+            }
           }
 
           // Credit treasury. No events_count bump — treasury has no feed.
+          // Treasury already has a balance row from genesis so user_count
+          // doesn't move here, but we still RETURN was_inserted defensively.
           if (fee > 0n) {
-            await c.query(
+            const treasuryCredit = await c.query<{ was_inserted: boolean }>(
               `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, updated_at)
                     VALUES($1::uuid, $2, $3, now())
                 ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                   spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
-                  updated_at = now()`,
+                  updated_at = now()
+                RETURNING (xmax = 0) AS was_inserted`,
               [DEFAULT_ASSET_ID, TREASURY_PUBKEY, fee.toString()],
             );
+            if (treasuryCredit.rows[0]?.was_inserted) {
+              await c.query(
+                `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+                  WHERE asset_id=$1::uuid AND name='user_count'`,
+                [DEFAULT_ASSET_ID],
+              );
+            }
           }
 
           const transferId = randomUUID();

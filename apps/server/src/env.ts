@@ -124,6 +124,21 @@ const Schema = z.object({
       return s === 'true' || s === '1' || s === 'yes';
     }),
   TURNSTILE_SECRET: z.string().optional(),
+
+  // Optional RPOW2 banker integration. The cookie is copied from a browser
+  // session after logging in as the banker account on RPOW2.
+  RPOW2_API_BASE_URL: z.string().url().default('https://api.rpow2.com'),
+  RPOW2_SESSION_COOKIE: z.string().optional(),
+  RPOW2_BANKER_EMAIL: z.string().email().default('rpow4bank@gmail.com'),
+  RPOW2_DEPOSIT_POLL_ENABLED: z
+    .union([z.string(), z.boolean()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined || v === '') return false;
+      if (typeof v === 'boolean') return v;
+      const s = v.trim().toLowerCase();
+      return s === 'true' || s === '1' || s === 'yes';
+    }),
 });
 
 export type Env = z.infer<typeof Schema>;

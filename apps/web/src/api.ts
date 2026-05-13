@@ -38,6 +38,7 @@ import type {
   MarketOrdersResponse,
   MarketTradesResponse,
   MarketsResponse,
+  MeBalancesResponse,
   MeResponse,
   MintRequestBody,
   MintResponse,
@@ -67,6 +68,7 @@ export interface AssetSummary {
   display_code: string;
   nickname: string;
   description: string;
+  asset_kind: 'mineable' | 'external_custodial';
   system_default: boolean;
   supply_mode: 'capped' | 'unlimited';
   max_supply_base_units?: string;
@@ -96,6 +98,94 @@ export interface AssetsResponse { assets: AssetSummary[]; default_asset_slug: st
 export interface AssetDetailResponse { asset: AssetSummary; schedule: Record<string, unknown> }
 export type LaunchAssetRequestBody = Record<string, unknown> & { nickname: string };
 export interface LaunchAssetResponse { ok: true; asset: AssetSummary; launch_burn_event_id: string; launch_burn_base_units: string }
+
+export interface Rpow2CustodyDeposit {
+  id: string;
+  sender_external_id: string;
+  raw_memo: string | null;
+  amount_base_units: string;
+  status: 'credited' | 'unattributed' | 'ignored';
+  external_observed_at: string;
+  credited_at: string | null;
+  credited_event_id: string | null;
+}
+export interface Rpow2CustodyWithdrawal {
+  id: string;
+  requester_pubkey?: string;
+  requester_display_name?: string | null;
+  destination_external_id: string;
+  amount_base_units: string;
+  status: 'pending_approval' | 'sending' | 'sent' | 'rejected' | 'failed';
+  failure_reason: string | null;
+  external_transfer_id: string | null;
+  burn_event_id: string | null;
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  sent_at: string | null;
+  rejected_at: string | null;
+}
+export interface Rpow2UnattributedDeposit {
+  id: string;
+  sender_external_id: string;
+  raw_memo: string | null;
+  amount_base_units: string;
+  external_observed_at: string;
+  created_at: string;
+  note: string | null;
+}
+export interface Rpow2CustodyUserStats {
+  deposits_credited: number;
+  deposits_credited_amount_base_units: string;
+  withdrawals_sent: number;
+  withdrawals_sent_amount_base_units: string;
+}
+export interface Rpow2CustodyAggregates {
+  deposits_credited: number;
+  deposits_credited_amount_base_units: string;
+  deposits_unattributed: number;
+  deposits_unattributed_amount_base_units: string;
+  withdrawals_pending: number;
+  withdrawals_pending_amount_base_units: string;
+  withdrawals_sending: number;
+  withdrawals_sending_amount_base_units: string;
+  withdrawals_failed: number;
+  withdrawals_failed_amount_base_units: string;
+  withdrawals_sent: number;
+  withdrawals_sent_amount_base_units: string;
+  withdrawals_rejected: number;
+  withdrawals_rejected_amount_base_units: string;
+  treasury_spendable_base_units: string;
+}
+export interface Rpow2CustodyStatusResponse {
+  asset_id: string;
+  provider_key: 'rpow2';
+  configured: boolean;
+  api_base_url?: string;
+  banker_email?: string;
+  deposit_enabled: boolean;
+  withdrawal_enabled: boolean;
+  sync: {
+    cursor_at: string | null;
+    last_run_at: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+    paused: boolean;
+  };
+  user_stats: Rpow2CustodyUserStats | null;
+  deposits: Rpow2CustodyDeposit[];
+  withdrawals: Rpow2CustodyWithdrawal[];
+}
+export interface Rpow2CustodyAdminResponse extends Rpow2CustodyStatusResponse {
+  aggregates: Rpow2CustodyAggregates;
+  pending_withdrawals: Rpow2CustodyWithdrawal[];
+  sending_withdrawals: Rpow2CustodyWithdrawal[];
+  unattributed_deposits: Rpow2UnattributedDeposit[];
+}
+export interface Rpow2DepositSyncResponse { ok: true; processed: number; credited: number; unattributed: number; skipped: number }
+export interface Rpow2WithdrawalRequestBody { destination_email: string; amount_base_units: string }
+export interface Rpow2WithdrawalCreateResponse { ok: true; id: string; status: 'pending_approval' }
+export interface Rpow2WithdrawalActionResponse { ok: true; id: string; status?: string; external_transfer_id?: string | null; burn_event_id?: string | null }
 
 function assetPath(assetSlug: string | undefined, path: string): string {
   if (!assetSlug || assetSlug === 'rpow4-0') return path;
@@ -146,6 +236,7 @@ export const api = {
 
   // Read endpoints
   me: (assetSlug?: string) => call<MeResponse>('GET', assetPath(assetSlug, '/me')),
+  balances: () => call<MeBalancesResponse>('GET', '/me/balances', undefined, { cache: 'no-store' }),
   activity: (cursor?: string, limit?: number, type?: 'mint' | 'send' | 'receive' | 'burn' | 'genesis', assetSlug?: string) => {
     const qs = new URLSearchParams();
     if (cursor) qs.set('cursor', cursor);
@@ -231,6 +322,21 @@ export const api = {
   news: (limit = 25) => call<NewsListResponse>('GET', `/news?limit=${limit}`, undefined, { cache: 'no-store' }),
   newsPost: (slug: string) => call<NewsDetailResponse>('GET', `/news/${encodeURIComponent(slug)}`, undefined, { cache: 'no-store' }),
   createNewsPost: (b: NewsCreateRequestBody) => call<NewsCreateResponse>('POST', '/news', b),
+
+  // RPOW2 deposits + withdrawals
+  rpow2Custody: () => call<Rpow2CustodyStatusResponse>('GET', '/custody/rpow2', undefined, { cache: 'no-store' }),
+  syncRpow2Deposits: () => call<Rpow2DepositSyncResponse>('POST', '/custody/rpow2/sync', {}),
+  createRpow2Withdrawal: (b: Rpow2WithdrawalRequestBody) =>
+    call<Rpow2WithdrawalCreateResponse>('POST', '/custody/rpow2/withdrawals', b),
+  adminRpow2Custody: () => call<Rpow2CustodyAdminResponse>('GET', '/admin/custody/rpow2', undefined, { cache: 'no-store' }),
+  adminSyncRpow2Deposits: () => call<Rpow2DepositSyncResponse>('POST', '/admin/custody/rpow2/sync', {}),
+  adminResumeRpow2Sync: () => call<{ ok: true }>('POST', '/admin/custody/rpow2/resume', {}),
+  approveRpow2Withdrawal: (id: string) =>
+    call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/withdrawals/${encodeURIComponent(id)}/approve`, {}),
+  rejectRpow2Withdrawal: (id: string) =>
+    call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/withdrawals/${encodeURIComponent(id)}/reject`, {}),
+  assignRpow2Deposit: (id: string, pubkey: string) =>
+    call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/deposits/${encodeURIComponent(id)}/assign`, { pubkey }),
 
   // Trollbox (public read, signed write)
   trollbox: (cursor?: string, limit?: number) => {

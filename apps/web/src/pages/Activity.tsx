@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { Panel } from '../components/Panel.js';
 import { usePageMeta } from '../hooks/usePageMeta.js';
 import { CopyButton } from '../components/CopyButton.js';
+import { PageAssetPicker } from '../components/PageAssetPicker.js';
 import { api } from '../api.js';
 import { useWallet } from '../wallet/WalletProvider.js';
 import type { ActivityEntry, ActivityResponse } from '@rpow/shared';
@@ -43,9 +44,15 @@ const FILTER_LABEL: Record<Filter, string> = {
 
 export function ActivityPage() {
   const wallet = useWallet();
-  const { selectedSlug, selectedAsset } = useAsset();
-  const assetCode = selectedAsset?.display_code ?? 'RPOW';
-  const assetNickname = selectedAsset?.nickname ?? assetCode;
+  const { assetSlug: routeAssetSlug } = useParams<{ assetSlug?: string }>();
+  const { assets, selectedSlug, selectedAsset } = useAsset();
+  const activitySlug = routeAssetSlug ?? selectedSlug;
+  const activityAsset = routeAssetSlug
+    ? assets.find((a) => a.slug === routeAssetSlug)
+    : selectedAsset;
+  const assetCode = activityAsset?.display_code ?? (activitySlug === 'rpow2' ? 'RPOW2' : 'RPOW');
+  const assetNickname = activityAsset?.nickname ?? assetCode;
+  const isRpow2 = activitySlug === 'rpow2';
   usePageMeta(
     `${assetCode} Activity`,
     `Your personal ${assetCode} (${assetNickname}) transaction history.`,
@@ -65,7 +72,7 @@ export function ActivityPage() {
     setLoading(true);
     setError('');
     const apiFilter = filter === 'all' ? undefined : filter;
-    api.activity(undefined, PAGE_SIZE, apiFilter, selectedSlug)
+    api.activity(undefined, PAGE_SIZE, apiFilter, activitySlug)
       .then((r: ActivityResponse) => {
         setItems(r.items);
         setBalance(r.balance_base_units);
@@ -75,7 +82,7 @@ export function ActivityPage() {
       })
       .catch((e: any) => setError(e?.message ?? 'failed to load activity'))
       .finally(() => setLoading(false));
-  }, [wallet.status, filter, selectedSlug]);
+  }, [wallet.status, filter, activitySlug]);
 
   useEffect(() => { loadFirst(); }, [loadFirst]);
 
@@ -83,7 +90,7 @@ export function ActivityPage() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     const apiFilter = filter === 'all' ? undefined : filter;
-    api.activity(nextCursor, PAGE_SIZE, apiFilter, selectedSlug)
+    api.activity(nextCursor, PAGE_SIZE, apiFilter, activitySlug)
       .then((r: ActivityResponse) => {
         setItems((prev) => [...prev, ...r.items]);
         setNextCursor(r.next_cursor);
@@ -96,6 +103,9 @@ export function ActivityPage() {
   // never have to second-guess which asset's activity they're viewing
   // (especially after switching from a custom asset back to RPOW4.0).
   const panelTitle = `${assetCode} · ${assetNickname.toUpperCase()} ACTIVITY`;
+  const filterLabel = isRpow2
+    ? { ...FILTER_LABEL, mint: 'deposits', burn: 'withdrawals' }
+    : FILTER_LABEL;
 
   if (wallet.status === 'loading') return <Panel title={panelTitle}><div>loading...</div></Panel>;
 
@@ -112,6 +122,13 @@ export function ActivityPage() {
 
   return (
     <Panel title={panelTitle}>
+      {isRpow2 ? (
+        <div className="page-asset-picker rpow2-activity-link">
+          <Link to="/assets/rpow2">[ RPOW2 deposits / withdrawals ]</Link>
+        </div>
+      ) : (
+        <PageAssetPicker label="asset" />
+      )}
       {/* Balance + count header */}
       {balance !== null && (
         <div style={{ display: 'flex', gap: 24, marginBottom: 12, flexWrap: 'wrap' }}>
@@ -134,7 +151,7 @@ export function ActivityPage() {
             key={f}
             active={filter === f}
             onClick={() => setFilter(f)}
-            label={FILTER_LABEL[f]}
+            label={filterLabel[f]}
           />
         ))}
       </div>
@@ -146,14 +163,14 @@ export function ActivityPage() {
       ) : items.length === 0 ? (
         <div style={{ color: 'var(--dim)' }}>
           {filter === 'all'
-            ? '(no activity yet — try mining or sending)'
-            : `(no ${FILTER_LABEL[filter]} yet)`}
+            ? (isRpow2 ? '(no RPOW2 activity yet)' : '(no activity yet — try mining or sending)')
+            : `(no ${filterLabel[filter]} yet)`}
         </div>
       ) : (
         <>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {items.map((e, idx) => (
-              <ActivityRow key={e.id ?? `${e.event_seq}-${idx}`} entry={e} assetCode={assetCode} />
+              <ActivityRow key={e.id ?? `${e.event_seq}-${idx}`} entry={e} assetCode={assetCode} isRpow2={isRpow2} />
             ))}
           </div>
 
@@ -184,18 +201,22 @@ function FilterTab({ active, onClick, label }: { active: boolean; onClick: () =>
   );
 }
 
-function ActivityRow({ entry: e, assetCode }: { entry: ActivityEntry; assetCode: string }) {
+function ActivityRow({ entry: e, assetCode, isRpow2 }: { entry: ActivityEntry; assetCode: string; isRpow2: boolean }) {
   // Tag, sign, and color are picked per event type so the row at-a-glance
   // tells you whether this was money out (-) or in (+) and which kind of
   // event it was.
-  const tag = e.type.toUpperCase();
+  const tag = isRpow2 && e.type === 'mint'
+    ? 'DEPOSIT'
+    : isRpow2 && e.type === 'burn'
+      ? 'WITHDRAWAL'
+      : e.type.toUpperCase();
   const isOutbound = e.type === 'send' || e.type === 'burn';
   const sign = isOutbound ? '-' : '+';
   const amt = `${sign}${formatRpow(e.amount_base_units)}`;
   const tagColor =
     e.type === 'send' ? 'var(--dim)' :
     e.type === 'burn' ? 'var(--error)' :
-    e.type === 'receive' || e.type === 'genesis' ? 'var(--accent)' :
+    e.type === 'receive' || e.type === 'genesis' || (isRpow2 && e.type === 'mint') ? 'var(--accent)' :
     'var(--fg)';
   const counterpartyLabel = e.type === 'send' ? 'to' : 'from';
   const showCounterparty = e.counterparty_pubkey && (e.type === 'send' || e.type === 'receive');

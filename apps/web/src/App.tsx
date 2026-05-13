@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
-import { HashRouter, Route, Routes, NavLink, useLocation } from 'react-router-dom';
+import { HashRouter, Navigate, Route, Routes, NavLink, useLocation } from 'react-router-dom';
 import { applyTheme, loadTheme, nextTheme, type Theme } from './theme.js';
 import { useMe } from './hooks/useMe.js';
 import { useWallet } from './wallet/WalletProvider.js';
@@ -15,6 +15,7 @@ import { FaucetPage } from './pages/Faucet.js';
 import { TrollboxPage } from './pages/Trollbox.js';
 import { DocsPage } from './pages/Docs.js';
 import { NewsPage } from './pages/News.js';
+import { Rpow2CustodyPage } from './pages/Rpow2Custody.js';
 import { HistoryPage } from './pages/History.js';
 import { ClaimPage } from './pages/Claim.js';
 import { RedeemPage } from './pages/Redeem.js';
@@ -82,7 +83,7 @@ function AppShell() {
     || /\/explorer(\/|$)/.test(path)
     || path === '/faucet'
     || path === '/trollbox';
-  const tradeNavActive = /\/markets(\/|$)/.test(path) || /\/launch$/.test(path);
+  const tradeNavActive = /\/markets(\/|$)/.test(path) || /\/launch$/.test(path) || path === '/assets/rpow2';
   const infoNavActive = path === '/ledger'
     || path === '/history'
     || /\/news(\/|$)/.test(path)
@@ -159,6 +160,7 @@ function AppShell() {
               <summary>[ trade ▾ ]</summary>
               <div className="nav-menu-panel">
                 <NavLink to={assetPath('/markets')}>[ markets ]</NavLink>
+                <NavLink to="/assets/rpow2">[ rpow2 ]</NavLink>
                 <NavLink to={assetPath('/launch')}>[ launch rpow ]</NavLink>
               </div>
             </details>
@@ -207,6 +209,7 @@ function AppShell() {
             <Route path="/r/:assetSlug/send" element={<SendPage />} />
             <Route path="/activity" element={<ActivityPage />} />
             <Route path="/r/:assetSlug/activity" element={<ActivityPage />} />
+            <Route path="/assets/:assetSlug/activity" element={<ActivityPage />} />
             <Route path="/ledger" element={<LedgerPage />} />
             <Route path="/r/:assetSlug/ledger" element={<LedgerPage />} />
             <Route path="/stats" element={<StatsPage />} />
@@ -221,6 +224,8 @@ function AppShell() {
             <Route path="/r/:assetSlug/markets" element={<MarketsPage />} />
             <Route path="/markets/:marketId" element={<MarketsPage />} />
             <Route path="/r/:assetSlug/markets/:marketId" element={<MarketsPage />} />
+            <Route path="/assets/rpow2" element={<Rpow2CustodyPage />} />
+            <Route path="/custody/rpow2" element={<Navigate to="/assets/rpow2" replace />} />
             <Route path="/faucet" element={<FaucetPage />} />
             <Route path="/trollbox" element={<TrollboxPage />} />
             <Route path="/claim" element={<ClaimPage />} />

@@ -3,20 +3,24 @@ import { randomUUID } from 'node:crypto';
 import { loginAsRandomWallet, makeTestApp, type TestWallet } from './helpers.js';
 
 const ONE_RPOW = 1_000_000_000n;
+const DEFAULT_ASSET_ID = '00000000-0000-4000-8000-000000000000';
 
-/** Seed spendable balance directly — no need for full mining flow in unit tests. */
 async function seedBalance(
   ctx: Awaited<ReturnType<typeof makeTestApp>>,
   pubkey: string,
   amount: bigint,
 ): Promise<void> {
   await ctx.pool.query(
-    `INSERT INTO account_balances(pubkey, spendable_base_units, updated_at)
-     VALUES($1, $2, now())
-     ON CONFLICT (pubkey) DO UPDATE SET
+    `INSERT INTO accounts(pubkey) VALUES($1) ON CONFLICT (pubkey) DO NOTHING`,
+    [pubkey],
+  );
+  await ctx.pool.query(
+    `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, updated_at)
+     VALUES($1::uuid, $2, $3, now())
+     ON CONFLICT (asset_id, pubkey) DO UPDATE SET
        spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
        updated_at = now()`,
-    [pubkey, amount.toString()],
+    [DEFAULT_ASSET_ID, pubkey, amount.toString()],
   );
 }
 

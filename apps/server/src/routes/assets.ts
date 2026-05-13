@@ -44,8 +44,8 @@ function slugify(input: string): string {
 
 async function loadAssetRows(app: FastifyInstance): Promise<AssetRow[]> {
   const { rows } = await app.pool.query<AssetRow>(
-    `SELECT id::text, family_code, sequence_number, display_code, slug, nickname, description,
-            creator_pubkey, status, system_default, supply_mode,
+      `SELECT id::text, family_code, sequence_number, display_code, slug, nickname, description,
+            creator_pubkey, status, asset_kind, system_default, supply_mode,
             max_supply_base_units::text, base_units_per_coin::text,
             initial_reward_base_units::text, reward_schedule_type,
             reward_interval_blocks, reward_reduction_type, reward_reduction_value::text,

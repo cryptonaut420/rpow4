@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import { TREASURY_PUBKEY } from '@rpow/shared';
 import { loginAsRandomWallet, makeTestApp, type TestWallet } from './helpers.js';
 
+const DEFAULT_ASSET_ID = '00000000-0000-4000-8000-000000000000';
+
 async function seedToken(
   ctx: Awaited<ReturnType<typeof makeTestApp>>,
   ownerPubkey: string,
@@ -10,18 +12,22 @@ async function seedToken(
 ): Promise<string> {
   const id = randomUUID();
   await ctx.pool.query(
-    `INSERT INTO account_balances(pubkey, spendable_base_units, updated_at)
-     VALUES($1, $2, now())
-     ON CONFLICT (pubkey) DO UPDATE SET
+    `INSERT INTO accounts(pubkey) VALUES($1) ON CONFLICT (pubkey) DO NOTHING`,
+    [ownerPubkey],
+  );
+  await ctx.pool.query(
+    `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, updated_at)
+     VALUES($1::uuid, $2, $3, now())
+     ON CONFLICT (asset_id, pubkey) DO UPDATE SET
        spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
        updated_at = now()`,
-    [ownerPubkey, valueBaseUnits.toString()],
+    [DEFAULT_ASSET_ID, ownerPubkey, valueBaseUnits.toString()],
   );
   await ctx.pool.query(
     `UPDATE ledger_stats
      SET value = value + $1::bigint, updated_at = now()
-     WHERE name='circulating_supply'`,
-    [valueBaseUnits.toString()],
+     WHERE asset_id=$2::uuid AND name='circulating_supply'`,
+    [valueBaseUnits.toString(), DEFAULT_ASSET_ID],
   );
   return id;
 }

@@ -259,30 +259,45 @@ export async function explorerRoutes(app: FastifyInstance) {
     const cacheKey = cursor ? null : `${asset.id}|${pubkey}|${itemType}`;
 
     const buildPage = async (): Promise<ExplorerAccountResponse | null> => {
+      // LEFT JOIN account_balances so a known account with no balance row
+      // for this asset returns a zero summary instead of 404. If the pubkey
+      // is unknown to the platform entirely, ac.pubkey is null and we 404.
       const acctResult = await app.pool.query<{
+        known_pubkey: string | null;
         display_name: string | null;
-        spendable: string;
-        minted: string;
-        sent: string;
-        received: string;
-        blocks_mined: string;
-        events_count: string;
+        spendable: string | null;
+        minted: string | null;
+        sent: string | null;
+        received: string | null;
+        blocks_mined: string | null;
+        events_count: string | null;
       }>(
-        `SELECT ac.display_name,
+        `SELECT ac.pubkey AS known_pubkey,
+                ac.display_name,
                 ab.spendable_base_units::text AS spendable,
                 ab.minted_base_units::text AS minted,
                 ab.sent_base_units::text AS sent,
                 ab.received_base_units::text AS received,
                 ab.blocks_mined::text,
                 ab.events_count::text
-         FROM account_balances ab
-         LEFT JOIN accounts ac ON ac.pubkey = ab.pubkey
-         WHERE ab.asset_id = $1::uuid AND ab.pubkey = $2`,
+         FROM accounts ac
+         LEFT JOIN account_balances ab
+           ON ab.pubkey = ac.pubkey AND ab.asset_id = $1::uuid
+         WHERE ac.pubkey = $2`,
         [asset.id, pubkey],
       );
 
       if (acctResult.rows.length === 0) return null;
-      const acct = acctResult.rows[0]!;
+      const acctRow = acctResult.rows[0]!;
+      const acct = {
+        display_name: acctRow.display_name,
+        spendable: acctRow.spendable ?? '0',
+        minted: acctRow.minted ?? '0',
+        sent: acctRow.sent ?? '0',
+        received: acctRow.received ?? '0',
+        blocks_mined: acctRow.blocks_mined ?? '0',
+        events_count: acctRow.events_count ?? '0',
+      };
 
       const cursorBigInt: bigint | null = cursor ? BigInt(cursor) : null;
       const params: unknown[] = [asset.id, pubkey];

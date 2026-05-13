@@ -64,6 +64,7 @@ interface MarketRow {
   base_description: string;
   base_creator_pubkey: string | null;
   base_status: 'active' | 'paused' | 'archived';
+  base_asset_kind: 'mineable' | 'external_custodial';
   base_system_default: boolean;
   base_supply_mode: 'capped' | 'unlimited';
   base_max_supply_base_units: string | null;
@@ -97,6 +98,7 @@ interface MarketRow {
   quote_description: string;
   quote_creator_pubkey: string | null;
   quote_status: 'active' | 'paused' | 'archived';
+  quote_asset_kind: 'mineable' | 'external_custodial';
   quote_system_default: boolean;
   quote_supply_mode: 'capped' | 'unlimited';
   quote_max_supply_base_units: string | null;
@@ -203,6 +205,7 @@ function tradeWire(row: {
   quote_amount_base_units: string;
   taker_side: 'buy' | 'sell';
   fee_base_units: string;
+  fee_asset_id: string;
   created_at: Date;
 }): MarketTrade {
   return {
@@ -213,6 +216,7 @@ function tradeWire(row: {
     quote_amount_base_units: row.quote_amount_base_units,
     taker_side: row.taker_side,
     fee_base_units: row.fee_base_units,
+    fee_asset_id: row.fee_asset_id,
     created_at: row.created_at.toISOString(),
   };
 }
@@ -225,6 +229,7 @@ function marketWire(row: MarketRow) {
     nickname: row.base_nickname,
     description: row.base_description,
     creatorPubkey: row.base_creator_pubkey,
+    assetKind: row.base_asset_kind ?? 'mineable',
     systemDefault: row.base_system_default,
     supplyMode: row.base_supply_mode,
     maxSupplyBaseUnits: row.base_max_supply_base_units === null ? null : BigInt(row.base_max_supply_base_units),
@@ -255,6 +260,7 @@ function marketWire(row: MarketRow) {
     nickname: row.quote_nickname,
     description: row.quote_description,
     creatorPubkey: row.quote_creator_pubkey,
+    assetKind: row.quote_asset_kind ?? 'mineable',
     systemDefault: row.quote_system_default,
     supplyMode: row.quote_supply_mode,
     maxSupplyBaseUnits: row.quote_max_supply_base_units === null ? null : BigInt(row.quote_max_supply_base_units),
@@ -301,7 +307,7 @@ const marketSelect = `
          b.id::text AS base_id, b.family_code AS base_family_code, b.sequence_number AS base_sequence_number,
          b.display_code AS base_display_code, b.slug AS base_slug, b.nickname AS base_nickname,
          b.description AS base_description, b.creator_pubkey AS base_creator_pubkey, b.status AS base_status,
-         b.system_default AS base_system_default, b.supply_mode AS base_supply_mode,
+         b.asset_kind AS base_asset_kind, b.system_default AS base_system_default, b.supply_mode AS base_supply_mode,
          b.max_supply_base_units::text AS base_max_supply_base_units, b.base_units_per_coin::text AS base_base_units_per_coin,
          b.initial_reward_base_units::text AS base_initial_reward_base_units, b.reward_schedule_type AS base_reward_schedule_type,
          b.reward_interval_blocks AS base_reward_interval_blocks, b.reward_reduction_type AS base_reward_reduction_type,
@@ -317,7 +323,7 @@ const marketSelect = `
          q.id::text AS quote_id, q.family_code AS quote_family_code, q.sequence_number AS quote_sequence_number,
          q.display_code AS quote_display_code, q.slug AS quote_slug, q.nickname AS quote_nickname,
          q.description AS quote_description, q.creator_pubkey AS quote_creator_pubkey, q.status AS quote_status,
-         q.system_default AS quote_system_default, q.supply_mode AS quote_supply_mode,
+         q.asset_kind AS quote_asset_kind, q.system_default AS quote_system_default, q.supply_mode AS quote_supply_mode,
          q.max_supply_base_units::text AS quote_max_supply_base_units, q.base_units_per_coin::text AS quote_base_units_per_coin,
          q.initial_reward_base_units::text AS quote_initial_reward_base_units, q.reward_schedule_type AS quote_reward_schedule_type,
          q.reward_interval_blocks AS quote_reward_interval_blocks, q.reward_reduction_type AS quote_reward_reduction_type,
@@ -365,7 +371,7 @@ async function transferLeg(
 ): Promise<string> {
   const eventId = randomUUID();
   await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [eventId, args.assetId]);
-  await c.query(
+  const shardUpdate = await c.query(
     `UPDATE ledger_stat_shards
        SET value = value + $1::bigint, updated_at = now()
      WHERE asset_id=$3::uuid
@@ -373,12 +379,18 @@ async function transferLeg(
        AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
     [args.amount.toString(), eventId, args.assetId],
   );
+  if (shardUpdate.rowCount !== 1) {
+    throw new Error('total_transferred shard row missing for asset');
+  }
   if (args.fee > 0n) {
-    await c.query(
+    const feeUpdate = await c.query(
       `UPDATE app_counters SET value = value + $1::bigint
        WHERE asset_id=$2::uuid AND name='total_fees_collected'`,
       [args.fee.toString(), args.assetId],
     );
+    if (feeUpdate.rowCount !== 1) {
+      throw new Error('total_fees_collected counter missing for asset');
+    }
   }
   const inserted = await c.query<LedgerEventRow>(
     `WITH inserted AS (
@@ -422,7 +434,18 @@ async function transferLeg(
 
 export async function marketsRoutes(app: FastifyInstance) {
   app.get('/markets', async () => {
-    const { rows } = await app.pool.query<MarketRow>(`${marketSelect} ORDER BY b.sequence_number ASC`);
+    // Only surface trading pairs whose market AND both legs are active.
+    // A paused/archived asset (or a paused market row itself) shouldn't
+    // appear in the picker — clients would otherwise see the pair, click
+    // through, and then hit MARKET_NOT_FOUND on order placement.
+    const { rows } = await app.pool.query<MarketRow>(
+      `${marketSelect}
+       WHERE m.status = 'active' AND b.status = 'active' AND q.status = 'active'
+       ORDER BY
+         CASE WHEN b.slug = 'rpow2' AND q.slug = 'rpow4-0' THEN 0 ELSE 1 END,
+         b.sequence_number ASC,
+         m.symbol ASC`,
+    );
     return { markets: rows.map(marketWire), default_quote_asset_slug: 'rpow4-0' };
   });
 
@@ -433,8 +456,14 @@ export async function marketsRoutes(app: FastifyInstance) {
     return { market: marketWire(market) };
   });
 
-  app.get('/markets/:market_id/book', async (req) => {
+  app.get('/markets/:market_id/book', async (req, reply) => {
     const id = (req.params as { market_id: string }).market_id;
+    // Validate the market exists before returning what would otherwise be
+    // an empty book that's indistinguishable from a real (idle) market.
+    const exists = await app.pool.query(`SELECT 1 FROM markets WHERE id=$1::uuid`, [id]);
+    if (exists.rowCount === 0) {
+      return reply.code(404).send({ error: 'MARKET_NOT_FOUND', message: 'market not found' });
+    }
     const { rows: bids } = await app.pool.query(
       `SELECT price_quote_base_units::text,
               sum(remaining_base_units)::text AS base_amount_base_units,
@@ -462,13 +491,17 @@ export async function marketsRoutes(app: FastifyInstance) {
     return { market_id: id, bids, asks, at: new Date().toISOString() };
   });
 
-  app.get('/markets/:market_id/trades', async (req) => {
+  app.get('/markets/:market_id/trades', async (req, reply) => {
     const id = (req.params as { market_id: string }).market_id;
     const q = req.query as { limit?: string };
     const limit = Math.min(100, Math.max(1, Number(q.limit ?? 50) || 50));
+    const exists = await app.pool.query(`SELECT 1 FROM markets WHERE id=$1::uuid`, [id]);
+    if (exists.rowCount === 0) {
+      return reply.code(404).send({ error: 'MARKET_NOT_FOUND', message: 'market not found' });
+    }
     const { rows } = await app.pool.query(
       `SELECT id::text, market_id::text, price_quote_base_units::text, base_amount_base_units::text,
-              quote_amount_base_units::text, taker_side, fee_base_units::text, created_at
+              quote_amount_base_units::text, taker_side, fee_base_units::text, fee_asset_id::text, created_at
        FROM market_trades
        WHERE market_id=$1::uuid
        ORDER BY created_at DESC, id DESC
@@ -478,9 +511,13 @@ export async function marketsRoutes(app: FastifyInstance) {
     return { trades: rows.map(tradeWire) };
   });
 
-  app.get('/markets/:market_id/candles', async (req) => {
+  app.get('/markets/:market_id/candles', async (req, reply) => {
     const id = (req.params as { market_id: string }).market_id;
     const q = req.query as { interval?: string; limit?: string };
+    const exists = await app.pool.query(`SELECT 1 FROM markets WHERE id=$1::uuid`, [id]);
+    if (exists.rowCount === 0) {
+      return reply.code(404).send({ error: 'MARKET_NOT_FOUND', message: 'market not found' });
+    }
     const interval = q.interval === '5m' || q.interval === '1h' || q.interval === '1d' ? q.interval : '1m';
     const limit = Math.min(240, Math.max(1, Number(q.limit ?? 80) || 80));
     const bucketExpr =
@@ -640,6 +677,17 @@ export async function marketsRoutes(app: FastifyInstance) {
       );
       if (dup.rows[0]) {
         const existing = dup.rows[0];
+        // Reject cross-market replays. (owner_pubkey, client_order_id) is
+        // globally unique, so a retry that targets a different market_id
+        // must be a client bug — surface it instead of returning the prior
+        // market's order with the new market's status code.
+        if (existing.market_id !== body.market_id) {
+          return {
+            error: 'BAD_REQUEST' as const,
+            status: 409,
+            message: 'client_order_id reused across different markets',
+          };
+        }
         const { rows: dupTrades } = await c.query<{
           id: string;
           market_id: string;
@@ -648,10 +696,11 @@ export async function marketsRoutes(app: FastifyInstance) {
           quote_amount_base_units: string;
           taker_side: 'buy' | 'sell';
           fee_base_units: string;
+          fee_asset_id: string;
           created_at: Date;
         }>(
           `SELECT id::text, market_id::text, price_quote_base_units::text, base_amount_base_units::text,
-                  quote_amount_base_units::text, taker_side, fee_base_units::text, created_at
+                  quote_amount_base_units::text, taker_side, fee_base_units::text, fee_asset_id::text, created_at
            FROM market_trades
            WHERE taker_order_id=$1::uuid
            ORDER BY created_at ASC, id ASC`,
@@ -739,6 +788,7 @@ export async function marketsRoutes(app: FastifyInstance) {
       let spentQuote = 0n;
       let receivedQuote = 0n;
       let totalFee = 0n;
+      let totalQuoteFee = 0n;
       const touchedPubkeys = new Set<string>([s.pubkey]);
       for (;;) {
         if (remaining <= 0n) break;
@@ -767,7 +817,25 @@ export async function marketsRoutes(app: FastifyInstance) {
         const fillBase = remaining < BigInt(maker.remaining_base_units) ? remaining : BigInt(maker.remaining_base_units);
         const fillPrice = BigInt(maker.price_quote_base_units!);
         const fillQuote = quoteFor(fillBase, fillPrice);
-        const fee = feeFor(fillQuote, market.taker_fee_bps);
+        const feeInBase = market.base_asset_kind === 'external_custodial';
+        const feeAssetId = feeInBase ? market.base_id : market.quote_id;
+        const fee = feeFor(feeInBase ? fillBase : fillQuote, market.taker_fee_bps);
+        const baseFee = feeInBase ? fee : 0n;
+        const quoteFee = feeInBase ? 0n : fee;
+        const buyerBaseReceive = fillBase - baseFee;
+        // Seller's quote receipt depends on which side the taker is on so that
+        // both buyer outflow + treasury inflow conserves total QUOTE supply:
+        //   buy-taker:  buyer pays fillQuote + quoteFee, seller gets full
+        //               fillQuote, treasury gets quoteFee.
+        //   sell-taker: maker (buyer) gives up exactly the fillQuote they
+        //               locked, seller gets fillQuote - quoteFee, treasury
+        //               gets quoteFee. (sellerNetQuote)
+        // Using `sellerNetQuote` for both sides was a real bug that broke
+        // `circulating_matches_balances` on buy-taker fills because the same
+        // quoteFee was both withheld from the seller AND debited from the
+        // buyer on top, with only one copy reaching the treasury.
+        const sellerNetQuote = fillQuote - quoteFee;
+        const sellerQuoteCredit = body.side === 'buy' ? fillQuote : sellerNetQuote;
         // Slippage cap: stop when the next fill would push the buyer's
         // total quote outflow (existing fills + their fees + this fill +
         // its fee) past max_quote. Without including cumulative fee, a
@@ -775,7 +843,7 @@ export async function marketsRoutes(app: FastifyInstance) {
         if (
           body.side === 'buy' &&
           body.max_quote_base_units &&
-          spentQuote + totalFee + fillQuote + fee > BigInt(body.max_quote_base_units)
+          spentQuote + totalQuoteFee + fillQuote + quoteFee > BigInt(body.max_quote_base_units)
         ) break;
         const buyer = body.side === 'buy' ? s.pubkey : maker.owner_pubkey;
         const seller = body.side === 'sell' ? s.pubkey : maker.owner_pubkey;
@@ -785,7 +853,7 @@ export async function marketsRoutes(app: FastifyInstance) {
           [market.base_id, seller],
           [market.quote_id, buyer],
           [market.quote_id, seller],
-          ...(fee > 0n ? [[market.quote_id, TREASURY_PUBKEY] as [string, string]] : []),
+          ...(fee > 0n ? [[feeAssetId, TREASURY_PUBKEY] as [string, string]] : []),
         ] as Array<[string, string]>;
         for (const [assetId, pubkey] of Array.from(new Map(lockPairs.map((p) => [`${p[0]}|${p[1]}`, p])).values()).sort(([a1, p1], [a2, p2]) => `${a1}|${p1}`.localeCompare(`${a2}|${p2}`))) {
           await lockAccount(c, assetId, pubkey);
@@ -795,7 +863,7 @@ export async function marketsRoutes(app: FastifyInstance) {
             const debit = await c.query(
               `UPDATE account_balances SET spendable_base_units = spendable_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
                WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
-              [market.quote_id, buyer, (fillQuote + fee).toString(), fillQuote.toString()],
+              [market.quote_id, buyer, (fillQuote + quoteFee).toString(), fillQuote.toString()],
             );
             if (debit.rowCount === 0) break;
           } else {
@@ -810,23 +878,23 @@ export async function marketsRoutes(app: FastifyInstance) {
                   AND pubkey=$2
                   AND locked_base_units >= $3::bigint
                   AND spendable_base_units >= $4::bigint`,
-              [market.quote_id, buyer, fillQuote.toString(), fee.toString()],
+              [market.quote_id, buyer, fillQuote.toString(), quoteFee.toString()],
             );
             if (debit.rowCount === 0) break;
           }
         } else {
           if (body.order_type === 'market') {
             const debit = await c.query(
-              `UPDATE account_balances SET spendable_base_units = spendable_base_units - $3::bigint, sent_base_units = sent_base_units + $3::bigint, events_count = events_count + 1, updated_at=now()
+              `UPDATE account_balances SET spendable_base_units = spendable_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
                WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
-              [market.base_id, seller, fillBase.toString()],
+              [market.base_id, seller, fillBase.toString(), buyerBaseReceive.toString()],
             );
             if (debit.rowCount === 0) break;
           } else {
             const debit = await c.query(
-              `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $3::bigint, events_count = events_count + 1, updated_at=now()
+              `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
                WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
-              [market.base_id, seller, fillBase.toString()],
+              [market.base_id, seller, fillBase.toString(), buyerBaseReceive.toString()],
             );
             if (debit.rowCount === 0) break;
           }
@@ -846,49 +914,86 @@ export async function marketsRoutes(app: FastifyInstance) {
         //     what the recipient (seller) actually received, matching the
         //     send.ts convention so total_transferred == sum(sent_base_units)
         //     stays balanced.
-        const sellerNetQuote = body.side === 'sell' ? fillQuote - fee : fillQuote;
         if (body.side === 'buy') {
-          await c.query(
-            `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $3::bigint, events_count = events_count + 1, updated_at=now()
-             WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
-            [market.base_id, seller, fillBase.toString()],
-          );
-        } else {
-          await c.query(
+          const makerDebit = await c.query(
             `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
              WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
-            [market.quote_id, buyer, fillQuote.toString(), sellerNetQuote.toString()],
+            [market.base_id, seller, fillBase.toString(), buyerBaseReceive.toString()],
+          );
+          if (makerDebit.rowCount !== 1) throw new Error('market maker base reservation invariant failed');
+        } else {
+          // Sell-taker: maker (buyer) had `fillQuote` locked. Their `sent` is
+          // what the recipient (seller) actually received, which is
+          // sellerQuoteCredit = sellerNetQuote here.
+          const makerDebit = await c.query(
+            `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
+             WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+            [market.quote_id, buyer, fillQuote.toString(), sellerQuoteCredit.toString()],
+          );
+          if (makerDebit.rowCount !== 1) throw new Error('market maker quote reservation invariant failed');
+        }
+        // Buyer + seller credits create their first balance row in the
+        // base/quote asset whenever they're new to it; bump per-asset
+        // user_count so the ledger_accounting_reconciliation invariant
+        // (user_count == balance_row_count) stays honest. Same `(xmax = 0)`
+        // pattern as send/mint/pool/claim/faucet.
+        const buyerBaseCredit = await c.query<{ was_inserted: boolean }>(
+          `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
+           VALUES($1::uuid, $2, $3, $3, 1, now())
+           ON CONFLICT (asset_id, pubkey) DO UPDATE SET
+             spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+             received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
+             events_count = account_balances.events_count + 1,
+             updated_at=now()
+           RETURNING (xmax = 0) AS was_inserted`,
+          [market.base_id, buyer, buyerBaseReceive.toString()],
+        );
+        if (buyerBaseCredit.rows[0]?.was_inserted) {
+          await c.query(
+            `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+             WHERE asset_id=$1::uuid AND name='user_count'`,
+            [market.base_id],
           );
         }
-        await c.query(
+        const sellerQuoteCreditRow = await c.query<{ was_inserted: boolean }>(
           `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
            VALUES($1::uuid, $2, $3, $3, 1, now())
            ON CONFLICT (asset_id, pubkey) DO UPDATE SET
              spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
              received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
              events_count = account_balances.events_count + 1,
-             updated_at=now()`,
-          [market.base_id, buyer, fillBase.toString()],
+             updated_at=now()
+           RETURNING (xmax = 0) AS was_inserted`,
+          [market.quote_id, seller, sellerQuoteCredit.toString()],
         );
-        await c.query(
-          `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
-           VALUES($1::uuid, $2, $3, $3, 1, now())
-           ON CONFLICT (asset_id, pubkey) DO UPDATE SET
-             spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
-             received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
-             events_count = account_balances.events_count + 1,
-             updated_at=now()`,
-          [market.quote_id, seller, sellerNetQuote.toString()],
-        );
-        if (fee > 0n) {
+        if (sellerQuoteCreditRow.rows[0]?.was_inserted) {
           await c.query(
+            `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+             WHERE asset_id=$1::uuid AND name='user_count'`,
+            [market.quote_id],
+          );
+        }
+        if (fee > 0n) {
+          // Treasury already has a row at genesis on every asset, so this
+          // is essentially a no-op for user_count, but keep the pattern
+          // consistent so a hypothetical future fee-asset without a treasury
+          // row stays balanced.
+          const treasuryCredit = await c.query<{ was_inserted: boolean }>(
             `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, updated_at)
              VALUES($1::uuid, $2, $3, now())
              ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
-               updated_at=now()`,
-            [market.quote_id, TREASURY_PUBKEY, fee.toString()],
+               updated_at=now()
+             RETURNING (xmax = 0) AS was_inserted`,
+            [feeAssetId, TREASURY_PUBKEY, fee.toString()],
           );
+          if (treasuryCredit.rows[0]?.was_inserted) {
+            await c.query(
+              `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+               WHERE asset_id=$1::uuid AND name='user_count'`,
+              [feeAssetId],
+            );
+          }
         }
         const tradeId = randomUUID();
         const memo = `trade:${tradeId}`;
@@ -896,19 +1001,21 @@ export async function marketsRoutes(app: FastifyInstance) {
           assetId: market.base_id,
           actor: seller,
           recipient: buyer,
-          amount: fillBase,
-          fee: 0n,
+          amount: buyerBaseReceive,
+          fee: baseFee,
           memo,
           signature: body.side === 'sell' ? body.client_signature_base58 : maker.client_signature_base58,
         });
         // The quote leg's `amount` is the recipient's net gain (matches
-        // send.ts), so total_transferred / sent / received stay aligned.
+        // send.ts), so total_transferred / sent / received stay aligned. For
+        // buy-takers that's the full fillQuote; for sell-takers it's
+        // fillQuote minus the taker fee (kept by the treasury).
         const quoteEventId = await transferLeg(c, {
           assetId: market.quote_id,
           actor: buyer,
           recipient: seller,
-          amount: sellerNetQuote,
-          fee,
+          amount: sellerQuoteCredit,
+          fee: quoteFee,
           memo,
           signature: body.side === 'buy' ? body.client_signature_base58 : maker.client_signature_base58,
         });
@@ -920,14 +1027,15 @@ export async function marketsRoutes(app: FastifyInstance) {
            )
            VALUES($1,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8::bigint,$9::bigint,$10::bigint,$11::bigint,$12::uuid,$13,$14)
            RETURNING id::text, market_id::text, price_quote_base_units::text, base_amount_base_units::text,
-                     quote_amount_base_units::text, taker_side, fee_base_units::text, created_at`,
-          [tradeId, body.market_id, maker.id, orderId, maker.owner_pubkey, s.pubkey, body.side, fillPrice.toString(), fillBase.toString(), fillQuote.toString(), fee.toString(), market.quote_id, baseEventId, quoteEventId],
+                     quote_amount_base_units::text, taker_side, fee_base_units::text, fee_asset_id::text, created_at`,
+          [tradeId, body.market_id, maker.id, orderId, maker.owner_pubkey, s.pubkey, body.side, fillPrice.toString(), fillBase.toString(), fillQuote.toString(), fee.toString(), feeAssetId, baseEventId, quoteEventId],
         );
         trades.push(tradeWire(tr.rows[0] as any));
         remaining -= fillBase;
         if (body.side === 'buy') spentQuote += fillQuote;
         else receivedQuote += sellerNetQuote;
         totalFee += fee;
+        totalQuoteFee += quoteFee;
         const makerRemaining = BigInt(maker.remaining_base_units) - fillBase;
         const makerStatus = makerRemaining === 0n ? 'filled' : 'partially_filled';
         await c.query(
@@ -972,11 +1080,12 @@ export async function marketsRoutes(app: FastifyInstance) {
           ? (body.side === 'sell' ? remaining : quoteFor(remaining, price!))
           : 0n;
       if (release > 0n && reserveAssetId) {
-        await c.query(
+        const releaseResult = await c.query(
           `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, spendable_base_units = spendable_base_units + $3::bigint, updated_at=now()
            WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
           [reserveAssetId, s.pubkey, release.toString()],
         );
+        if (releaseResult.rowCount !== 1) throw new Error('market reservation release invariant failed');
       }
       const updated = await c.query<OrderRow>(
         `UPDATE market_orders
@@ -1049,7 +1158,7 @@ export async function marketsRoutes(app: FastifyInstance) {
       const release = BigInt(order.reserved_remaining_base_units);
       if (release > 0n && order.reserved_asset_id) {
         await lockAccount(c, order.reserved_asset_id, s.pubkey);
-        await c.query(
+        const releaseResult = await c.query(
           `UPDATE account_balances
              SET locked_base_units = locked_base_units - $3::bigint,
                  spendable_base_units = spendable_base_units + $3::bigint,
@@ -1057,6 +1166,7 @@ export async function marketsRoutes(app: FastifyInstance) {
            WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
           [order.reserved_asset_id, s.pubkey, release.toString()],
         );
+        if (releaseResult.rowCount !== 1) throw new Error('market cancel release invariant failed');
       }
       const updated = await c.query<OrderRow>(
         `UPDATE market_orders

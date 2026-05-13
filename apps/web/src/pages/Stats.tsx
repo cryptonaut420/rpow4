@@ -192,7 +192,7 @@ export function StatsPage() {
     isDefaultAsset ? `  FAUCET CLAIMS       : ${faucetClaimCount}` : null,
     isDefaultAsset ? `  FAUCET DRIPPED      : ${faucetTotalClaimed} ${assetCode}` : null,
     isDefaultAsset ? `` : null,
-    isDefaultAsset ? `  TROLLBOX MESSAGES   : ${formatNumber(ledger.trollbox_message_count)}` : null,
+    isDefaultAsset ? `  TROLLBOX MESSAGES   : ${formatNumber(ledger.trollbox_message_count ?? '0')}` : null,
   ].filter((line) => line !== null);
 
   const board = boards[sort];

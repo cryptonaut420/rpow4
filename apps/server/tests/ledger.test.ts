@@ -48,7 +48,11 @@ describe('GET /ledger', () => {
       halving_index: 0,
 
       is_capped: false,
-      user_count: 0,
+      // user_count tracks (asset_id, pubkey) rows in account_balances so the
+      // ledger_accounting_reconciliation invariant `user_count = balance_row_count`
+      // holds. The treasury seat is seeded at migration time, so a fresh DB
+      // starts at 1 here.
+      user_count: 1,
     });
   });
 

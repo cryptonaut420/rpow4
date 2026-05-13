@@ -72,7 +72,7 @@ export async function mirrorLedgerEventHot(c: PoolClient, event: LedgerEventRow)
         type: event.event_type === 'MINT' ? 'mint' : 'genesis',
         amount: event.amount,
         feeBaseUnits: '0',
-        memo: null,
+        memo: event.memo,
         counterpartyPubkey: null,
         clientSignatureBase58: null,
         createdAt: event.created_at,

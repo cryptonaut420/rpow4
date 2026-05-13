@@ -218,18 +218,17 @@ export async function faucetRoutes(app: FastifyInstance) {
           // Lock both balance rows to serialize against concurrent sends/mints.
           for (const pubkey of [TREASURY_PUBKEY, recipient].sort()) {
             await c.query(
-              `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance'), hashtext($1))`,
-              [pubkey],
+              `SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`,
+              [DEFAULT_ASSET_ID, pubkey],
             );
           }
 
-          // Debit treasury. The CHECK on spendable_base_units >= claim
-          // means a dry treasury just won't update — rowCount === 0
-          // signals we're out of funds.
+          // Debit treasury. rowCount === 0 means a dry treasury (the
+          // spendable_base_units >= claim CHECK gates the UPDATE).
           const debit = await c.query(
             `UPDATE account_balances
-                SET spendable_base_units = spendable_base_units - $2::bigint,
-                    sent_base_units = sent_base_units + $2::bigint,
+                SET spendable_base_units = spendable_base_units - $3::bigint,
+                    sent_base_units = sent_base_units + $3::bigint,
                     updated_at = now()
               WHERE asset_id=$1::uuid AND pubkey = $2 AND spendable_base_units >= $3::bigint`,
             [DEFAULT_ASSET_ID, TREASURY_PUBKEY, claimAmount.toString()],
@@ -242,32 +241,34 @@ export async function faucetRoutes(app: FastifyInstance) {
             };
           }
 
-          // Lazy-create the recipient account row (matches /send semantics).
-          const recipientInsert = await c.query<{ pubkey: string }>(
+          // Lazy-create the recipient accounts row (matches /send semantics).
+          await c.query(
             `INSERT INTO accounts(pubkey) VALUES($1)
-              ON CONFLICT (pubkey) DO NOTHING
-              RETURNING pubkey`,
+              ON CONFLICT (pubkey) DO NOTHING`,
             [recipient],
           );
-          if (recipientInsert.rows[0]) {
-            await c.query(
-              `UPDATE ledger_stats SET value = value + 1, updated_at = now()
-                WHERE asset_id=$1::uuid AND name='user_count'`,
-              [DEFAULT_ASSET_ID],
-            );
-          }
 
           // Credit the recipient + bump events_count for /activity total_count.
-          await c.query(
+          // RETURNING (xmax = 0) tells us whether this was a new balance row;
+          // if so, bump per-asset user_count to keep reconciliation honest.
+          const credit = await c.query<{ was_inserted: boolean }>(
             `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
                   VALUES($1::uuid, $2, $3, $3, 1, now())
               ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                 spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
                 received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
                 events_count = account_balances.events_count + 1,
-                updated_at = now()`,
+                updated_at = now()
+              RETURNING (xmax = 0) AS was_inserted`,
             [DEFAULT_ASSET_ID, recipient, claimAmount.toString()],
           );
+          if (credit.rows[0]?.was_inserted) {
+            await c.query(
+              `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+                WHERE asset_id=$1::uuid AND name='user_count'`,
+              [DEFAULT_ASSET_ID],
+            );
+          }
 
           // Stat shard for total_transferred. The shard key is the recipient
           // pubkey here so faucet drips spread across shards rather than

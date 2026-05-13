@@ -43,6 +43,7 @@ export function MiningBar() {
   const mining = useMining();
   const { selectedAsset } = useAsset();
   const assetCode = selectedAsset?.display_code ?? 'RPOW';
+  const isExternalAsset = selectedAsset?.asset_kind === 'external_custodial';
   const location = useLocation();
   const [expanded, setExpanded] = useState(false);
   const barRef = useRef<HTMLDivElement>(null);
@@ -173,7 +174,11 @@ export function MiningBar() {
             type="button"
             className={`mining-mode-pill is-${mining.mode}`}
             onClick={() => mining.setMode(mining.mode === 'pool' ? 'solo' : 'pool')}
+            disabled={isExternalAsset}
             title={
+              isExternalAsset
+                ? `${assetCode} is not mineable`
+                :
               running
                 ? 'switching modes will stop the current run; press [ MINE ] again to resume in the new mode'
                 : mining.mode === 'pool'
@@ -219,7 +224,11 @@ export function MiningBar() {
 
           <span className="mining-bar-spacer" />
 
-          {running ? (
+          {isExternalAsset ? (
+            <Link className="mining-bar-action go" to="/assets/rpow2" title="open RPOW2 deposits and withdrawals">
+              [ RPOW2 ]
+            </Link>
+          ) : running ? (
             <button
               type="button"
               className="mining-bar-action stop"

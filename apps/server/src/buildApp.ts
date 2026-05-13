@@ -21,6 +21,7 @@ import { poolRoutes } from './routes/pool.js';
 import { assetsRoutes } from './routes/assets.js';
 import { marketsRoutes } from './routes/markets.js';
 import { newsRoutes } from './routes/news.js';
+import { rpow2CustodyRoutes, syncRpow2Deposits } from './routes/rpow2-custody.js';
 import { TtlCache, type CachedJsonResponse } from './cache.js';
 import { pingPool } from './db.js';
 import { createCachedSessionVerifier, SESSION_COOKIE, type CachedSessionVerifier } from './session.js';
@@ -66,6 +67,10 @@ export interface AppConfig {
   webOrigin: string;
   secureCookies: boolean;
   trustProxy: boolean | string;
+  rpow2ApiBaseUrl?: string;
+  rpow2SessionCookie?: string;
+  rpow2BankerEmail?: string;
+  rpow2DepositPollEnabled?: boolean;
 }
 
 export interface BuildAppOptions {
@@ -180,19 +185,14 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     poolStats: new TtlCache<string, unknown>({ ttlMs: 2_000, maxSize: 20_000 }),
   };
   app.decorate('caches', caches);
-  app.decorate('invalidateAccount', (pubkey: string) => {
-    caches.me.invalidate(pubkey);
-    caches.activity.invalidate(pubkey);
-    // Multi-asset cache keys are `${asset_id}|${pubkey}`. The cache helper
-    // has no prefix invalidation, so clear the small per-user caches on writes.
+  app.decorate('invalidateAccount', (_pubkey: string) => {
+    // Cache keys are composite (`${asset_id}|${pubkey}` for me/activity and
+    // `${asset_id}|${pubkey}|${filterType}` for explorerAccount) and the cache
+    // helper has no prefix invalidation, so we clear these small per-user
+    // caches wholesale on any write touching an account. They TTL out in
+    // seconds anyway; this just shortens the gap.
     caches.me.clear();
     caches.activity.clear();
-    // The explorer-account cache is keyed by `${pubkey}|${filterType}`
-    // so we must invalidate every filter variant we might have cached
-    // for this pubkey.
-    for (const t of ['all', 'mint', 'send', 'receive'] as const) {
-      caches.explorerAccount.invalidate(`${pubkey}|${t}`);
-    }
     caches.explorerAccount.clear();
   });
   app.decorate('invalidateLookup', (name: string | null | undefined) => {
@@ -324,6 +324,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(poolRoutes);
   await app.register(marketsRoutes);
   await app.register(newsRoutes);
+  await app.register(rpow2CustodyRoutes);
+
+  if (!opts.test && opts.config.rpow2DepositPollEnabled) {
+    const pollMs = 30_000;
+    const run = () => {
+      syncRpow2Deposits(app).catch((err) => app.log.error({ err }, 'rpow2 deposit sync failed'));
+    };
+    const timer = setInterval(run, pollMs);
+    timer.unref();
+    app.addHook('onClose', async () => { clearInterval(timer); });
+    run();
+  }
 
   // Public-key PEM is fully determined by the signing config; precompute
   // once at startup instead of rebuilding on every request.

@@ -23,7 +23,16 @@ const Body = z.object({
     }, 'amount_base_units must be a positive bigint up to 10^18'),
   idempotency_key: z.string().min(8).max(80),
   client_signature_base58: z.string().min(64).max(128),
-  memo: z.string().max(64).optional(),
+  // Memos render verbatim in /activity, /explorer, and counterparty
+  // notifications, so reject ASCII control characters (which would break
+  // line-based UIs and may be filtered out by downstream tooling). Surrounding
+  // whitespace is trimmed for the same reason.
+  memo: z
+    .string()
+    .max(64)
+    .transform((s) => s.trim())
+    .refine((s) => !/[\x00-\x1F\x7F]/.test(s), 'memo cannot contain control characters')
+    .optional(),
 });
 
 export async function sendRoutes(app: FastifyInstance) {
@@ -141,13 +150,30 @@ export async function sendRoutes(app: FastifyInstance) {
             return { error: 'INSUFFICIENT_BALANCE' as const, message: 'not enough tokens (including fee)', status: 400 };
           }
 
-          const recipientInsert = await c.query<{ pubkey: string }>(
+          await c.query(
             `INSERT INTO accounts(pubkey) VALUES($1)
-             ON CONFLICT (pubkey) DO NOTHING
-             RETURNING pubkey`,
+             ON CONFLICT (pubkey) DO NOTHING`,
             [recipient],
           );
-          if (recipientInsert.rows[0]) {
+
+          // Lazy-create the recipient's balance row for this asset and bump
+          // per-asset user_count when (asset_id, pubkey) is brand new. The
+          // (xmax = 0) RETURNING flag distinguishes insert vs ON CONFLICT
+          // update so we keep ledger_stats.user_count consistent with the
+          // balance_row_count reconciliation invariant.
+          const createdAt = new Date();
+          const credit = await c.query<{ was_inserted: boolean }>(
+            `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
+             VALUES($1::uuid, $2, $3, $3, 1, now())
+             ON CONFLICT (asset_id, pubkey) DO UPDATE SET
+               spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
+               received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
+               events_count = account_balances.events_count + 1,
+               updated_at = now()
+             RETURNING (xmax = 0) AS was_inserted`,
+            [asset.id, recipient, target.toString()],
+          );
+          if (credit.rows[0]?.was_inserted) {
             await c.query(
               `UPDATE ledger_stats SET value = value + 1, updated_at = now()
                WHERE asset_id=$1::uuid AND name='user_count'`,
@@ -155,27 +181,23 @@ export async function sendRoutes(app: FastifyInstance) {
             );
           }
 
-          const createdAt = new Date();
-          await c.query(
-            `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, received_base_units, events_count, updated_at)
-             VALUES($1::uuid, $2, $3, $3, 1, now())
-             ON CONFLICT (asset_id, pubkey) DO UPDATE SET
-               spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
-               received_base_units = account_balances.received_base_units + EXCLUDED.received_base_units,
-               events_count = account_balances.events_count + 1,
-               updated_at = now()`,
-            [asset.id, recipient, target.toString()],
-          );
-
           if (fee > 0n) {
-            await c.query(
+            const treasuryCredit = await c.query<{ was_inserted: boolean }>(
               `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, updated_at)
                VALUES($1::uuid, $2, $3, now())
                ON CONFLICT (asset_id, pubkey) DO UPDATE SET
                  spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
-                 updated_at = now()`,
+                 updated_at = now()
+               RETURNING (xmax = 0) AS was_inserted`,
               [asset.id, TREASURY_PUBKEY, fee.toString()],
             );
+            if (treasuryCredit.rows[0]?.was_inserted) {
+              await c.query(
+                `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+                 WHERE asset_id=$1::uuid AND name='user_count'`,
+                [asset.id],
+              );
+            }
           }
 
           await c.query(

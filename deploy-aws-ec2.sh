@@ -183,6 +183,11 @@ sync_existing_env() {
   append_env_if_missing FAUCET_COOLDOWN_HOURS 24
   append_env_if_missing TROLLBOX_POST_FEE_BASE_UNITS 5000000000
 
+  append_env_if_missing RPOW2_API_BASE_URL https://api.rpow2.com
+  append_env_if_missing RPOW2_BANKER_EMAIL rpow4bank@gmail.com
+  append_env_if_missing RPOW2_SESSION_COOKIE ""
+  append_env_if_missing RPOW2_DEPOSIT_POLL_ENABLED false
+
   chmod 600 "$ENV_FILE" 2>/dev/null || true
 }
 

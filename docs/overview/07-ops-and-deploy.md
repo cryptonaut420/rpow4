@@ -36,6 +36,35 @@ are `rpow4.com` and `api.rpow4.com`.
 | `API_HOST` | Public API hostname used by the production proxy |
 | `LETSENCRYPT_EMAIL` | Contact email for certificate issuance |
 
+## RPOW2 Bridge Runbook
+
+RPOW2 deposits and withdrawals are optional. To enable them, create or choose a
+dedicated banker account on RPOW2, log in manually, and copy the full browser
+cookie value into `RPOW2_SESSION_COOKIE` without committing it to git.
+
+| Var | Purpose |
+|---|---|
+| `RPOW2_API_BASE_URL` | RPOW2 API origin, default `https://api.rpow2.com` |
+| `RPOW2_BANKER_EMAIL` | Email address users send deposits to, default `rpow4bank@gmail.com` |
+| `RPOW2_SESSION_COOKIE` | Full banker session cookie, e.g. `rpow_session=...` |
+| `RPOW2_DEPOSIT_POLL_ENABLED` | Enables the background deposit poller |
+
+Operational flow:
+
+- Users send RPOW2 to the banker email with their RPOW4 pubkey in the memo.
+- The server polls RPOW2 `/activity?since=...` and credits matching deposits.
+- Unknown memos remain `unattributed` for an admin to assign manually.
+- Withdrawals lock internal RPOW2 immediately and require admin approval.
+- On first setup, confirm `external_sync_state.cursor_at` is earlier than any
+  banker deposits you expect to import. The migration defaults it to setup time
+  so old banker history is not imported accidentally.
+- If RPOW2 returns `401`, assume the browser session expired. Rotate
+  `RPOW2_SESSION_COOKIE`, restart the API, use the admin RPOW2 panel to
+  resume sync, then trigger a manual sync.
+- The DB config flags `external_asset_configs.deposit_enabled` and
+  `external_asset_configs.withdrawal_enabled` can temporarily pause deposits or
+  new withdrawal requests without removing the market.
+
 ## Scaling Notes
 
 - Keep current-state reads on `account_balances`, `ledger_stats`, and

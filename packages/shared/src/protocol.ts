@@ -47,6 +47,7 @@ export interface AssetSummary {
   nickname: string;
   description: string;
   creator_pubkey?: string;
+  asset_kind: 'mineable' | 'external_custodial';
   system_default: boolean;
   supply_mode: 'capped' | 'unlimited';
   max_supply_base_units?: string;
@@ -136,6 +137,37 @@ export interface MeResponse {
   send_fees_waived: boolean;
   /** True when ops granted publishing access for news/changelog posts. */
   is_admin: boolean;
+}
+
+/**
+ * Per-asset balance entry returned by `GET /me/balances`. The fields are a
+ * compact subset of `MeResponse` plus the metadata needed to render an
+ * asset row (display code/nickname, kind, ordering hints) without joining
+ * to /assets on the client.
+ */
+export interface MeBalanceEntry {
+  asset_id: string;
+  asset_slug: string;
+  display_code: string;
+  nickname: string;
+  asset_kind: 'mineable' | 'external_custodial';
+  system_default: boolean;
+  sequence_number: number;
+  balance_base_units: string;
+  minted_base_units: string;
+  sent_base_units: string;
+  received_base_units: string;
+  events_count: number;
+}
+
+/**
+ * Response shape for `GET /me/balances`. The server pins the platform
+ * default asset (RPOW4.0) and RPOW2 so the list is useful for a fresh
+ * account, and otherwise includes assets where the caller has a balance row.
+ */
+export interface MeBalancesResponse {
+  pubkey: string;
+  balances: MeBalanceEntry[];
 }
 
 /**
@@ -396,6 +428,7 @@ export interface MarketTrade {
   quote_amount_base_units: string;
   taker_side: MarketSide;
   fee_base_units: string;
+  fee_asset_id: string;
   created_at: string;
 }
 
@@ -533,6 +566,127 @@ export interface NewsCreateResponse {
   post: NewsPost;
 }
 
+// ---- RPOW2 deposits + withdrawals -------------------------------------------
+
+export interface Rpow2CustodyDeposit {
+  id: string;
+  sender_external_id: string;
+  raw_memo: string | null;
+  amount_base_units: string;
+  status: 'credited' | 'unattributed' | 'ignored';
+  external_observed_at: string;
+  credited_at: string | null;
+  credited_event_id: string | null;
+}
+
+export interface Rpow2CustodyWithdrawal {
+  id: string;
+  requester_pubkey?: string;
+  requester_display_name?: string | null;
+  destination_external_id: string;
+  amount_base_units: string;
+  status: 'pending_approval' | 'sending' | 'sent' | 'rejected' | 'failed';
+  failure_reason: string | null;
+  external_transfer_id: string | null;
+  burn_event_id: string | null;
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  sent_at: string | null;
+  rejected_at: string | null;
+}
+
+export interface Rpow2UnattributedDeposit {
+  id: string;
+  sender_external_id: string;
+  raw_memo: string | null;
+  amount_base_units: string;
+  external_observed_at: string;
+  created_at: string;
+  note: string | null;
+}
+
+export interface Rpow2CustodyUserStats {
+  deposits_credited: number;
+  deposits_credited_amount_base_units: string;
+  withdrawals_sent: number;
+  withdrawals_sent_amount_base_units: string;
+}
+
+export interface Rpow2CustodyAggregates {
+  deposits_credited: number;
+  deposits_credited_amount_base_units: string;
+  deposits_unattributed: number;
+  deposits_unattributed_amount_base_units: string;
+  withdrawals_pending: number;
+  withdrawals_pending_amount_base_units: string;
+  withdrawals_sending: number;
+  withdrawals_sending_amount_base_units: string;
+  withdrawals_failed: number;
+  withdrawals_failed_amount_base_units: string;
+  withdrawals_sent: number;
+  withdrawals_sent_amount_base_units: string;
+  withdrawals_rejected: number;
+  withdrawals_rejected_amount_base_units: string;
+  treasury_spendable_base_units: string;
+}
+
+export interface Rpow2CustodyStatusResponse {
+  asset_id: string;
+  provider_key: 'rpow2';
+  configured: boolean;
+  api_base_url?: string;
+  banker_email?: string;
+  deposit_enabled: boolean;
+  withdrawal_enabled: boolean;
+  sync: {
+    cursor_at: string | null;
+    last_run_at: string | null;
+    last_success_at: string | null;
+    last_error: string | null;
+    paused: boolean;
+  };
+  user_stats: Rpow2CustodyUserStats | null;
+  deposits: Rpow2CustodyDeposit[];
+  withdrawals: Rpow2CustodyWithdrawal[];
+}
+
+export interface Rpow2CustodyAdminResponse extends Rpow2CustodyStatusResponse {
+  aggregates: Rpow2CustodyAggregates;
+  pending_withdrawals: Rpow2CustodyWithdrawal[];
+  /** Approved but still finalising — surfaced separately so admins
+   * don't accidentally double-approve. */
+  sending_withdrawals: Rpow2CustodyWithdrawal[];
+  unattributed_deposits: Rpow2UnattributedDeposit[];
+}
+
+export interface Rpow2DepositSyncResponse {
+  ok: true;
+  processed: number;
+  credited: number;
+  unattributed: number;
+  skipped: number;
+}
+
+export interface Rpow2WithdrawalRequestBody {
+  destination_email: string;
+  amount_base_units: string;
+}
+
+export interface Rpow2WithdrawalCreateResponse {
+  ok: true;
+  id: string;
+  status: 'pending_approval';
+}
+
+export interface Rpow2WithdrawalActionResponse {
+  ok: true;
+  id: string;
+  status?: string;
+  external_transfer_id?: string | null;
+  burn_event_id?: string | null;
+}
+
 // ---- errors -----------------------------------------------------------------
 
 export type ApiErrorCode =
@@ -639,12 +793,22 @@ export interface LedgerResponse {
 
   is_capped: boolean;
   user_count: number;
-  /** Lifetime count of trollbox messages posted. */
-  trollbox_message_count: string;
-  /** Lifetime count of successful faucet claims. */
-  faucet_claim_count: string;
-  /** Lifetime sum of RPOW (base units) dripped from the faucet. */
-  faucet_total_claimed_base_units: string;
+  /**
+   * Lifetime count of trollbox messages posted.
+   * Only present on the system default asset (RPOW4.0); trollbox is a
+   * platform-wide feature that doesn't apply to custom RPOWs.
+   */
+  trollbox_message_count?: string;
+  /**
+   * Lifetime count of successful faucet claims.
+   * Only present on the system default asset (RPOW4.0).
+   */
+  faucet_claim_count?: string;
+  /**
+   * Lifetime sum of RPOW (base units) dripped from the faucet.
+   * Only present on the system default asset (RPOW4.0).
+   */
+  faucet_total_claimed_base_units?: string;
 }
 
 export type LeaderboardSort = 'balance' | 'minted';

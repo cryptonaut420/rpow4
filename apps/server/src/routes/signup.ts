@@ -13,6 +13,7 @@ import {
 import { verifySolution } from '../pow.js';
 import { signSession, SESSION_COOKIE, SESSION_TTL_SECONDS } from '../session.js';
 import { withTxRetry } from '../db.js';
+import { DEFAULT_ASSET_ID } from '../assets.js';
 
 const SIGNUP_TTL_MS = 60 * 60 * 1000; // 1h, generous so a slow phone has time
 const DOMAIN = 'rpow4.signup';
@@ -198,15 +199,23 @@ export async function signupRoutes(app: FastifyInstance) {
            VALUES ($1, $2, now(), $3)`,
           [envelope.pubkey, envelope.handle, client_signature_base58],
         );
-        await c.query(
-          `INSERT INTO account_balances(pubkey) VALUES($1)
-           ON CONFLICT (pubkey) DO NOTHING`,
-          [envelope.pubkey],
+        // Seed an empty RPOW4.0 balance row so reconciliation user_count
+        // matches the new accounts row immediately. Other assets get balance
+        // rows lazily on first credit.
+        const balanceInsert = await c.query<{ pubkey: string }>(
+          `INSERT INTO account_balances(asset_id, pubkey)
+           VALUES($1::uuid, $2)
+           ON CONFLICT (asset_id, pubkey) DO NOTHING
+           RETURNING pubkey`,
+          [DEFAULT_ASSET_ID, envelope.pubkey],
         );
-        await c.query(
-          `UPDATE ledger_stats SET value = value + 1, updated_at = now()
-           WHERE name='user_count'`,
-        );
+        if (balanceInsert.rows[0]) {
+          await c.query(
+            `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+             WHERE asset_id=$1::uuid AND name='user_count'`,
+            [DEFAULT_ASSET_ID],
+          );
+        }
       });
     } catch (e: any) {
       if (e?.code === '23505') {

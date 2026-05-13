@@ -11,15 +11,27 @@ async function fundAsset(
   pubkey: string,
   amount: bigint,
 ) {
-  await ctx.pool.query(
+  // RETURNING (xmax = 0) tells us whether this insert created a new
+  // (asset_id, pubkey) row. If it did, mirror the user_count bump that
+  // production paths perform so the ledger_accounting_reconciliation
+  // invariant `user_count = balance_row_count` holds in tests too.
+  const credit = await ctx.pool.query<{ was_inserted: boolean }>(
     `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, minted_base_units, updated_at)
      VALUES($1::uuid, $2, $3, $3, now())
      ON CONFLICT (asset_id, pubkey) DO UPDATE SET
        spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
        minted_base_units = account_balances.minted_base_units + EXCLUDED.minted_base_units,
-       updated_at = now()`,
+       updated_at = now()
+     RETURNING (xmax = 0) AS was_inserted`,
     [assetId, pubkey, amount.toString()],
   );
+  if (credit.rows[0]?.was_inserted) {
+    await ctx.pool.query(
+      `UPDATE ledger_stats SET value = value + 1, updated_at = now()
+       WHERE asset_id=$1::uuid AND name='user_count'`,
+      [assetId],
+    );
+  }
   await ctx.pool.query(
     `UPDATE ledger_stats SET value = value + $2::bigint, updated_at = now()
      WHERE asset_id=$1::uuid AND name='circulating_supply'`,
@@ -209,16 +221,23 @@ describe('internal markets', () => {
     expect(buyJson.fee_base_units).toBe('200000000');
 
     const recon = await ctx.pool.query(
-      `SELECT minted_matches_balances, circulating_matches_balances,
-              transferred_matches_sent, transferred_matches_received
+      `SELECT asset_id::text, minted_matches_balances, circulating_matches_balances,
+              transferred_matches_sent, transferred_matches_received,
+              user_count_matches_balances
        FROM ledger_accounting_reconciliation WHERE asset_id IN ($1::uuid, $2::uuid)`,
       [asset.id, DEFAULT_ASSET_ID],
     );
     for (const row of recon.rows) {
-      expect(row.minted_matches_balances).toBe(true);
-      expect(row.circulating_matches_balances).toBe(true);
-      expect(row.transferred_matches_sent).toBe(true);
-      expect(row.transferred_matches_received).toBe(true);
+      expect(row, JSON.stringify(row)).toMatchObject({
+        minted_matches_balances: true,
+        circulating_matches_balances: true,
+        transferred_matches_sent: true,
+        transferred_matches_received: true,
+        // Buyer/seller getting their first balance row in the base/quote
+        // asset must bump per-asset user_count so this stays true. Before
+        // the fix this would silently drift below balance_row_count.
+        user_count_matches_balances: true,
+      });
     }
 
     // Now buyer rests a buy-side limit, seller takes it (sell-taker case)

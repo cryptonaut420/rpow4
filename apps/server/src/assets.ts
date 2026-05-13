@@ -44,6 +44,7 @@ export interface AssetRow {
   description: string;
   creator_pubkey: string | null;
   status: 'active' | 'paused' | 'archived';
+  asset_kind: 'mineable' | 'external_custodial';
   system_default: boolean;
   supply_mode: 'capped' | 'unlimited';
   max_supply_base_units: string | null;
@@ -77,6 +78,7 @@ export interface AssetContext {
   nickname: string;
   description: string;
   creatorPubkey: string | null;
+  assetKind: 'mineable' | 'external_custodial';
   systemDefault: boolean;
   supplyMode: 'capped' | 'unlimited';
   maxSupplyBaseUnits: bigint | null;
@@ -109,6 +111,7 @@ export function assetFromRow(row: AssetRow): AssetContext {
     nickname: row.nickname,
     description: row.description,
     creatorPubkey: row.creator_pubkey,
+    assetKind: row.asset_kind ?? 'mineable',
     systemDefault: row.system_default,
     supplyMode: row.supply_mode,
     maxSupplyBaseUnits: row.max_supply_base_units === null ? null : BigInt(row.max_supply_base_units),
@@ -156,6 +159,7 @@ export function assetWire(asset: AssetContext) {
     nickname: asset.nickname,
     description: asset.description,
     creator_pubkey: asset.creatorPubkey ?? undefined,
+    asset_kind: asset.assetKind,
     system_default: asset.systemDefault,
     supply_mode: asset.supplyMode,
     max_supply_base_units: asset.maxSupplyBaseUnits?.toString(),
@@ -186,7 +190,7 @@ export function assetWire(asset: AssetContext) {
 export async function loadAssetBySlug(db: Pool | PoolClient, slug: string): Promise<AssetContext | null> {
   const { rows } = await db.query<AssetRow>(
     `SELECT id::text, family_code, sequence_number, display_code, slug, nickname, description,
-            creator_pubkey, status, system_default, supply_mode,
+            creator_pubkey, status, asset_kind, system_default, supply_mode,
             max_supply_base_units::text, base_units_per_coin::text,
             initial_reward_base_units::text, reward_schedule_type,
             reward_interval_blocks, reward_reduction_type, reward_reduction_value::text,

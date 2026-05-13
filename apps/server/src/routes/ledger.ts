@@ -151,9 +151,17 @@ export async function ledgerRoutes(app: FastifyInstance) {
 
         is_capped: asset.supplyMode === 'capped' && info.isCapped,
         user_count: userCount,
-        trollbox_message_count: stats.trollbox_message_count,
-        faucet_claim_count: stats.faucet_claim_count,
-        faucet_total_claimed_base_units: stats.faucet_total_claimed,
+        // Trollbox + faucet are RPOW4.0-only platform features; only emit
+        // those counters when /ledger is scoped to the system default asset
+        // so clients of custom RPOWs don't render misleading 0s next to
+        // labels that don't apply to their asset.
+        ...(asset.systemDefault
+          ? {
+              trollbox_message_count: stats.trollbox_message_count,
+              faucet_claim_count: stats.faucet_claim_count,
+              faucet_total_claimed_base_units: stats.faucet_total_claimed,
+            }
+          : {}),
       };
       return buildCachedJsonResponse(body);
     });

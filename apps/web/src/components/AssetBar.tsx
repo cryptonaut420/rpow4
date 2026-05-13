@@ -4,10 +4,12 @@ import { CopyButton } from './CopyButton.js';
 
 /**
  * Top-of-app asset switcher. Renders:
- *   - An `instance` <select> populated from /assets, with RPOW4.0 always
- *     pinned at the top so users can return to the default asset from
- *     anywhere — even before /assets has loaded or if the URL points at a
- *     stale slug.
+ *   - An `instance` <select> populated from the mineable subset of /assets.
+ *     RPOW4.0 (the platform default) plus any user-launched RPOWs are
+ *     instances of the platform; externally-bridged assets like RPOW2 are
+ *     not instances and have their own dedicated pages.
+ *     RPOW4.0 is always pinned in the dropdown so users can return to the
+ *     default asset from anywhere — even before /assets has loaded.
  *   - A `[ launch new rpow ]` link.
  *   - For custom assets: a description blurb and a "share this rpow" line
  *     with a copy-to-clipboard button on its own row, so the share affordance
@@ -19,13 +21,14 @@ export function AssetBar() {
     ? `${window.location.origin}${window.location.pathname}#/r/${selectedAsset.slug}`
     : '';
 
-  // The /assets list normally includes RPOW4.0, but we defensively pin it
-  // into the dropdown so it's always selectable — including during initial
-  // load (before the response arrives) and for users who land on a slug
-  // that no longer exists.
-  const hasDefault = assets.some((a) => a.slug === DEFAULT_ASSET_SLUG);
+  // Instance dropdown: only mineable assets are instances. The /assets list
+  // normally includes RPOW4.0, but we defensively pin it into the dropdown
+  // so it's always selectable — including during initial load (before the
+  // response arrives) and for users who land on a slug that no longer exists.
+  const mineableAssets = assets.filter((a) => a.asset_kind === 'mineable');
+  const hasDefault = mineableAssets.some((a) => a.slug === DEFAULT_ASSET_SLUG);
   const dropdownOptions = hasDefault
-    ? assets
+    ? mineableAssets
     : [
         {
           id: '__default-fallback__',
@@ -34,7 +37,7 @@ export function AssetBar() {
           nickname: 'RPOW4',
           system_default: true,
         } as const,
-        ...assets,
+        ...mineableAssets,
       ];
   // The currently-selected slug might not be in the dropdown yet (initial
   // load, deleted slug). Falling back to DEFAULT_ASSET_SLUG keeps the
