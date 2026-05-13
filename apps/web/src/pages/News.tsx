@@ -115,17 +115,23 @@ function Markdown({ source }: { source: string }) {
   return <div className="news-markdown">{blocks}</div>;
 }
 
+function KindBadge({ kind }: { kind: NewsPostKind }) {
+  return <span className={`news-kind-badge news-kind-badge--${kind}`}>{KIND_LABEL[kind]}</span>;
+}
+
 function NewsCard({ post, selected }: { post: NewsPost; selected?: boolean }) {
   const author = post.author_display_name ?? shortPubkey(post.author_pubkey);
+  const date = new Date(post.published_at ?? post.created_at ?? '');
+  const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   return (
     <article className={`news-card ${selected ? 'selected' : ''}`.trim()}>
-      <div className="news-meta">
-        <span>{KIND_LABEL[post.kind]}</span>
-        <span>{formatDate(post.published_at ?? post.created_at)}</span>
+      <div className="news-card-header">
+        <KindBadge kind={post.kind} />
+        <span className="news-card-date">{dateStr}</span>
       </div>
       <h3><Link to={`/news/${post.slug}`}>{post.title}</Link></h3>
-      {post.summary ? <p>{post.summary}</p> : null}
-      <div className="dim">by {author}</div>
+      {post.summary ? <p className="news-card-summary">{post.summary}</p> : null}
+      <div className="news-card-author">by {author}</div>
     </article>
   );
 }
@@ -242,52 +248,15 @@ export function NewsPage() {
 
   return (
     <div className="news-page">
-      <Panel title="news / changelog">
-        <div className="news-hero">
-          <div>
-            <div className="eyebrow">project log</div>
-            <h2>Latest updates</h2>
-            <p className="dim">
-              Changelogs, announcements, and project notes from the RPOW4 team.
-            </p>
-          </div>
-          <div className="news-hero-stat">
-            <strong>{posts.length}</strong>
-            <span>published entries</span>
-          </div>
-        </div>
-      </Panel>
-
       {error ? <Panel title="error"><div className="error">{error}</div></Panel> : null}
       {loading && posts.length === 0 ? (
-        <Panel title="loading">
+        <Panel title="news / changelog">
           <div className="dim">fetching the latest entries…</div>
         </Panel>
       ) : null}
 
-      {featured ? (
-        <div className="news-layout">
-          <Panel title={featured.title}>
-            <article className="news-post">
-              <div className="news-meta">
-                <span>{KIND_LABEL[featured.kind]}</span>
-                <span>{formatDate(featured.published_at ?? featured.created_at)}</span>
-                <span>by {featured.author_display_name ?? shortPubkey(featured.author_pubkey)}</span>
-              </div>
-              {featured.summary ? <p className="news-summary">{featured.summary}</p> : null}
-              <Markdown source={featured.body_markdown} />
-            </article>
-          </Panel>
-          <aside>
-            <Panel title="archive">
-              <div className="news-list">
-                {posts.map((post) => <NewsCard key={post.id} post={post} selected={post.slug === featured.slug} />)}
-              </div>
-            </Panel>
-          </aside>
-        </div>
-      ) : !loading ? (
-        <Panel title="no posts yet">
+      {!loading && !featured ? (
+        <Panel title="news / changelog">
           <p className="dim" style={{ marginTop: 0 }}>
             Nothing has been published here yet. Check back soon — changelogs, releases, and project notes
             will land on this page.
@@ -298,6 +267,35 @@ export function NewsPage() {
             </p>
           ) : null}
         </Panel>
+      ) : null}
+
+      {featured ? (
+        <div className="news-layout">
+          <Panel title="news / changelog">
+            <article className="news-post">
+              <div className="news-post-header">
+                <KindBadge kind={featured.kind} />
+                <h2 className="news-post-title">{featured.title}</h2>
+                <div className="news-post-meta">
+                  <span>{formatDate(featured.published_at ?? featured.created_at)}</span>
+                  <span className="news-meta-sep">·</span>
+                  <span>by {featured.author_display_name ?? shortPubkey(featured.author_pubkey)}</span>
+                </div>
+              </div>
+              {featured.summary ? <p className="news-summary">{featured.summary}</p> : null}
+              <Markdown source={featured.body_markdown} />
+            </article>
+          </Panel>
+          <aside className="news-sidebar">
+            <Panel title={`archive (${posts.length})`}>
+              <div className="news-list">
+                {posts.map((post) => (
+                  <NewsCard key={post.id} post={post} selected={post.slug === featured.slug} />
+                ))}
+              </div>
+            </Panel>
+          </aside>
+        </div>
       ) : null}
 
       {isAdmin ? <AdminComposer onCreated={(post) => setPosts((current) => [post, ...current])} /> : null}
