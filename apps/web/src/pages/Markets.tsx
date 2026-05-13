@@ -250,8 +250,24 @@ function PriceChart({
           strokeWidth="1.5"
           vectorEffect="non-scaling-stroke"
         />
+        {/* Dashed guide at the last-traded price */}
+        <line
+          x1="0" y1={lastY} x2="78" y2={lastY}
+          stroke="currentColor"
+          strokeWidth="0.5"
+          strokeDasharray="2,2"
+          opacity="0.35"
+          vectorEffect="non-scaling-stroke"
+        />
         <circle cx={lastX} cy={lastY} r="1.4" fill="currentColor" vectorEffect="non-scaling-stroke" />
       </svg>
+      {/* Price label pinned to the right at the last-price Y position */}
+      <div
+        className="chart-price-label"
+        style={{ top: `${(lastY! / 40) * 100}%` }}
+      >
+        {fmtPrice(last)}
+      </div>
       <div className="chart-overlay">
         <span>{pointsSource === 'candles' ? `${candles.length} candles` : `${trades.length} live ticks`}</span>
         <span>H {fmtPrice(max.toString())}</span>
@@ -348,6 +364,56 @@ export function MarketsPage() {
     () => book ? { ...book, bids: sortedBids, asks: sortedAsks } : null,
     [book, sortedBids, sortedAsks],
   );
+
+  // Build a version of the book with the current user's own resting orders
+  // subtracted. The server prevents self-trades, so any estimate that counts
+  // the user's own bid/ask as fillable will show a price the server will
+  // silently skip — leading the user to sell (or buy) at a worse price than
+  // the form displayed.
+  const selfFilteredBook = useMemo(() => {
+    if (!sortedBook) return null;
+    const selfBids = new Map<string, bigint>();
+    const selfAsks = new Map<string, bigint>();
+    for (const o of orders) {
+      if (o.status !== 'open' && o.status !== 'partially_filled') continue;
+      if (o.order_type !== 'limit' || !o.price_quote_base_units) continue;
+      const rem = BigInt(o.remaining_base_units);
+      if (o.side === 'buy') selfBids.set(o.price_quote_base_units, (selfBids.get(o.price_quote_base_units) ?? 0n) + rem);
+      else selfAsks.set(o.price_quote_base_units, (selfAsks.get(o.price_quote_base_units) ?? 0n) + rem);
+    }
+    const filterLevels = (levels: MarketBookLevel[], selfMap: Map<string, bigint>): MarketBookLevel[] =>
+      levels.reduce<MarketBookLevel[]>((acc, l) => {
+        const selfAmt = selfMap.get(l.price_quote_base_units) ?? 0n;
+        const avail = BigInt(l.base_amount_base_units) - selfAmt;
+        if (avail > 0n) {
+          acc.push({
+            ...l,
+            base_amount_base_units: avail.toString(),
+            quote_amount_base_units: quoteFor(avail, BigInt(l.price_quote_base_units)).toString(),
+          });
+        }
+        return acc;
+      }, []);
+    return {
+      ...sortedBook,
+      bids: filterLevels(sortedBook.bids, selfBids),
+      asks: filterLevels(sortedBook.asks, selfAsks),
+    };
+  }, [sortedBook, orders]);
+
+  // Price levels where the current user has a resting order — used to
+  // highlight those rows in the order book display.
+  const selfOrderPrices = useMemo(() => {
+    const bids = new Set<string>();
+    const asks = new Set<string>();
+    for (const o of orders) {
+      if (o.status !== 'open' && o.status !== 'partially_filled') continue;
+      if (o.order_type !== 'limit' || !o.price_quote_base_units) continue;
+      if (o.side === 'buy') bids.add(o.price_quote_base_units);
+      else asks.add(o.price_quote_base_units);
+    }
+    return { bids, asks };
+  }, [orders]);
 
   const selectedMarket = useMemo(() => {
     if (params.marketId) return markets.find((m) => m.id === params.marketId) ?? null;
@@ -491,7 +557,7 @@ export function MarketsPage() {
       const budget = (avail * BigInt(Math.round(pct * 100))) / 100n;
       let remaining = budget;
       let totalBase = 0n;
-      for (const ask of sortedAsks) {
+      for (const ask of (selfFilteredBook?.asks ?? [])) {
         if (remaining <= 0n) break;
         const levelBase = BigInt(ask.base_amount_base_units);
         const levelPrice = BigInt(ask.price_quote_base_units);
@@ -536,7 +602,7 @@ export function MarketsPage() {
       }
       sigBody.price_quote_base_units = priceBu.toString();
     } else if (side === 'buy') {
-      const est = estimateMarketBuy(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      const est = estimateMarketBuy(selfFilteredBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       if (est.baseFilled === 0n) {
         setFormError('no ask liquidity — place a limit order or wait for sellers');
         return;
@@ -545,7 +611,7 @@ export function MarketsPage() {
       // the server never over-spends beyond what the current book can fill.
       sigBody.max_quote_base_units = est.totalDebit.toString();
     } else {
-      const est = estimateMarketSell(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      const est = estimateMarketSell(selfFilteredBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       if (est.baseFilled === 0n) {
         setFormError('no bid liquidity — place a limit order or wait for buyers');
         return;
@@ -695,7 +761,7 @@ export function MarketsPage() {
     }
   } else if (orderType === 'market' && amountBu) {
     if (side === 'buy') {
-      const est = estimateMarketBuy(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      const est = estimateMarketBuy(selfFilteredBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       preview = [
         { label: 'fills', value: est.fullyFillable ? `${formatRpow(amountBu)} ${baseCode}` : `${formatRpow(est.baseFilled)} / ${formatRpow(amountBu)} ${baseCode}` },
         ...(feeInBase ? [{ label: 'receive after fee', value: `${formatRpow(est.baseReceived)} ${baseCode}` }] : []),
@@ -705,7 +771,7 @@ export function MarketsPage() {
         { label: 'total debit', value: `${formatRpow(est.totalDebit)} ${quoteCode}` },
       ];
     } else {
-      const est = estimateMarketSell(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+      const est = estimateMarketSell(selfFilteredBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
       preview = [
         { label: 'fills', value: est.fullyFillable ? `${formatRpow(amountBu)} ${baseCode}` : `${formatRpow(est.baseFilled)} / ${formatRpow(amountBu)} ${baseCode}` },
         { label: 'gross proceeds', value: `${formatRpow(est.quoteReceived)} ${quoteCode}` },
@@ -737,7 +803,7 @@ export function MarketsPage() {
       }
     } else if (orderType === 'market') {
       if (side === 'buy') {
-        const est = estimateMarketBuy(sortedBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
+        const est = estimateMarketBuy(selfFilteredBook, amountBu, selectedMarket.taker_fee_bps, feeInBase);
         if (quoteBalance && BigInt(quoteBalance.spendable_base_units) < est.totalDebit) insufficientBalance = true;
       } else {
         if (baseBalance && BigInt(baseBalance.spendable_base_units) < amountBu) insufficientBalance = true;
@@ -947,17 +1013,23 @@ export function MarketsPage() {
                       const idx = sortedAsks.indexOf(l);
                       const ratio = askDepth[idx] ?? 0;
                       const cum = askCumBase[idx] ?? BigInt(l.base_amount_base_units);
+                      const isOwn = selfOrderPrices.asks.has(l.price_quote_base_units);
                       return (
                         <button
                           type="button"
-                          className="book-row ask"
+                          className={`book-row ask${isOwn ? ' own' : ''}`}
                           key={`ask-${l.price_quote_base_units}`}
                           onClick={() => onClickAsk(l, cum)}
-                          title={`fill BUY at ${formatRpow(l.price_quote_base_units)} for ${formatRpow(cum)} ${baseCode} (clears ${idx + 1} level${idx ? 's' : ''})`}
+                          title={isOwn
+                            ? `your order at this level · fill BUY at ${formatRpow(l.price_quote_base_units)} for ${formatRpow(cum)} ${baseCode}`
+                            : `fill BUY at ${formatRpow(l.price_quote_base_units)} for ${formatRpow(cum)} ${baseCode} (clears ${idx + 1} level${idx ? 's' : ''})`}
                         >
                           <span className="book-depth ask-depth" style={{ width: `${ratio * 100}%` }} />
                           <span className="book-cell book-price">{fmtPrice(l.price_quote_base_units)}</span>
-                          <span className="book-cell">{formatRpow(l.base_amount_base_units)}</span>
+                          <span className="book-cell">
+                            {formatRpow(l.base_amount_base_units)}
+                            {isOwn ? <span className="book-own-marker"> ▸</span> : null}
+                          </span>
                           <span className="book-cell">{formatRpow(l.quote_amount_base_units)}</span>
                         </button>
                       );
@@ -977,17 +1049,23 @@ export function MarketsPage() {
                   {sortedBids.slice(0, 12).map((l, idx) => {
                     const ratio = bidDepth[idx] ?? 0;
                     const cum = bidCumBase[idx] ?? BigInt(l.base_amount_base_units);
+                    const isOwn = selfOrderPrices.bids.has(l.price_quote_base_units);
                     return (
                       <button
                         type="button"
-                        className="book-row bid"
+                        className={`book-row bid${isOwn ? ' own' : ''}`}
                         key={`bid-${l.price_quote_base_units}`}
                         onClick={() => onClickBid(l, cum)}
-                        title={`fill SELL at ${formatRpow(l.price_quote_base_units)} for ${formatRpow(cum)} ${baseCode} (clears ${idx + 1} level${idx ? 's' : ''})`}
+                        title={isOwn
+                          ? `your order at this level · fill SELL at ${formatRpow(l.price_quote_base_units)} for ${formatRpow(cum)} ${baseCode}`
+                          : `fill SELL at ${formatRpow(l.price_quote_base_units)} for ${formatRpow(cum)} ${baseCode} (clears ${idx + 1} level${idx ? 's' : ''})`}
                       >
                         <span className="book-depth bid-depth" style={{ width: `${ratio * 100}%` }} />
                         <span className="book-cell book-price">{fmtPrice(l.price_quote_base_units)}</span>
-                        <span className="book-cell">{formatRpow(l.base_amount_base_units)}</span>
+                        <span className="book-cell">
+                          {formatRpow(l.base_amount_base_units)}
+                          {isOwn ? <span className="book-own-marker"> ▸</span> : null}
+                        </span>
                         <span className="book-cell">{formatRpow(l.quote_amount_base_units)}</span>
                       </button>
                     );
