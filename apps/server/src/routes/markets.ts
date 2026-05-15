@@ -375,10 +375,10 @@ async function transferLeg(
   await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [eventId, args.assetId]);
   const shardUpdate = await c.query(
     `UPDATE ledger_stat_shards
-       SET value = value + $1::bigint, updated_at = now()
-     WHERE asset_id=$3::uuid
-       AND name='total_transferred'
-       AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
+       SET value = value + $1::numeric, updated_at = now()
+       WHERE asset_id=$3::uuid
+         AND name='total_transferred'
+         AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
     [args.amount.toString(), eventId, args.assetId],
   );
   if (shardUpdate.rowCount !== 1) {
@@ -386,7 +386,7 @@ async function transferLeg(
   }
   if (args.fee > 0n) {
     const feeUpdate = await c.query(
-      `UPDATE app_counters SET value = value + $1::bigint
+      `UPDATE app_counters SET value = value + $1::numeric
        WHERE asset_id=$2::uuid AND name='total_fees_collected'`,
       [args.fee.toString(), args.assetId],
     );
@@ -755,10 +755,10 @@ export async function marketsRoutes(app: FastifyInstance) {
         await lockAccount(c, reserveAssetId, s.pubkey);
         const debit = await c.query(
           `UPDATE account_balances
-              SET spendable_base_units = spendable_base_units - $3::bigint,
-                  locked_base_units = locked_base_units + $3::bigint,
+              SET spendable_base_units = spendable_base_units - $3::numeric,
+                  locked_base_units = locked_base_units + $3::numeric,
                   updated_at = now()
-            WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+            WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
           [reserveAssetId, s.pubkey, reserve.toString()],
         );
         if (debit.rowCount === 0) return { error: 'INSUFFICIENT_BALANCE' as const, status: 400, message: 'not enough available balance to reserve order' };
@@ -771,7 +771,7 @@ export async function marketsRoutes(app: FastifyInstance) {
            original_base_units, remaining_base_units, reserved_asset_id, reserved_remaining_base_units,
            status, client_order_id, client_signature_base58
          )
-         VALUES($1,$2::uuid,$3,$4,$5,$6::bigint,$7::bigint,$7::bigint,$8::uuid,$9::bigint,'open',$10::uuid,$11)
+         VALUES($1,$2::uuid,$3,$4,$5,$6::numeric,$7::numeric,$7::numeric,$8::uuid,$9::numeric,'open',$10::uuid,$11)
          RETURNING id::text, market_id::text, owner_pubkey, side, order_type, price_quote_base_units::text,
                    original_base_units::text, remaining_base_units::text, reserved_asset_id::text,
                    reserved_remaining_base_units::text, status, client_order_id::text, client_signature_base58,
@@ -811,7 +811,7 @@ export async function marketsRoutes(app: FastifyInstance) {
              AND side=$3
              AND status IN ('open','partially_filled')
              AND remaining_base_units > 0
-             AND ($4::bigint IS NULL OR (side='sell' AND price_quote_base_units <= $4::bigint) OR (side='buy' AND price_quote_base_units >= $4::bigint))
+             AND ($4::numeric IS NULL OR (side='sell' AND price_quote_base_units <= $4::numeric) OR (side='buy' AND price_quote_base_units >= $4::numeric))
            ORDER BY
              CASE WHEN side='sell' THEN price_quote_base_units END ASC,
              CASE WHEN side='buy' THEN price_quote_base_units END DESC,
@@ -869,23 +869,23 @@ export async function marketsRoutes(app: FastifyInstance) {
         if (body.side === 'buy') {
           if (body.order_type === 'market') {
             const debit = await c.query(
-              `UPDATE account_balances SET spendable_base_units = spendable_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
-               WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+              `UPDATE account_balances SET spendable_base_units = spendable_base_units - $3::numeric, sent_base_units = sent_base_units + $4::numeric, events_count = events_count + 1, updated_at=now()
+               WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
               [market.quote_id, buyer, (fillQuote + quoteFee).toString(), fillQuote.toString()],
             );
             if (debit.rowCount === 0) break;
           } else {
             const debit = await c.query(
               `UPDATE account_balances
-                  SET locked_base_units = locked_base_units - $3::bigint,
-                      spendable_base_units = spendable_base_units - $4::bigint,
-                      sent_base_units = sent_base_units + $3::bigint,
+                  SET locked_base_units = locked_base_units - $3::numeric,
+                      spendable_base_units = spendable_base_units - $4::numeric,
+                      sent_base_units = sent_base_units + $3::numeric,
                       events_count = events_count + 1,
                       updated_at=now()
                 WHERE asset_id=$1::uuid
                   AND pubkey=$2
-                  AND locked_base_units >= $3::bigint
-                  AND spendable_base_units >= $4::bigint`,
+                  AND locked_base_units >= $3::numeric
+                  AND spendable_base_units >= $4::numeric`,
               [market.quote_id, buyer, fillQuote.toString(), quoteFee.toString()],
             );
             if (debit.rowCount === 0) break;
@@ -893,15 +893,15 @@ export async function marketsRoutes(app: FastifyInstance) {
         } else {
           if (body.order_type === 'market') {
             const debit = await c.query(
-              `UPDATE account_balances SET spendable_base_units = spendable_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
-               WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+              `UPDATE account_balances SET spendable_base_units = spendable_base_units - $3::numeric, sent_base_units = sent_base_units + $4::numeric, events_count = events_count + 1, updated_at=now()
+               WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
               [market.base_id, seller, fillBase.toString(), buyerBaseReceive.toString()],
             );
             if (debit.rowCount === 0) break;
           } else {
             const debit = await c.query(
-              `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
-               WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+              `UPDATE account_balances SET locked_base_units = locked_base_units - $3::numeric, sent_base_units = sent_base_units + $4::numeric, events_count = events_count + 1, updated_at=now()
+               WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
               [market.base_id, seller, fillBase.toString(), buyerBaseReceive.toString()],
             );
             if (debit.rowCount === 0) break;
@@ -924,8 +924,8 @@ export async function marketsRoutes(app: FastifyInstance) {
         //     stays balanced.
         if (body.side === 'buy') {
           const makerDebit = await c.query(
-            `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
-             WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+            `UPDATE account_balances SET locked_base_units = locked_base_units - $3::numeric, sent_base_units = sent_base_units + $4::numeric, events_count = events_count + 1, updated_at=now()
+             WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
             [market.base_id, seller, fillBase.toString(), buyerBaseReceive.toString()],
           );
           if (makerDebit.rowCount !== 1) throw new Error('market maker base reservation invariant failed');
@@ -934,8 +934,8 @@ export async function marketsRoutes(app: FastifyInstance) {
           // what the recipient (seller) actually received, which is
           // sellerQuoteCredit = sellerNetQuote here.
           const makerDebit = await c.query(
-            `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, sent_base_units = sent_base_units + $4::bigint, events_count = events_count + 1, updated_at=now()
-             WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+            `UPDATE account_balances SET locked_base_units = locked_base_units - $3::numeric, sent_base_units = sent_base_units + $4::numeric, events_count = events_count + 1, updated_at=now()
+             WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
             [market.quote_id, buyer, fillQuote.toString(), sellerQuoteCredit.toString()],
           );
           if (makerDebit.rowCount !== 1) throw new Error('market maker quote reservation invariant failed');
@@ -1033,7 +1033,7 @@ export async function marketsRoutes(app: FastifyInstance) {
              price_quote_base_units, base_amount_base_units, quote_amount_base_units, fee_base_units,
              fee_asset_id, base_event_id, quote_event_id
            )
-           VALUES($1,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8::bigint,$9::bigint,$10::bigint,$11::bigint,$12::uuid,$13,$14)
+           VALUES($1,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,$8::numeric,$9::numeric,$10::numeric,$11::numeric,$12::uuid,$13,$14)
            RETURNING id::text, market_id::text, price_quote_base_units::text, base_amount_base_units::text,
                      quote_amount_base_units::text, taker_side, fee_base_units::text, fee_asset_id::text, created_at`,
           [tradeId, body.market_id, maker.id, orderId, maker.owner_pubkey, s.pubkey, body.side, fillPrice.toString(), fillBase.toString(), fillQuote.toString(), fee.toString(), feeAssetId, baseEventId, quoteEventId],
@@ -1048,8 +1048,8 @@ export async function marketsRoutes(app: FastifyInstance) {
         const makerStatus = makerRemaining === 0n ? 'filled' : 'partially_filled';
         await c.query(
           `UPDATE market_orders
-           SET remaining_base_units=$2::bigint,
-               reserved_remaining_base_units = GREATEST(0, reserved_remaining_base_units - $3::bigint),
+           SET remaining_base_units=$2::numeric,
+               reserved_remaining_base_units = GREATEST(0, reserved_remaining_base_units - $3::numeric),
                status=$4,
                updated_at=now()
            WHERE id=$1::uuid`,
@@ -1089,16 +1089,16 @@ export async function marketsRoutes(app: FastifyInstance) {
           : 0n;
       if (release > 0n && reserveAssetId) {
         const releaseResult = await c.query(
-          `UPDATE account_balances SET locked_base_units = locked_base_units - $3::bigint, spendable_base_units = spendable_base_units + $3::bigint, updated_at=now()
-           WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+          `UPDATE account_balances SET locked_base_units = locked_base_units - $3::numeric, spendable_base_units = spendable_base_units + $3::numeric, updated_at=now()
+           WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
           [reserveAssetId, s.pubkey, release.toString()],
         );
         if (releaseResult.rowCount !== 1) throw new Error('market reservation release invariant failed');
       }
       const updated = await c.query<OrderRow>(
         `UPDATE market_orders
-         SET remaining_base_units=$2::bigint,
-             reserved_remaining_base_units=$3::bigint,
+         SET remaining_base_units=$2::numeric,
+             reserved_remaining_base_units=$3::numeric,
              status=$4,
              updated_at=now()
          WHERE id=$1::uuid
@@ -1166,12 +1166,12 @@ export async function marketsRoutes(app: FastifyInstance) {
       const release = BigInt(order.reserved_remaining_base_units);
       if (release > 0n && order.reserved_asset_id) {
         await lockAccount(c, order.reserved_asset_id, s.pubkey);
-        const releaseResult = await c.query(
+        const releaseResult =         await c.query(
           `UPDATE account_balances
-             SET locked_base_units = locked_base_units - $3::bigint,
-                 spendable_base_units = spendable_base_units + $3::bigint,
+             SET locked_base_units = locked_base_units - $3::numeric,
+                 spendable_base_units = spendable_base_units + $3::numeric,
                  updated_at=now()
-           WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+           WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
           [order.reserved_asset_id, s.pubkey, release.toString()],
         );
         if (releaseResult.rowCount !== 1) throw new Error('market cancel release invariant failed');

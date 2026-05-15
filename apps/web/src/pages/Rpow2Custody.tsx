@@ -507,6 +507,21 @@ export function Rpow2CustodyPage() {
                 <strong>{formatRpow(aggregates.deposits_unattributed_amount_base_units)} RPOW2</strong>
                 <em>{aggregates.deposits_unattributed} txns</em>
               </div>
+              <div className="custody-stat-card">
+                <span className="dim">manual credits</span>
+                <strong>{formatRpow(aggregates.manual_credits_amount_base_units)} RPOW2</strong>
+                <em>{aggregates.manual_credits} txns</em>
+              </div>
+              <div className="custody-stat-card">
+                <span className="dim">manual debits</span>
+                <strong>{formatRpow(aggregates.manual_debits_amount_base_units)} RPOW2</strong>
+                <em>{aggregates.manual_debits} txns</em>
+              </div>
+              <div className="custody-stat-card primary">
+                <span className="dim">total user RPOW2</span>
+                <strong>{formatRpow(aggregates.total_user_balance_base_units)} RPOW2</strong>
+                <em>sum across all accounts (excl. treasury)</em>
+              </div>
             </div>
           ) : null}
 

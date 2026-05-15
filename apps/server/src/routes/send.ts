@@ -12,15 +12,10 @@ const Body = z.object({
   recipient_pubkey: z.string().refine(isValidPubkeyBase58, { message: 'invalid base58 Ed25519 pubkey' }),
   amount_base_units: z
     .string()
-    .regex(/^[1-9][0-9]{0,18}$/, 'positive bigint as string')
+    .regex(/^[1-9][0-9]{0,29}$/, 'positive integer as string')
     .refine((s) => {
-      try {
-        const n = BigInt(s);
-        return n > 0n && n <= 10n ** 18n;
-      } catch {
-        return false;
-      }
-    }, 'amount_base_units must be a positive bigint up to 10^18'),
+      try { return BigInt(s) > 0n; } catch { return false; }
+    }, 'amount_base_units must be a positive integer'),
   idempotency_key: z.string().min(8).max(80),
   client_signature_base58: z.string().min(64).max(128),
   // Memos render verbatim in /activity, /explorer, and counterparty
@@ -139,11 +134,11 @@ export async function sendRoutes(app: FastifyInstance) {
 
           const debit = await c.query(
             `UPDATE account_balances
-             SET spendable_base_units = spendable_base_units - $3::bigint,
-                 sent_base_units = sent_base_units + $4::bigint,
+             SET spendable_base_units = spendable_base_units - $3::numeric,
+                 sent_base_units = sent_base_units + $4::numeric,
                  events_count = events_count + 1,
                  updated_at = now()
-             WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+             WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
             [asset.id, sender, totalDebit.toString(), target.toString()],
           );
           if (debit.rowCount === 0) {
@@ -202,7 +197,7 @@ export async function sendRoutes(app: FastifyInstance) {
 
           await c.query(
             `UPDATE ledger_stat_shards
-             SET value = value + $1::bigint, updated_at = now()
+             SET value = value + $1::numeric, updated_at = now()
              WHERE asset_id=$3::uuid
                AND name='total_transferred'
                AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
@@ -240,8 +235,8 @@ export async function sendRoutes(app: FastifyInstance) {
                WHERE asset_id=$1::uuid AND name='transfer_count'
              ),
              upd_fees AS (
-               UPDATE app_counters SET value = value + $6::bigint
-               WHERE asset_id=$1::uuid AND name='total_fees_collected' AND $6::bigint > 0
+               UPDATE app_counters SET value = value + $6::numeric
+               WHERE asset_id=$1::uuid AND name='total_fees_collected' AND $6::numeric > 0
              )
              SELECT asset_id::text AS asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                     amount::text AS amount, fee_base_units::text AS fee_base_units, memo,

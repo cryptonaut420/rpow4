@@ -126,7 +126,7 @@ async function insertCustodyMintEvent(c: PoolClient, pubkey: string, amount: str
   const inserted = await c.query<LedgerEventRow>(
     `WITH inserted AS (
        INSERT INTO ledger_events(asset_id, id, event_type, actor_pubkey, amount, memo, created_at)
-       VALUES($1::uuid, $2, 'MINT', $3, $4::bigint, $5, now())
+       VALUES($1::uuid, $2, 'MINT', $3, $4::numeric, $5, now())
        RETURNING asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                  amount, fee_base_units, memo, challenge_id, solution_nonce, idempotency_key,
                  client_signature_base58, server_sig, created_at
@@ -163,7 +163,7 @@ async function creditDeposit(c: PoolClient, depositId: string, pubkey: string, m
   await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, pubkey]);
   const credit = await c.query<{ was_inserted: boolean }>(
     `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, minted_base_units, events_count, updated_at)
-     VALUES($1::uuid, $2, $3::bigint, $3::bigint, 1, now())
+     VALUES($1::uuid, $2, $3::numeric, $3::numeric, 1, now())
      ON CONFLICT (asset_id, pubkey) DO UPDATE SET
        spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
        minted_base_units = account_balances.minted_base_units + EXCLUDED.minted_base_units,
@@ -180,11 +180,11 @@ async function creditDeposit(c: PoolClient, depositId: string, pubkey: string, m
     );
   }
   await c.query(
-    `UPDATE app_counters SET value = value + $1::bigint WHERE asset_id=$2::uuid AND name='minted_supply'`,
+    `UPDATE app_counters SET value = value + $1::numeric WHERE asset_id=$2::uuid AND name='minted_supply'`,
     [row.amount_base_units, RPOW2_ASSET_ID],
   );
   await c.query(
-    `UPDATE ledger_stats SET value = value + $1::bigint, updated_at = now()
+    `UPDATE ledger_stats SET value = value + $1::numeric, updated_at = now()
      WHERE asset_id=$2::uuid AND name='circulating_supply'`,
     [row.amount_base_units, RPOW2_ASSET_ID],
   );
@@ -224,7 +224,7 @@ async function processDeposit(app: FastifyInstance, entry: Rpow2ActivityEntry): 
          asset_id, provider_key, fingerprint, account_pubkey, sender_external_id,
          raw_memo, resolved_memo_kind, amount_base_units, external_observed_at, status
        )
-       VALUES($1::uuid, $2, $3, NULL, $4, $5, NULL, $6::bigint, $7, $8)
+       VALUES($1::uuid, $2, $3, NULL, $4, $5, NULL, $6::numeric, $7, $8)
        ON CONFLICT (fingerprint) DO NOTHING
        RETURNING id::text AS id`,
       [RPOW2_ASSET_ID, PROVIDER, fp, sender, entry.memo ?? null, entry.amount_base_units, observedAt, 'unattributed'],
@@ -444,6 +444,11 @@ interface CustodyAggregates {
   withdrawals_rejected: number;
   withdrawals_rejected_amount_base_units: string;
   treasury_spendable_base_units: string;
+  manual_credits: number;
+  manual_credits_amount_base_units: string;
+  manual_debits: number;
+  manual_debits_amount_base_units: string;
+  total_user_balance_base_units: string;
 }
 
 async function getCustodyAggregates(app: FastifyInstance): Promise<CustodyAggregates> {
@@ -463,7 +468,20 @@ async function getCustodyAggregates(app: FastifyInstance): Promise<CustodyAggreg
        COALESCE((SELECT sum(amount_base_units) FROM external_withdrawals WHERE provider_key=$1 AND status='sent'),0)::text AS withdrawals_sent_amount_base_units,
        COALESCE((SELECT count(*) FROM external_withdrawals WHERE provider_key=$1 AND status='rejected'),0)::int AS withdrawals_rejected,
        COALESCE((SELECT sum(amount_base_units) FROM external_withdrawals WHERE provider_key=$1 AND status='rejected'),0)::text AS withdrawals_rejected_amount_base_units,
-       COALESCE((SELECT spendable_base_units FROM account_balances WHERE asset_id=$2::uuid AND pubkey=$3),0)::text AS treasury_spendable_base_units`,
+       COALESCE((SELECT spendable_base_units FROM account_balances WHERE asset_id=$2::uuid AND pubkey=$3),0)::text AS treasury_spendable_base_units,
+       COALESCE((SELECT count(*) FROM ledger_events le WHERE le.asset_id=$2::uuid AND le.event_type='MINT'
+         AND NOT EXISTS (SELECT 1 FROM external_deposits ed WHERE ed.provider_key=$1 AND ed.credited_event_id = le.id)
+       ),0)::int AS manual_credits,
+       COALESCE((SELECT sum(le.amount) FROM ledger_events le WHERE le.asset_id=$2::uuid AND le.event_type='MINT'
+         AND NOT EXISTS (SELECT 1 FROM external_deposits ed WHERE ed.provider_key=$1 AND ed.credited_event_id = le.id)
+       ),0)::text AS manual_credits_amount_base_units,
+       COALESCE((SELECT count(*) FROM ledger_events le WHERE le.asset_id=$2::uuid AND le.event_type='BURN'
+         AND NOT EXISTS (SELECT 1 FROM external_withdrawals ew WHERE ew.provider_key=$1 AND ew.burn_event_id = le.id)
+       ),0)::int AS manual_debits,
+       COALESCE((SELECT sum(le.amount) FROM ledger_events le WHERE le.asset_id=$2::uuid AND le.event_type='BURN'
+         AND NOT EXISTS (SELECT 1 FROM external_withdrawals ew WHERE ew.provider_key=$1 AND ew.burn_event_id = le.id)
+       ),0)::text AS manual_debits_amount_base_units,
+       COALESCE((SELECT sum(spendable_base_units + locked_base_units) FROM account_balances WHERE asset_id=$2::uuid AND pubkey != $3),0)::text AS total_user_balance_base_units`,
     [PROVIDER, RPOW2_ASSET_ID, TREASURY_PUBKEY],
   )).rows[0]!;
   return r;
@@ -562,20 +580,20 @@ async function settleWithdrawal(app: FastifyInstance, withdrawalId: string, admi
     await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, wr.requester_pubkey]);
     const debit = await c.query(
       `UPDATE account_balances
-       SET locked_base_units = locked_base_units - $3::bigint,
+       SET locked_base_units = locked_base_units - $3::numeric,
            events_count = events_count + 1,
            updated_at = now()
-       WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+       WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
       [RPOW2_ASSET_ID, wr.requester_pubkey, wr.amount_base_units],
     );
     if (debit.rowCount === 0) throw new Error('withdrawal locked balance invariant failed');
     await c.query(
-      `UPDATE ledger_stats SET value = value - $1::bigint, updated_at=now()
+      `UPDATE ledger_stats SET value = value - $1::numeric, updated_at=now()
        WHERE asset_id=$2::uuid AND name='circulating_supply'`,
       [wr.amount_base_units, RPOW2_ASSET_ID],
     );
     await c.query(
-      `UPDATE app_counters SET value = value + $1::bigint
+      `UPDATE app_counters SET value = value + $1::numeric
        WHERE asset_id=$2::uuid AND name='burned_supply'`,
       [wr.amount_base_units, RPOW2_ASSET_ID],
     );
@@ -585,7 +603,7 @@ async function settleWithdrawal(app: FastifyInstance, withdrawalId: string, admi
     const inserted = await c.query<LedgerEventRow>(
       `WITH inserted AS (
          INSERT INTO ledger_events(asset_id, id, event_type, actor_pubkey, amount, memo, created_at)
-         VALUES($1::uuid, $2, 'BURN', $3, $4::bigint, $5, now())
+         VALUES($1::uuid, $2, 'BURN', $3, $4::numeric, $5, now())
          RETURNING asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                    amount, fee_base_units, memo, challenge_id, solution_nonce, idempotency_key,
                    client_signature_base58, server_sig, created_at
@@ -655,10 +673,10 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
       await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, s.pubkey]);
       const locked = await c.query(
         `UPDATE account_balances
-         SET spendable_base_units = spendable_base_units - $3::bigint,
-             locked_base_units = locked_base_units + $3::bigint,
+         SET spendable_base_units = spendable_base_units - $3::numeric,
+             locked_base_units = locked_base_units + $3::numeric,
              updated_at = now()
-         WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+         WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
         [RPOW2_ASSET_ID, s.pubkey, amount_base_units],
       );
       if (locked.rowCount === 0) return { error: 'INSUFFICIENT_BALANCE' as const, message: 'not enough RPOW2 balance', status: 400 };
@@ -667,7 +685,7 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
            id, asset_id, provider_key, requester_pubkey, destination_external_id,
            amount_base_units, status, idempotency_key
          )
-         VALUES($1::uuid, $2::uuid, $3, $4, $5, $6::bigint, 'pending_approval', $1::text)`,
+         VALUES($1::uuid, $2::uuid, $3, $4, $5, $6::numeric, 'pending_approval', $1::text)`,
         [withdrawalId, RPOW2_ASSET_ID, PROVIDER, s.pubkey, destination_email, amount_base_units],
       );
       return { ok: true as const, id: withdrawalId, status: 'pending_approval' as const };
@@ -784,10 +802,10 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
       await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, row.requester_pubkey]);
       const unlocked = await c.query(
         `UPDATE account_balances
-         SET locked_base_units = locked_base_units - $3::bigint,
-             spendable_base_units = spendable_base_units + $3::bigint,
+         SET locked_base_units = locked_base_units - $3::numeric,
+             spendable_base_units = spendable_base_units + $3::numeric,
              updated_at = now()
-         WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::bigint`,
+         WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
         [RPOW2_ASSET_ID, row.requester_pubkey, row.amount_base_units],
       );
       if (unlocked.rowCount !== 1) throw new Error('withdrawal locked balance invariant failed');
@@ -848,7 +866,7 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
       await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, account.pubkey]);
       const credit = await c.query(
         `INSERT INTO account_balances(asset_id, pubkey, spendable_base_units, minted_base_units, events_count, updated_at)
-         VALUES($1::uuid, $2, $3::bigint, $3::bigint, 1, now())
+         VALUES($1::uuid, $2, $3::numeric, $3::numeric, 1, now())
          ON CONFLICT (asset_id, pubkey) DO UPDATE SET
            spendable_base_units = account_balances.spendable_base_units + EXCLUDED.spendable_base_units,
            minted_base_units = account_balances.minted_base_units + EXCLUDED.minted_base_units,
@@ -865,11 +883,11 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
         );
       }
       await c.query(
-        `UPDATE app_counters SET value = value + $1::bigint WHERE asset_id=$2::uuid AND name='minted_supply'`,
+        `UPDATE app_counters SET value = value + $1::numeric WHERE asset_id=$2::uuid AND name='minted_supply'`,
         [amount_base_units, RPOW2_ASSET_ID],
       );
       await c.query(
-        `UPDATE ledger_stats SET value = value + $1::bigint, updated_at = now()
+        `UPDATE ledger_stats SET value = value + $1::numeric, updated_at = now()
          WHERE asset_id=$2::uuid AND name='circulating_supply'`,
         [amount_base_units, RPOW2_ASSET_ID],
       );
@@ -905,20 +923,20 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
       await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, account.pubkey]);
       const debit = await c.query(
         `UPDATE account_balances
-         SET spendable_base_units = spendable_base_units - $3::bigint,
+         SET spendable_base_units = spendable_base_units - $3::numeric,
              events_count = events_count + 1,
              updated_at = now()
-         WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+         WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
         [RPOW2_ASSET_ID, account.pubkey, amount_base_units],
       );
       if (debit.rowCount === 0) throw Object.assign(new Error('insufficient RPOW2 balance for debit'), { statusCode: 400 });
       await c.query(
-        `UPDATE ledger_stats SET value = value - $1::bigint, updated_at=now()
+        `UPDATE ledger_stats SET value = value - $1::numeric, updated_at=now()
          WHERE asset_id=$2::uuid AND name='circulating_supply'`,
         [amount_base_units, RPOW2_ASSET_ID],
       );
       await c.query(
-        `UPDATE app_counters SET value = value + $1::bigint
+        `UPDATE app_counters SET value = value + $1::numeric
          WHERE asset_id=$2::uuid AND name='burned_supply'`,
         [amount_base_units, RPOW2_ASSET_ID],
       );
@@ -928,7 +946,7 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
       const inserted = await c.query<LedgerEventRow>(
         `WITH inserted AS (
            INSERT INTO ledger_events(asset_id, id, event_type, actor_pubkey, amount, memo, created_at)
-           VALUES($1::uuid, $2, 'BURN', $3, $4::bigint, $5, now())
+           VALUES($1::uuid, $2, 'BURN', $3, $4::numeric, $5, now())
            RETURNING asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
                      amount, fee_base_units, memo, challenge_id, solution_nonce, idempotency_key,
                      client_signature_base58, server_sig, created_at

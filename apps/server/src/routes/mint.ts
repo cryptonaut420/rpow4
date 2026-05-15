@@ -132,12 +132,12 @@ export async function mintRoutes(app: FastifyInstance) {
         const supplyResult = await c.query(
           `UPDATE app_counters
              SET value = value + (CASE
-               WHEN name = 'minted_supply' THEN $1::bigint
-               ELSE 1::bigint
+               WHEN name = 'minted_supply' THEN $1::numeric
+               ELSE 1
              END)
            WHERE asset_id=$3::uuid
              AND name IN ('minted_supply','block_height')
-             AND ($4::boolean OR (SELECT value FROM app_counters WHERE asset_id=$3::uuid AND name='minted_supply') + $1::bigint <= $2::bigint)`,
+             AND ($4::boolean OR (SELECT value FROM app_counters WHERE asset_id=$3::uuid AND name='minted_supply') + $1::numeric <= $2::numeric)`,
           [reward.toString(), capBaseUnits.toString(), asset.id, String(asset.supplyMode === 'unlimited')],
         );
         if (supplyResult.rowCount !== 2) {
@@ -184,7 +184,7 @@ export async function mintRoutes(app: FastifyInstance) {
 
         await c.query(
           `UPDATE ledger_stats
-           SET value = value + $1::bigint, updated_at = now()
+           SET value = value + $1::numeric, updated_at = now()
            WHERE asset_id=$2::uuid AND name='circulating_supply'`,
           [reward.toString(), asset.id],
         );

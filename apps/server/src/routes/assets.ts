@@ -21,8 +21,8 @@ const Body = z.object({
   description: z.string().trim().max(280).default(''),
   slug: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/).optional(),
   supply_mode: z.enum(['capped', 'unlimited']).default('capped'),
-  max_supply_base_units: z.string().regex(/^[1-9][0-9]{0,18}$/).optional(),
-  initial_reward_base_units: z.string().regex(/^[1-9][0-9]{0,18}$/).default('50000000000'),
+  max_supply_base_units: z.string().regex(/^[1-9][0-9]{0,29}$/).optional(),
+  initial_reward_base_units: z.string().regex(/^[1-9][0-9]{0,29}$/).default('50000000000'),
   reward_schedule_type: z.enum(['none', 'halving_by_blocks']).default('halving_by_blocks'),
   reward_interval_blocks: z.number().int().positive().max(100_000_000).default(210_000),
   difficulty_start_bits: z.number().int().min(4).max(64).default(24),
@@ -34,7 +34,7 @@ const Body = z.object({
   pool_fee_bps: z.number().int().min(0).max(2000).default(200),
   pool_finder_bps: z.number().int().min(0).max(10000).default(2500),
   pool_share_bits: z.number().int().min(4).max(64).default(24),
-  founder_allocation_base_units: z.string().regex(/^[0-9]{1,18}$/).default('0'),
+  founder_allocation_base_units: z.string().regex(/^[0-9]{1,29}$/).default('0'),
 });
 
 function slugify(input: string): string {
@@ -103,6 +103,7 @@ export async function assetsRoutes(app: FastifyInstance) {
     const parsed = Body.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: 'invalid body' });
     const input = parsed.data;
+
     if (input.difficulty_max_bits < input.difficulty_start_bits) {
       return reply.code(400).send({ error: 'BAD_REQUEST', message: 'max difficulty must be >= starting difficulty' });
     }
@@ -147,10 +148,10 @@ export async function assetsRoutes(app: FastifyInstance) {
       // the burn in its total row count.
       const debit = await c.query(
         `UPDATE account_balances
-            SET spendable_base_units = spendable_base_units - $3::bigint,
+            SET spendable_base_units = spendable_base_units - $3::numeric,
                 events_count = events_count + 1,
                 updated_at = now()
-          WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+          WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
         [DEFAULT_ASSET_ID, s.pubkey, LAUNCH_BURN_BASE_UNITS.toString()],
       );
       if (debit.rowCount === 0) {
@@ -178,13 +179,13 @@ export async function assetsRoutes(app: FastifyInstance) {
       );
       await c.query(
         `UPDATE ledger_stats
-            SET value = value - $2::bigint, updated_at = now()
-          WHERE asset_id=$1::uuid AND name='circulating_supply' AND value >= $2::bigint`,
+            SET value = value - $2::numeric, updated_at = now()
+          WHERE asset_id=$1::uuid AND name='circulating_supply' AND value >= $2::numeric`,
         [DEFAULT_ASSET_ID, LAUNCH_BURN_BASE_UNITS.toString()],
       );
       await c.query(
         `INSERT INTO app_counters(asset_id, name, value)
-         VALUES($1::uuid, 'burned_supply', $2::bigint)
+         VALUES($1::uuid, 'burned_supply', $2::numeric)
          ON CONFLICT (asset_id, name) DO UPDATE SET value = app_counters.value + EXCLUDED.value`,
         [DEFAULT_ASSET_ID, LAUNCH_BURN_BASE_UNITS.toString()],
       );
@@ -319,11 +320,11 @@ export async function assetsRoutes(app: FastifyInstance) {
         await creditGenesis(s.pubkey, creatorAllocation);
         await creditGenesis(TREASURY_PUBKEY, treasuryAllocation);
         await c.query(
-          `UPDATE app_counters SET value = value + $2::bigint WHERE asset_id=$1::uuid AND name='minted_supply'`,
+          `UPDATE app_counters SET value = value + $2::numeric WHERE asset_id=$1::uuid AND name='minted_supply'`,
           [assetId, founderAllocation.toString()],
         );
         await c.query(
-          `UPDATE ledger_stats SET value = value + $2::bigint, updated_at = now()
+          `UPDATE ledger_stats SET value = value + $2::numeric, updated_at = now()
            WHERE asset_id=$1::uuid AND name='circulating_supply'`,
           [assetId, founderAllocation.toString()],
         );

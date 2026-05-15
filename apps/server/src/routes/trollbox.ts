@@ -290,11 +290,11 @@ export async function trollboxRoutes(app: FastifyInstance) {
           if (fee > 0n) {
             const debit = await c.query(
               `UPDATE account_balances
-                  SET spendable_base_units = spendable_base_units - $3::bigint,
-                      sent_base_units = sent_base_units + $3::bigint,
+                  SET spendable_base_units = spendable_base_units - $3::numeric,
+                      sent_base_units = sent_base_units + $3::numeric,
                       events_count = events_count + 1,
                       updated_at = now()
-                WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+                WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
               [DEFAULT_ASSET_ID, author, fee.toString()],
             );
             if (debit.rowCount === 0) {
@@ -381,8 +381,8 @@ export async function trollboxRoutes(app: FastifyInstance) {
                 WHERE asset_id=$1::uuid AND name='transfer_count'
              ),
              upd_fees AS (
-               UPDATE app_counters SET value = value + $5::bigint
-                WHERE asset_id=$1::uuid AND name='total_fees_collected' AND $5::bigint > 0
+               UPDATE app_counters SET value = value + $5::numeric
+                WHERE asset_id=$1::uuid AND name='total_fees_collected' AND $5::numeric > 0
              ),
              upd_trollbox_count AS (
                UPDATE app_counters SET value = value + 1
@@ -412,7 +412,7 @@ export async function trollboxRoutes(app: FastifyInstance) {
           if (fee > 0n) {
             await c.query(
               `UPDATE ledger_stat_shards
-                  SET value = value + $1::bigint, updated_at = now()
+                  SET value = value + $1::numeric, updated_at = now()
                 WHERE name='total_transferred'
                   AND asset_id=$3::uuid
                   AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,

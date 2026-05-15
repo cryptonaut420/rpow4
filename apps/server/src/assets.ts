@@ -144,7 +144,7 @@ export function assetToScheduleOpts(asset: AssetContext): ScheduleOpts {
     difficultyStartBits: asset.difficultyStartBits,
     difficultyStepBlocks: asset.difficultyStepBlocks,
     difficultyMaxBits: asset.difficultyMaxBits,
-    maxSupplyBaseUnits: asset.maxSupplyBaseUnits ?? (2n ** 63n - 1n),
+    maxSupplyBaseUnits: asset.maxSupplyBaseUnits ?? (2n ** 128n),
     rewardScheduleType: asset.rewardScheduleType,
     rewardReductionType: asset.rewardReductionType,
     rewardReductionValue: asset.rewardReductionValue,

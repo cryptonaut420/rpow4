@@ -156,6 +156,11 @@ export interface Rpow2CustodyAggregates {
   withdrawals_rejected: number;
   withdrawals_rejected_amount_base_units: string;
   treasury_spendable_base_units: string;
+  manual_credits: number;
+  manual_credits_amount_base_units: string;
+  manual_debits: number;
+  manual_debits_amount_base_units: string;
+  total_user_balance_base_units: string;
 }
 export interface Rpow2CustodyStatusResponse {
   asset_id: string;

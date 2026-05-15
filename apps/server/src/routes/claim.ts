@@ -12,10 +12,10 @@ const CreateBody = z.object({
   claim_id: z.string().regex(UUID_RE, 'claim_id must be a UUID'),
   amount_base_units: z
     .string()
-    .regex(/^[1-9][0-9]{0,18}$/, 'positive bigint string')
+    .regex(/^[1-9][0-9]{0,29}$/, 'positive integer as string')
     .refine((s) => {
-      try { return BigInt(s) > 0n && BigInt(s) <= 10n ** 18n; } catch { return false; }
-    }, 'amount_base_units must be a positive bigint up to 10^18'),
+      try { return BigInt(s) > 0n; } catch { return false; }
+    }, 'amount_base_units must be a positive integer'),
   // Memos render verbatim in /activity and /explorer, so reject ASCII
   // control characters and trim surrounding whitespace (matches send.ts).
   memo: z
@@ -73,10 +73,10 @@ export async function claimRoutes(app: FastifyInstance) {
 
           const debit = await c.query(
             `UPDATE account_balances
-             SET spendable_base_units = spendable_base_units - $3::bigint,
-                 sent_base_units = sent_base_units + $3::bigint,
+             SET spendable_base_units = spendable_base_units - $3::numeric,
+                 sent_base_units = sent_base_units + $3::numeric,
                  updated_at = now()
-             WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::bigint`,
+             WHERE asset_id=$1::uuid AND pubkey=$2 AND spendable_base_units >= $3::numeric`,
             [DEFAULT_ASSET_ID, sender, amount.toString()],
           );
           if (debit.rowCount === 0) {
@@ -341,7 +341,7 @@ export async function claimRoutes(app: FastifyInstance) {
 
         await c.query(
           `UPDATE ledger_stat_shards
-           SET value = value + $1::bigint, updated_at = now()
+           SET value = value + $1::numeric, updated_at = now()
            WHERE asset_id=$3::uuid
              AND name='total_transferred'
              AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,
@@ -447,8 +447,8 @@ export async function claimRoutes(app: FastifyInstance) {
 
         const refund = await c.query(
           `UPDATE account_balances
-           SET spendable_base_units = spendable_base_units + $3::bigint,
-               sent_base_units = GREATEST(0, sent_base_units - $3::bigint),
+           SET spendable_base_units = spendable_base_units + $3::numeric,
+               sent_base_units = GREATEST(0, sent_base_units - $3::numeric),
                updated_at = now()
            WHERE asset_id=$1::uuid AND pubkey = $2`,
           [DEFAULT_ASSET_ID, caller, amount.toString()],

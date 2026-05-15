@@ -227,10 +227,10 @@ export async function faucetRoutes(app: FastifyInstance) {
           // spendable_base_units >= claim CHECK gates the UPDATE).
           const debit = await c.query(
             `UPDATE account_balances
-                SET spendable_base_units = spendable_base_units - $3::bigint,
-                    sent_base_units = sent_base_units + $3::bigint,
+                SET spendable_base_units = spendable_base_units - $3::numeric,
+                    sent_base_units = sent_base_units + $3::numeric,
                     updated_at = now()
-              WHERE asset_id=$1::uuid AND pubkey = $2 AND spendable_base_units >= $3::bigint`,
+              WHERE asset_id=$1::uuid AND pubkey = $2 AND spendable_base_units >= $3::numeric`,
             [DEFAULT_ASSET_ID, TREASURY_PUBKEY, claimAmount.toString()],
           );
           if (debit.rowCount === 0) {
@@ -275,7 +275,7 @@ export async function faucetRoutes(app: FastifyInstance) {
           // dogpiling on one.
           await c.query(
             `UPDATE ledger_stat_shards
-                SET value = value + $1::bigint, updated_at = now()
+                SET value = value + $1::numeric, updated_at = now()
               WHERE name='total_transferred'
                 AND asset_id=$3::uuid
                 AND shard = (mod(hashtext($2)::bigint + 2147483648, 64))::smallint`,

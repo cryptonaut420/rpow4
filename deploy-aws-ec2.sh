@@ -12,6 +12,7 @@ LETSENCRYPT_EMAIL="${LETSENCRYPT_EMAIL:-admin@rpow4.com}"
 INSTALL_DOCKER=1
 ACTION=deploy
 PUBLIC_IPV4=""
+BACKUP_DB=0
 
 usage() {
   cat <<EOF
@@ -24,6 +25,7 @@ Options:
   --api-domain HOST      API hostname (default: api.rpow4.com)
   --email EMAIL          Let's Encrypt email (default: admin@rpow4.com)
   --no-install-docker    Skip Docker installation check/install
+  --backup-db            Dump the database to a local .dump file before deploying
   --down                 Stop the production stack (volumes preserved)
   --logs                 Tail production logs
   --help                 Show this help
@@ -59,6 +61,28 @@ append_env_if_missing() {
     printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
     echo "[deploy] added missing env: $key"
   fi
+}
+
+backup_db() {
+  local backup_dir="$OPS_DIR/backups"
+  mkdir -p "$backup_dir"
+  local stamp
+  stamp="$(date -u +%Y%m%dT%H%MZ)"
+  local out="$backup_dir/rpow4-pre-deploy-${stamp}.dump"
+
+  echo "[deploy] backing up database to: $out"
+  if ! "${DOCKER[@]}" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps db 2>/dev/null | grep -q "running"; then
+    echo "[deploy] db container is not running — skipping backup (nothing to back up yet)"
+    return
+  fi
+
+  "${DOCKER[@]}" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" \
+    exec -T db pg_dump -U rpow -Fc rpow > "$out"
+
+  local size
+  size="$(du -sh "$out" | cut -f1)"
+  echo "[deploy] backup complete: $out ($size)"
+  echo "[deploy] restore with: pg_restore -U rpow -d rpow $out"
 }
 
 generate_signing_keypair() {
@@ -209,6 +233,10 @@ while [[ $# -gt 0 ]]; do
       INSTALL_DOCKER=0
       shift
       ;;
+    --backup-db)
+      BACKUP_DB=1
+      shift
+      ;;
     --down)
       ACTION=down
       shift
@@ -329,6 +357,10 @@ EFFECTIVE_API_HOST="$(env_get API_HOST "$API_HOST")"
 
 preflight_dns "$EFFECTIVE_WEB_HOST" "$EFFECTIVE_API_HOST"
 
+if [[ "$BACKUP_DB" == "1" ]]; then
+  backup_db
+fi
+
 echo "[deploy] building and starting production stack..."
 "${DOCKER[@]}" compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 
@@ -361,6 +393,10 @@ Useful commands:
   docker compose --env-file $ENV_FILE -f $COMPOSE_FILE ps
 
 Back up regularly:
-  docker compose --env-file $ENV_FILE -f $COMPOSE_FILE exec -T db pg_dump -U rpow rpow > rpow4-\$(date +%F).sql
+  ./deploy-aws-ec2.sh --backup-db   # dump before next deploy
+  docker compose --env-file $ENV_FILE -f $COMPOSE_FILE exec -T db pg_dump -U rpow -Fc rpow > rpow4-\$(date +%F).dump
+
+Restore a dump:
+  docker compose --env-file $ENV_FILE -f $COMPOSE_FILE exec -T db pg_restore -U rpow -d rpow /path/to/file.dump
 
 EOF
