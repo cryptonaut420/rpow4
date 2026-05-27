@@ -340,6 +340,8 @@ export const api = {
   adminResumeRpow2Sync: () => call<{ ok: true }>('POST', '/admin/custody/rpow2/resume', {}),
   approveRpow2Withdrawal: (id: string) =>
     call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/withdrawals/${encodeURIComponent(id)}/approve`, {}),
+  completeRpow2Withdrawal: (id: string) =>
+    call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/withdrawals/${encodeURIComponent(id)}/complete`, {}),
   rejectRpow2Withdrawal: (id: string) =>
     call<Rpow2WithdrawalActionResponse>('POST', `/admin/custody/rpow2/withdrawals/${encodeURIComponent(id)}/reject`, {}),
   assignRpow2Deposit: (id: string, pubkey: string) =>

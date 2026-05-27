@@ -487,11 +487,146 @@ async function getCustodyAggregates(app: FastifyInstance): Promise<CustodyAggreg
   return r;
 }
 
+type WithdrawalActionOk = {
+  ok: true;
+  id: string;
+  status?: string;
+  external_transfer_id: string | null;
+  burn_event_id: string | null;
+};
+
+async function withdrawalSentResult(app: FastifyInstance, withdrawalId: string): Promise<WithdrawalActionOk | null> {
+  const row = await app.pool.query<{ external_transfer_id: string | null; burn_event_id: string | null }>(
+    `SELECT external_transfer_id, burn_event_id::text
+     FROM external_withdrawals
+     WHERE id=$1 AND status='sent'`,
+    [withdrawalId],
+  );
+  if (!row.rows[0]) return null;
+  return {
+    ok: true,
+    id: withdrawalId,
+    status: 'sent',
+    external_transfer_id: row.rows[0].external_transfer_id,
+    burn_event_id: row.rows[0].burn_event_id,
+  };
+}
+
+async function finalizeWithdrawalLedger(
+  app: FastifyInstance,
+  withdrawalId: string,
+  externalTransferId: string,
+): Promise<{ pubkey: string; burn_event_id: string } | null> {
+  const finalized = await withTxRetry(app.pool, async (c) => {
+    const w = await c.query<{ requester_pubkey: string; amount_base_units: string; destination_external_id: string }>(
+      `SELECT requester_pubkey, amount_base_units::text, destination_external_id
+       FROM external_withdrawals
+       WHERE id=$1 AND status='sending'
+       FOR UPDATE`,
+      [withdrawalId],
+    );
+    if (!w.rows[0]) return null;
+    const wr = w.rows[0];
+    await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, wr.requester_pubkey]);
+    const debit = await c.query(
+      `UPDATE account_balances
+       SET locked_base_units = locked_base_units - $3::numeric,
+           events_count = events_count + 1,
+           updated_at = now()
+       WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
+      [RPOW2_ASSET_ID, wr.requester_pubkey, wr.amount_base_units],
+    );
+    if (debit.rowCount === 0) throw new Error('withdrawal locked balance invariant failed');
+    await c.query(
+      `UPDATE ledger_stats SET value = value - $1::numeric, updated_at=now()
+       WHERE asset_id=$2::uuid AND name='circulating_supply'`,
+      [wr.amount_base_units, RPOW2_ASSET_ID],
+    );
+    await c.query(
+      `UPDATE app_counters SET value = value + $1::numeric
+       WHERE asset_id=$2::uuid AND name='burned_supply'`,
+      [wr.amount_base_units, RPOW2_ASSET_ID],
+    );
+
+    const eventId = randomUUID();
+    await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [eventId, RPOW2_ASSET_ID]);
+    const inserted = await c.query<LedgerEventRow>(
+      `WITH inserted AS (
+         INSERT INTO ledger_events(asset_id, id, event_type, actor_pubkey, amount, memo, created_at)
+         VALUES($1::uuid, $2, 'BURN', $3, $4::numeric, $5, now())
+         RETURNING asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+                   amount, fee_base_units, memo, challenge_id, solution_nonce, idempotency_key,
+                   client_signature_base58, server_sig, created_at
+       ),
+       upd_event_id AS (
+         UPDATE ledger_event_ids ids SET event_seq = i.event_seq FROM inserted i WHERE ids.id = i.id
+       )
+       SELECT asset_id::text AS asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
+              amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
+              challenge_id, solution_nonce, idempotency_key, client_signature_base58, server_sig, created_at
+       FROM inserted`,
+      [RPOW2_ASSET_ID, eventId, wr.requester_pubkey, wr.amount_base_units, `RPOW2 withdrawal to ${wr.destination_external_id}`],
+    );
+    await mirrorLedgerEventHot(c, inserted.rows[0]!);
+    await c.query(
+      `UPDATE external_withdrawals
+       SET status='sent', external_transfer_id=$2, burn_event_id=$3, sent_at=now(), updated_at=now()
+       WHERE id=$1`,
+      [withdrawalId, externalTransferId, eventId],
+    );
+    return { pubkey: wr.requester_pubkey, burn_event_id: eventId };
+  });
+  if (finalized) {
+    app.invalidateAccount(finalized.pubkey);
+    app.invalidateLedger();
+  }
+  return finalized;
+}
+
+/** Finalise a withdrawal on our ledger without calling the RPOW2.com API (admin sent manually). */
+async function manuallyCompleteWithdrawal(app: FastifyInstance, withdrawalId: string, adminPubkey: string) {
+  const already = await withdrawalSentResult(app, withdrawalId);
+  if (already) return already;
+
+  const claim = await app.pool.query<{
+    id: string;
+    external_transfer_id: string | null;
+  }>(
+    `UPDATE external_withdrawals
+     SET status='sending',
+         admin_pubkey=$2,
+         approved_at=COALESCE(approved_at, now()),
+         updated_at=now(),
+         failure_reason=NULL,
+         external_transfer_id = COALESCE(external_transfer_id, 'manual')
+     WHERE id=$1 AND status IN ('pending_approval','failed','sending')
+     RETURNING id::text, external_transfer_id`,
+    [withdrawalId, adminPubkey],
+  );
+  const row = claim.rows[0];
+  if (!row) {
+    return { error: 'NOT_FOUND' as const, status: 404, message: 'withdrawal not found or not completable' };
+  }
+
+  const externalTransferId = row.external_transfer_id ?? 'manual';
+  const finalized = await finalizeWithdrawalLedger(app, withdrawalId, externalTransferId);
+  return {
+    ok: true as const,
+    id: withdrawalId,
+    status: 'sent' as const,
+    external_transfer_id: externalTransferId,
+    burn_event_id: finalized?.burn_event_id ?? null,
+  };
+}
+
 async function settleWithdrawal(app: FastifyInstance, withdrawalId: string, adminPubkey: string) {
   const flags = await custodyFlags(app);
   if (!flags.withdrawal_enabled) {
     return { error: 'BAD_REQUEST' as const, status: 503, message: 'RPOW2 withdrawals are disabled' };
   }
+  const already = await withdrawalSentResult(app, withdrawalId);
+  if (already) return already;
+
   const claim = await app.pool.query<{ id: string; destination_external_id: string; amount_base_units: string; idempotency_key: string; external_transfer_id: string | null }>(
     `UPDATE external_withdrawals
      SET status='sending', admin_pubkey=$2, approved_at=COALESCE(approved_at, now()), updated_at=now(), failure_reason=NULL
@@ -567,69 +702,7 @@ async function settleWithdrawal(app: FastifyInstance, withdrawalId: string, admi
     }
   }
 
-  const finalized = await withTxRetry(app.pool, async (c) => {
-    const w = await c.query<{ requester_pubkey: string; amount_base_units: string; destination_external_id: string }>(
-      `SELECT requester_pubkey, amount_base_units::text, destination_external_id
-       FROM external_withdrawals
-       WHERE id=$1 AND status='sending'
-       FOR UPDATE`,
-      [withdrawalId],
-    );
-    if (!w.rows[0]) return null;
-    const wr = w.rows[0];
-    await c.query(`SELECT pg_advisory_xact_lock(hashtext('rpow_account_balance:' || $1), hashtext($2))`, [RPOW2_ASSET_ID, wr.requester_pubkey]);
-    const debit = await c.query(
-      `UPDATE account_balances
-       SET locked_base_units = locked_base_units - $3::numeric,
-           events_count = events_count + 1,
-           updated_at = now()
-       WHERE asset_id=$1::uuid AND pubkey=$2 AND locked_base_units >= $3::numeric`,
-      [RPOW2_ASSET_ID, wr.requester_pubkey, wr.amount_base_units],
-    );
-    if (debit.rowCount === 0) throw new Error('withdrawal locked balance invariant failed');
-    await c.query(
-      `UPDATE ledger_stats SET value = value - $1::numeric, updated_at=now()
-       WHERE asset_id=$2::uuid AND name='circulating_supply'`,
-      [wr.amount_base_units, RPOW2_ASSET_ID],
-    );
-    await c.query(
-      `UPDATE app_counters SET value = value + $1::numeric
-       WHERE asset_id=$2::uuid AND name='burned_supply'`,
-      [wr.amount_base_units, RPOW2_ASSET_ID],
-    );
-
-    const eventId = randomUUID();
-    await c.query(`INSERT INTO ledger_event_ids(id, asset_id) VALUES($1, $2::uuid)`, [eventId, RPOW2_ASSET_ID]);
-    const inserted = await c.query<LedgerEventRow>(
-      `WITH inserted AS (
-         INSERT INTO ledger_events(asset_id, id, event_type, actor_pubkey, amount, memo, created_at)
-         VALUES($1::uuid, $2, 'BURN', $3, $4::numeric, $5, now())
-         RETURNING asset_id, event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-                   amount, fee_base_units, memo, challenge_id, solution_nonce, idempotency_key,
-                   client_signature_base58, server_sig, created_at
-       ),
-       upd_event_id AS (
-         UPDATE ledger_event_ids ids SET event_seq = i.event_seq FROM inserted i WHERE ids.id = i.id
-       )
-       SELECT asset_id::text AS asset_id, event_seq::text AS event_seq, id, event_type, actor_pubkey, counterparty_pubkey,
-              amount::text AS amount, fee_base_units::text AS fee_base_units, memo,
-              challenge_id, solution_nonce, idempotency_key, client_signature_base58, server_sig, created_at
-       FROM inserted`,
-      [RPOW2_ASSET_ID, eventId, wr.requester_pubkey, wr.amount_base_units, `RPOW2 withdrawal to ${wr.destination_external_id}`],
-    );
-    await mirrorLedgerEventHot(c, inserted.rows[0]!);
-    await c.query(
-      `UPDATE external_withdrawals
-       SET status='sent', external_transfer_id=$2, burn_event_id=$3, sent_at=now(), updated_at=now()
-       WHERE id=$1`,
-      [withdrawalId, externalTransferId, eventId],
-    );
-    return { pubkey: wr.requester_pubkey, burn_event_id: eventId };
-  });
-  if (finalized) {
-    app.invalidateAccount(finalized.pubkey);
-    app.invalidateLedger();
-  }
+  const finalized = await finalizeWithdrawalLedger(app, withdrawalId, externalTransferId);
   return { ok: true as const, id: withdrawalId, external_transfer_id: externalTransferId, burn_event_id: finalized?.burn_event_id ?? null };
 }
 
@@ -781,6 +854,15 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
     if (!admin) return;
     const id = String(req.params.id);
     const result = await settleWithdrawal(app, id, admin);
+    if ('error' in result) return reply.code(result.status as number).send(result);
+    return result;
+  });
+
+  app.post('/admin/custody/rpow2/withdrawals/:id/complete', async (req: any, reply) => {
+    const admin = await requireAdmin(app, req, reply);
+    if (!admin) return;
+    const id = String(req.params.id);
+    const result = await manuallyCompleteWithdrawal(app, id, admin);
     if ('error' in result) return reply.code(result.status as number).send(result);
     return result;
   });

@@ -99,6 +99,48 @@ describe('rpow2 custody', () => {
     expect(bal.locked).toBe('0');
   });
 
+  it('marks a pending withdrawal complete without calling the RPOW2 API', async () => {
+    const ctx = await makeTestApp(); cleanup = ctx.cleanup;
+    const user = await loginAsRandomWallet(ctx.app);
+    const admin = await loginAsRandomWallet(ctx.app);
+    await setAdmin(ctx, admin.publicKeyBase58);
+    await fundRpow2(ctx, user.publicKeyBase58, 5n * ONE);
+
+    const req = await ctx.app.inject({
+      method: 'POST',
+      url: '/custody/rpow2/withdrawals',
+      headers: { cookie: user.cookie, 'content-type': 'application/json' },
+      payload: { destination_email: 'user@example.com', amount_base_units: (2n * ONE).toString() },
+    });
+    expect(req.statusCode, req.body).toBe(200);
+    const id = req.json().id;
+
+    const complete = await ctx.app.inject({
+      method: 'POST',
+      url: `/admin/custody/rpow2/withdrawals/${id}/complete`,
+      headers: { cookie: admin.cookie },
+    });
+    expect(complete.statusCode, complete.body).toBe(200);
+    expect(complete.json().status).toBe('sent');
+    expect(complete.json().external_transfer_id).toBe('manual');
+    expect(complete.json().burn_event_id).toBeTruthy();
+
+    const row = (await ctx.pool.query<{ status: string; external_transfer_id: string | null }>(
+      `SELECT status, external_transfer_id FROM external_withdrawals WHERE id=$1`,
+      [id],
+    )).rows[0]!;
+    expect(row.status).toBe('sent');
+    expect(row.external_transfer_id).toBe('manual');
+
+    const bal = (await ctx.pool.query<{ spendable: string; locked: string }>(
+      `SELECT spendable_base_units::text AS spendable, locked_base_units::text AS locked
+       FROM account_balances WHERE asset_id=$1::uuid AND pubkey=$2`,
+      [RPOW2_ASSET_ID, user.publicKeyBase58],
+    )).rows[0]!;
+    expect(bal.spendable).toBe((3n * ONE).toString());
+    expect(bal.locked).toBe('0');
+  });
+
   it('honors disabled withdrawal and paused sync admin controls', async () => {
     const ctx = await makeTestApp(); cleanup = ctx.cleanup;
     const user = await loginAsRandomWallet(ctx.app);

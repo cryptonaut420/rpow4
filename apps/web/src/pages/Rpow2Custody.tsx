@@ -541,6 +541,15 @@ export function Rpow2CustodyPage() {
                   }
                 }}>[ approve ]</button>
                 <button disabled={!!busy} onClick={() => {
+                  if (window.confirm(
+                    `Mark ${formatRpow(w.amount_base_units)} RPOW2 to ${w.destination_external_id} as sent?\n\n`
+                    + 'Only use this after you have already sent the RPOW2 manually on rpow2.com. '
+                    + 'This will burn the locked balance on RPOW4 and will NOT send via the API.',
+                  )) {
+                    void run(`complete-${w.id}`, () => api.completeRpow2Withdrawal(w.id));
+                  }
+                }}>[ mark complete ]</button>
+                <button disabled={!!busy} onClick={() => {
                   if (window.confirm(`Reject this withdrawal and return ${formatRpow(w.amount_base_units)} RPOW2 to the user?`)) {
                     void run(`reject-${w.id}`, () => api.rejectRpow2Withdrawal(w.id));
                   }
@@ -562,11 +571,20 @@ export function Rpow2CustodyPage() {
                     <span className={pillClass(w.status)}>{fmtStatus(w.status)}</span>
                     <span className="dim" title={fmtTime(w.updated_at)}>updated {fmtRelative(w.updated_at)}</span>
                     <span className="dim">{w.external_transfer_id ? 'sent · settling' : 'send in progress'}</span>
+                    <button disabled={!!busy} onClick={() => {
+                      if (window.confirm(
+                        `Mark this withdrawal as complete on RPOW4?\n\n`
+                        + 'Use after you sent RPOW2 manually on rpow2.com. Does not call the RPOW2 API.',
+                      )) {
+                        void run(`complete-${w.id}`, () => api.completeRpow2Withdrawal(w.id));
+                      }
+                    }}>[ mark complete ]</button>
                   </div>
                 ))}
               </div>
               <div className="custody-hint">
                 Sending withdrawals were already approved. Re-approving is safe (idempotent) and will only finalise; it will not double-send.
+                If the API send failed, send on rpow2.com manually and use [ mark complete ].
               </div>
             </>
           ) : null}
