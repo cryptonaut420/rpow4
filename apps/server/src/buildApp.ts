@@ -141,7 +141,6 @@ declare module 'fastify' {
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
   const app = Fastify({
     logger: opts.test ? false : { level: 'info' },
-    disableRequestLogging: !!opts.test,
     bodyLimit: 16 * 1024,
     // Dev only trusts localhost proxies. Production Docker runs behind
     // Cloudflare -> nginx-proxy -> container hops, so compose enables broader

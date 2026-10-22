@@ -1,5 +1,5 @@
 # Build stage — install all deps and compile TypeScript
-FROM node:22-alpine AS build
+FROM node:26.12.1-alpine3.24 AS build
 WORKDIR /repo
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY packages/shared/package.json ./packages/shared/
@@ -16,7 +16,7 @@ RUN rm -rf node_modules/@rpow/shared \
 RUN npm run build --workspace @rpow/server -- --force
 
 # Runtime stage — compiled artifacts + node_modules from the build stage
-FROM node:22-alpine
+FROM node:26.12.1-alpine3.24
 WORKDIR /app
 COPY --from=build /repo/package.json /repo/package-lock.json /app/
 COPY --from=build /repo/node_modules /app/node_modules

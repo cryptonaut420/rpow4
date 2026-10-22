@@ -158,7 +158,7 @@ export type Env = z.infer<typeof Schema>;
 export function parseEnv(raw: Record<string, string | undefined> = process.env): Env {
   const parsed = Schema.safeParse(raw);
   if (!parsed.success) {
-    const msg = parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ');
+    const msg = parsed.error.issues.map((e) => `${e.path.join('.')}: ${e.message}`).join('; ');
     throw new Error(`invalid env: ${msg}`);
   }
   return parsed.data;

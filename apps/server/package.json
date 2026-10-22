@@ -12,19 +12,22 @@
     "toggle-admin": "tsx src/scripts/toggle-admin.ts"
   },
   "dependencies": {
-    "@fastify/compress": "^7.0.3",
-    "@fastify/cookie": "^9.3.1",
-    "@fastify/cors": "^9.0.1",
+    "@fastify/compress": "^9.2.2",
+    "@fastify/cookie": "^11.1.3",
+    "@fastify/cors": "^11.3.1",
     "@rpow/shared": "*",
     "bs58": "^6.0.0",
-    "fastify": "^4.27.0",
-    "pg": "^8.11.5",
-    "pino": "^9.1.0",
-    "zod": "^3.23.0"
+    "fastify": "^5.12.7",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.6",
-    "tsx": "^4.11.0",
-    "vitest": "^1.6.0"
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=26.12.1"
   }
 }

@@ -4,7 +4,7 @@
 # (used by the server entrypoint to wait on the db). Dependencies are
 # installed at runtime by the one-shot `install` service against the
 # bind-mounted source tree, so this image rarely needs to be rebuilt.
-FROM node:22.20.0-alpine
+FROM node:26.12.1-alpine3.24
 
 RUN apk add --no-cache bash postgresql-client
 

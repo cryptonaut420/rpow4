@@ -12,14 +12,14 @@
 
 import bs58 from 'bs58';
 import nacl from 'tweetnacl';
-import { hmac } from '@noble/hashes/hmac';
-import { sha512 } from '@noble/hashes/sha512';
+import { hmac } from '@noble/hashes/hmac.js';
+import { sha512 } from '@noble/hashes/sha2.js';
 import {
   generateMnemonic as bip39Generate,
   mnemonicToSeedSync,
   validateMnemonic as bip39Validate,
 } from '@scure/bip39';
-import { wordlist as english } from '@scure/bip39/wordlists/english';
+import { wordlist as english } from '@scure/bip39/wordlists/english.js';
 
 import { canonicalMessage, type CanonicalAction } from './canonical.js';
 

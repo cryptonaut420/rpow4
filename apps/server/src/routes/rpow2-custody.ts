@@ -939,7 +939,7 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
     const admin = await requireAdmin(app, req, reply);
     if (!admin) return;
     const parsed = ManualAdjustBody.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.errors[0]?.message ?? 'invalid body' });
+    if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? 'invalid body' });
     const { handle_or_pubkey, amount_base_units, memo } = parsed.data;
     const account = await resolveAccount(handle_or_pubkey);
     if (!account) return reply.code(404).send({ error: 'NOT_FOUND', message: `no account found for "${handle_or_pubkey}"` });
@@ -996,7 +996,7 @@ export async function rpow2CustodyRoutes(app: FastifyInstance) {
     const admin = await requireAdmin(app, req, reply);
     if (!admin) return;
     const parsed = ManualAdjustBody.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.errors[0]?.message ?? 'invalid body' });
+    if (!parsed.success) return reply.code(400).send({ error: 'BAD_REQUEST', message: parsed.error.issues[0]?.message ?? 'invalid body' });
     const { handle_or_pubkey, amount_base_units, memo } = parsed.data;
     const account = await resolveAccount(handle_or_pubkey);
     if (!account) return reply.code(404).send({ error: 'NOT_FOUND', message: `no account found for "${handle_or_pubkey}"` });

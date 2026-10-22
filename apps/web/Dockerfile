@@ -1,4 +1,4 @@
-FROM node:22-alpine AS build
+FROM node:26.12.1-alpine3.24 AS build
 
 WORKDIR /repo
 
@@ -31,7 +31,7 @@ RUN rm -rf node_modules/@rpow/shared \
   && cp -R packages/shared/dist node_modules/@rpow/shared/dist
 RUN npx tsc -b apps/web --force && cd apps/web && npx --no-install vite build
 
-FROM nginx:1.27-alpine
+FROM nginx:1.31.8-alpine3.24
 
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /repo/apps/web/dist /usr/share/nginx/html

@@ -3,6 +3,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     pool: 'forks',
+    maxWorkers: 2,
     isolate: true,
     // Each test spins up a fresh Postgres schema and runs migrations; under
     // the parallel forks pool the per-test wall-clock can spike when many

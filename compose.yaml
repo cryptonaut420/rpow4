@@ -6,7 +6,7 @@
 # resolution / health-check polling.)
 #
 # Services:
-#   db        — Postgres 17 (data persisted in the rpow-pg-data volume)
+#   db        — Postgres 18 (data persisted in the rpow-pg18-data volume)
 #   install   — one-shot: npm ci + builds @rpow/shared
 #   server    — Fastify API with `tsx watch` hot reload (default :8080)
 #   web       — Vite dev server for the React SPA      (default :5173)
@@ -19,7 +19,7 @@ name: rpow4-dev
 
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:18.6-alpine
     environment:
       POSTGRES_USER: rpow
       POSTGRES_PASSWORD: rpow_dev
@@ -35,7 +35,7 @@ services:
       - -c
       - max_locks_per_transaction=512
     volumes:
-      - rpow-pg-data:/var/lib/postgresql/data
+      - rpow-pg18-data:/var/lib/postgresql
     ports:
       # Internal services reach the db on its container port (5432).
       # Host port is configurable so dev boxes that already run a

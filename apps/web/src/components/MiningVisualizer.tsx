@@ -127,7 +127,7 @@ interface WinFx {
  * the live monospace font — pretext returns the natural width, from which
  * we back out chars-per-pixel and clamp into the available container width.
  */
-function useMonoColCount(containerRef: React.RefObject<HTMLDivElement>): number {
+function useMonoColCount(containerRef: React.RefObject<HTMLDivElement | null>): number {
   const [cols, setCols] = useState(64);
 
   useEffect(() => {

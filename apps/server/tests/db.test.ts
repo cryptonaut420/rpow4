@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createPool, runMigrations } from '../src/db.js';
+import pg from 'pg';
+import { randomBytes } from 'node:crypto';
 
 const url = process.env.TEST_DATABASE_URL;
 const skip = !url;
@@ -53,6 +55,28 @@ describe.skipIf(skip)('db migrations', () => {
     );
     // 128 range partitions + default safety partition.
     expect(partitions[0].n).toBeGreaterThanOrEqual(129);
+  });
+
+  it('ignores legacy tables in other schemas when migrating a fresh schema', async () => {
+    const suffix = randomBytes(4).toString('hex');
+    const legacy = `legacy_${suffix}`;
+    const fresh = `fresh_${suffix}`;
+    await pool.query(`CREATE SCHEMA ${legacy}; CREATE SCHEMA ${fresh}`);
+    await pool.query(`CREATE TABLE ${legacy}.tokens (value BIGINT); CREATE TABLE ${legacy}.transfers (amount BIGINT)`);
+    const isolated = new pg.Pool({ connectionString: url!, options: `-c search_path=${fresh}` });
+    try {
+      await runMigrations(isolated);
+      const applied = await isolated.query('SELECT filename FROM schema_migrations WHERE filename=$1', ['034_bigint_to_numeric.sql']);
+      expect(applied.rowCount).toBe(1);
+      const untouched = await pool.query(
+        'SELECT data_type FROM information_schema.columns WHERE table_schema=$1 AND table_name=$2 AND column_name=$3',
+        [legacy, 'tokens', 'value'],
+      );
+      expect(untouched.rows[0].data_type).toBe('bigint');
+    } finally {
+      await isolated.end();
+      await pool.query(`DROP SCHEMA ${fresh} CASCADE; DROP SCHEMA ${legacy} CASCADE`);
+    }
   });
 
   it('is idempotent', async () => {

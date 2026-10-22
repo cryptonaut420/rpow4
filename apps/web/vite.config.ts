@@ -43,6 +43,7 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react(), sitemapPlugin(env.VITE_APP_URL ?? '')],
+    resolve: { dedupe: ['react', 'react-dom'] },
     server: { port: 5173 },
     worker: { format: 'es' },
   };

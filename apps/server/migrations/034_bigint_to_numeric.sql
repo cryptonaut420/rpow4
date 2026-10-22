@@ -110,11 +110,11 @@ ALTER TABLE trollbox_messages ALTER COLUMN fee_base_units TYPE NUMERIC USING fee
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_name = 'tokens' AND column_name = 'value') THEN
+             WHERE table_schema = current_schema() AND table_name = 'tokens' AND column_name = 'value') THEN
     ALTER TABLE tokens ALTER COLUMN value TYPE NUMERIC USING value::numeric;
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.columns
-             WHERE table_name = 'transfers' AND column_name = 'amount') THEN
+             WHERE table_schema = current_schema() AND table_name = 'transfers' AND column_name = 'amount') THEN
     ALTER TABLE transfers ALTER COLUMN amount TYPE NUMERIC USING amount::numeric;
   END IF;
 END $$;
